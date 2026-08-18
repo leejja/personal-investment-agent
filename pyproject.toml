@@ -1,0 +1,20 @@
+[project]
+name = "personal-investment-agent"
+version = "0.1.0"
+description = "Personal Investment Multi-Agent System"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
