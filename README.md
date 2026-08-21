@@ -4,7 +4,7 @@
 
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략을 생성하는 것**을 목표로 한다.
 
-> **Current Status:** Model Layer v1 + ECOS Service v1 completed  
+> **Current Status:** Model Layer v1 + ECOS Service / Tool / MCP integration completed  
 > **Next:** Service Layer — OpenDART API integration
 
 ---
@@ -67,9 +67,25 @@
 
 # 🏗 Architecture
 
-전체 시스템은 **Agent Layer**, **Model Layer**, **Service Layer**, **MCP / Tool Layer**, **External Data Sources**로 구성한다.
+전체 시스템은 **Agent Layer**, **Model Layer**, **MCP / Tool Layer**, **Service Layer**, **External Data Sources**로 구성한다.
 
 각 Layer는 가능한 한 명확한 책임을 가지며, Agent의 투자 판단 로직과 외부 데이터 접근 로직을 분리하는 것을 기본 원칙으로 한다.
+
+현재 ECOS 연동을 통해 다음 경로를 실제로 구현하고 검증했다.
+
+```text
+MCP Client
+    ↓
+MCP Server
+    ↓
+get_base_rate
+    ↓
+EcosTools
+    ↓
+EcosService
+    ↓
+한국은행 ECOS API
+```
 
 ## Overall Architecture
 
@@ -148,6 +164,28 @@ Agent와 Service 사이에서 사용하는 데이터 구조와
 Agent 간 Input / Output 계약을 명시적으로 정의한다.
 
 
+======================== MCP / TOOL LAYER =======================
+
+                Agent-accessible Tool Interfaces
+
+                    ┌─────────────────┐
+                    │   MCP Server    │
+                    │                 │
+                    │ Tool discovery  │
+                    │ Tool invocation │
+                    └────────┬────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │   Domain Tools  │
+                    │                 │
+                    │   EcosTools     │
+                    └────────┬────────┘
+                             │
+                             │
+                             ▼
+
+
 ========================== SERVICE LAYER ========================
 
                 External Data Access / Normalization
@@ -160,48 +198,23 @@ Agent 간 Input / Output 계약을 명시적으로 정의한다.
        │ • JSON parsing          │
        │ • Response validation   │
        │ • Data normalization    │
-       └────────────┬────────────┘
-                    │
-                    │
-       ┌────────────▼────────────┐
+       └─────────────────────────┘
+
+       ┌─────────────────────────┐
        │     OpenDartService     │  ← Next
        │                         │
        │ • API request           │
        │ • Parsing               │
        │ • Conversion            │
-       └────────────┬────────────┘
-                    │
-                    │
-       ┌────────────▼────────────┐
+       └─────────────────────────┘
+
+       ┌─────────────────────────┐
        │      KiwoomService      │
        │                         │
        │ • Market data           │
        │ • Account data          │
        │ • Trade data            │
        └─────────────────────────┘
-
-Service Layer는 외부 데이터를 가져오고,
-애플리케이션 내부에서 사용할 수 있는 형태로 변환한다.
-
-투자 판단이나 Agent reasoning은 Service Layer에 포함하지 않는다.
-
-
-======================= MCP / TOOL INTERFACE ====================
-
-                 Agent-accessible Tool Interfaces
-
-                    ┌─────────────────┐
-                    │ MCP Servers /   │
-                    │ Tool Interfaces │
-                    └────────┬────────┘
-                             │
-                             │
-                  Agent가 필요한 데이터와
-                  기능을 호출할 수 있도록
-                  Tool Interface 제공
-
-MCP와 Service의 구체적인 연결 방식은
-Service 및 Agent 구현 과정에서 확정한다.
 
 
 ====================== EXTERNAL DATA SOURCES ====================
@@ -235,8 +248,8 @@ Service 및 Agent 구현 과정에서 확정한다.
 | **Supervisor / Router** | User Request 분석, Agent routing, orchestration, 결과 종합 |
 | **Agent Layer** | 시장·종목·포트폴리오 reasoning 및 투자 판단 |
 | **Model Layer** | Agent 및 Service 사이의 명시적인 데이터 계약 |
+| **MCP / Tool Layer** | Agent 또는 MCP Client가 사용할 수 있는 의미 기반 Tool Interface 제공 |
 | **Service Layer** | 외부 API 호출, 오류 처리, parsing, normalization, 데이터 변환 |
-| **MCP / Tool Layer** | Agent가 사용할 수 있는 Tool Interface 제공 |
 | **External Data Sources** | 실제 시장·기업·계좌 데이터 제공 |
 
 핵심적인 책임 분리는 다음과 같다.
@@ -248,11 +261,11 @@ Agent
 Model
 → data contract
 
+MCP / Tool
+→ agent-accessible domain interface
+
 Service
 → external data access / parsing / normalization
-
-MCP / Tool
-→ agent-accessible interface
 
 External API
 → raw data provider
@@ -260,36 +273,83 @@ External API
 
 ## Data Access Flow
 
-외부 데이터는 Agent 내부에서 직접 API를 호출하지 않고 별도의 데이터 접근 계층을 통해 가져온다.
+Agent가 외부 API의 내부 구현 세부사항을 직접 알지 않도록 한다.
 
-개념적으로 다음 흐름을 따른다.
+기본적인 데이터 접근 흐름은 다음과 같다.
 
 ```text
-External API
-     │
-     ▼
+Agent / MCP Client
+        │
+        ▼
+MCP Tool Interface
+        │
+        ▼
+Domain Tool
+        │
+        ▼
 Service Layer
-     │
-     │ structured data
-     ▼
-Agent / Tool Interface
-     │
-     ▼
-Agent Reasoning
-     │
-     ▼
-Analysis Model
+        │
+        ▼
+External API
 ```
 
-현재 구현된 ECOS 흐름은 다음과 같다.
+Service Layer는 외부 API의 구조를 알고 데이터를 가져오며, Domain Tool은 이를 Agent가 이해하기 쉬운 의미 기반 인터페이스로 변환한다.
+
+예를 들어 Agent가 한국은행 기준금리를 조회할 때 ECOS 내부의 통계코드를 직접 알 필요가 없다.
 
 ```text
+Agent / MCP Client
+
+        ↓
+
+get_base_rate(
+    start_date,
+    end_date
+)
+
+        ↓
+
+EcosTools
+
+        ↓
+
+EcosService.get_statistic(
+    statistic_code="722Y001",
+    item_code1="0101000",
+    ...
+)
+
+        ↓
+
 ECOS API
+```
+
+`722Y001`, `0101000`과 같은 ECOS 내부 식별자는 Tool / Service 계층에서 관리한다.
+
+이를 통해 Agent reasoning을 특정 외부 API의 구현 세부사항으로부터 분리한다.
+
+---
+
+## ECOS End-to-End Flow
+
+현재 ECOS 연동은 MCP Client부터 실제 한국은행 API까지 end-to-end로 연결되어 있다.
+
+```text
+MCP Client
     │
-    │ raw JSON
+    │ list_tools()
+    ▼
+MCP Server
+    │
+    │ get_base_rate
+    ▼
+EcosTools
+    │
+    │ semantic domain operation
     ▼
 EcosService
     │
+    ├── URL construction
     ├── async HTTP request
     ├── HTTP error handling
     ├── JSON parsing
@@ -297,31 +357,46 @@ EcosService
     └── data normalization
     │
     ▼
+ECOS API
+    │
+    │ raw JSON
+    ▼
 EcosStatisticPoint[]
     │
-    │ structured economic data
     ▼
-Market Agent
-    │
-    │ reasoning
-    ▼
-MarketAnalysis
+MCP structured_content
 ```
 
-예를 들어 ECOS API에서 다음과 같이 전달되는 값은,
+실제 ECOS API 응답의 문자열 기반 값:
 
 ```text
 DATA_VALUE = "2.75"
 ```
 
-`EcosService`에서 다음과 같이 정규화한다.
+은 Service Layer에서 다음과 같이 정규화된다.
 
 ```text
 EcosStatisticPoint.value = 2.75
                            └── float
 ```
 
-이 구조를 통해 ECOS API의 응답 형식이나 호출 방식이 변경되더라도 Market Agent의 투자 판단 로직에 미치는 영향을 최소화한다.
+그리고 MCP Tool 호출 결과에서는 structured content로 전달된다.
+
+```text
+structured_content
+└── result[]
+    ├── statistic_code
+    ├── statistic_name
+    ├── item_code1
+    ├── item_name1
+    ├── unit
+    ├── time
+    └── value
+```
+
+실제 MCP end-to-end 테스트를 통해 한국은행 기준금리 데이터가 정상적으로 반환되는 것을 확인했다.
+
+---
 
 ## Model Flow
 
@@ -358,6 +433,8 @@ Supervisor / Router
 
 이를 통해 동일한 시장 및 종목 분석 결과라도 사용자의 실제 보유 포지션, 투자 성향, 투자 기간 및 제약 조건에 따라 서로 다른 개인화 투자 전략을 생성할 수 있다.
 
+---
+
 ## Current Development Position
 
 현재 개발 진행 위치는 다음과 같다.
@@ -365,21 +442,27 @@ Supervisor / Router
 ```text
 Foundation
     │
+    │ COMPLETED
     ▼
 Model Layer v1
     │
     │ COMPLETED
     ▼
+ECOS Integration
+    │
+    ├── EcosService          ✓ COMPLETED
+    ├── EcosTools            ✓ COMPLETED
+    ├── MCP Tool             ✓ COMPLETED
+    └── End-to-End Test      ✓ COMPLETED
+    │
+    ▼
 Service Layer
     │
-    ├── EcosService          ✓ v1 COMPLETED
-    │
     ├── OpenDartService      ← NEXT
-    │
     └── KiwoomService
     │
     ▼
-MCP / Tool Integration
+Additional MCP Tools
     │
     ▼
 Agent Implementation
@@ -396,7 +479,17 @@ app/services/opendart.py
 
 이다.
 
-ECOS Service에서 검증한 **외부 API → Service → Structured Data** 패턴을 기반으로 OpenDART Service를 구현한다.
+ECOS에서 검증한 다음 패턴을 OpenDART에도 적용한다.
+
+```text
+External API
+    ↓
+Service
+    ↓
+Domain Tool
+    ↓
+MCP Tool
+```
 
 ---
 
@@ -639,8 +732,8 @@ Supervisor
 | --- | --- | --- |
 | OpenAI API | Agent reasoning 및 자연어 분석 | Planned |
 | Kiwoom REST API | 계좌 / 주가 / 거래 / 수급 관련 데이터 | Planned |
-| 한국은행 ECOS API | 금리 / 환율 / 거시경제 데이터 | **Integrated** |
-| OpenDART API | 기업 공시 / 재무 관련 데이터 | Next |
+| 한국은행 ECOS API | 금리 / 환율 / 거시경제 데이터 | **Service + MCP Integrated** |
+| OpenDART API | 기업 공시 / 재무 관련 데이터 | **Next** |
 
 향후 필요에 따라 다음 데이터 소스를 추가할 수 있다.
 
@@ -697,6 +790,24 @@ ECOS 통계코드
 ## Risk Aware
 
 상승 가능성뿐만 아니라 하락 위험과 포트폴리오 전체 Risk를 함께 고려한다.
+
+## Layered
+
+외부 API 접근, Tool Interface, Agent reasoning의 책임을 분리한다.
+
+```text
+External API
+    ↓
+Service
+    ↓
+Domain Tool
+    ↓
+MCP Tool
+    ↓
+Agent
+```
+
+이를 통해 특정 외부 API의 변경이 Agent reasoning에 직접 영향을 미치지 않도록 한다.
 
 ## Human-in-the-Loop
 
@@ -835,21 +946,70 @@ EcosStatisticPoint
 
 ECOS의 문자열 기반 수치 데이터는 Service Layer에서 애플리케이션이 사용하기 적합한 타입으로 변환한다.
 
-예:
+---
+
+# 🛠 MCP / Tool Layer
+
+외부 API의 저수준 인터페이스를 Agent에게 직접 노출하지 않는다.
+
+Domain Tool을 통해 의미 기반 인터페이스를 제공하고 이를 MCP Tool로 노출한다.
+
+현재 구현된 ECOS Tool:
 
 ```text
-ECOS raw response
-DATA_VALUE = "2.75"
-
-        ↓
-
-EcosStatisticPoint
-value = 2.75
+EcosTools
+└── get_base_rate(
+        start_date,
+        end_date
+    )
 ```
 
-실제 한국은행 ECOS `StatisticSearch` API 호출을 통해 Service 동작을 검증했다.
+내부 구현:
 
-다음 Service 구현 대상은 `OpenDartService`이다.
+```text
+get_base_rate()
+      │
+      ▼
+EcosTools
+      │
+      ▼
+EcosService.get_statistic()
+      │
+      ▼
+ECOS StatisticSearch API
+```
+
+Agent 또는 MCP Client는 다음 ECOS 내부 코드를 알 필요가 없다.
+
+```text
+STAT_CODE  = 722Y001
+ITEM_CODE1 = 0101000
+```
+
+이러한 API-specific detail은 Tool / Service 계층에서 관리한다.
+
+## MCP Server
+
+현재 MCP Server는 다음 Tool을 노출한다.
+
+```text
+personal-investment-agent
+└── get_base_rate
+```
+
+MCP Client에서 Tool discovery와 invocation을 수행할 수 있다.
+
+```text
+client.list_tools()
+        │
+        ▼
+get_base_rate
+        │
+        ▼
+client.call_tool(...)
+```
+
+실제 MCP Client를 사용한 end-to-end 테스트를 통해 ECOS 기준금리가 structured content로 전달되는 것을 확인했다.
 
 ---
 
@@ -867,6 +1027,8 @@ personal-investment-agent/
 │   │   └── portfolio/              # Portfolio-aware strategy generation
 │   │
 │   ├── mcp/                        # MCP servers and tool interfaces
+│   │   ├── ecos_tools.py           # ECOS domain tools
+│   │   └── server.py               # MCP server and tool exposure
 │   │
 │   ├── services/                   # External API and data access layer
 │   │   └── ecos.py                 # ECOS API service and normalization
@@ -884,7 +1046,9 @@ personal-investment-agent/
 │
 ├── tests/
 │   ├── test_models.py              # Model validation tests
-│   └── test_ecos_service.py        # ECOS Service unit tests
+│   ├── test_ecos_service.py        # ECOS Service unit tests
+│   ├── test_ecos_tools.py          # ECOS Domain Tool tests
+│   └── test_mcp_server.py          # MCP end-to-end tests
 │
 ├── scripts/                        # Development and utility scripts
 ├── docs/                           # Architecture notes and development logs
@@ -910,6 +1074,7 @@ Editor   : VS Code + WSL
 Python   : >= 3.12
 Package  : pip / pyproject.toml
 HTTP     : httpx
+MCP      : MCP Python SDK
 Test     : pytest
 Lint     : Ruff
 ```
@@ -948,6 +1113,7 @@ pip install -e ".[dev]"
 
 ```text
 httpx
+mcp
 pydantic
 pydantic-settings
 
@@ -957,6 +1123,7 @@ ruff
 ```
 
 - `httpx`: 외부 REST API에 대한 async HTTP client
+- `mcp`: Model Context Protocol Server / Client 구현
 - `pydantic`: Agent 및 Service 데이터 모델 정의와 validation
 - `pydantic-settings`: 환경변수 및 API Key 설정 관리
 - `pytest`: automated testing
@@ -1069,12 +1236,14 @@ ruff check .
 
 # 🧪 Testing
 
-현재 Model Layer와 ECOS Service에 대한 테스트를 구현했다.
+현재 Model Layer, ECOS Service, ECOS Domain Tool 및 MCP end-to-end 경로에 대한 테스트를 구현했다.
 
 ```text
 tests/
 ├── test_models.py
-└── test_ecos_service.py
+├── test_ecos_service.py
+├── test_ecos_tools.py
+└── test_mcp_server.py
 ```
 
 ## Model Tests
@@ -1108,10 +1277,46 @@ HTTP / Response Handling
 └── unexpected ECOS response
 ```
 
+## ECOS Tool Test
+
+```text
+EcosTools.get_base_rate()
+        │
+        ▼
+correct ECOS statistic mapping
+```
+
+## MCP End-to-End Test
+
+```text
+MCP Client
+    │
+    ├── Tool discovery
+    │
+    ▼
+get_base_rate
+    │
+    ├── Tool invocation
+    │
+    ▼
+EcosTools
+    │
+    ▼
+EcosService
+    │
+    ▼
+Real ECOS API
+    │
+    ▼
+structured_content
+    │
+    └── value = 2.75
+```
+
 현재 전체 테스트 결과:
 
 ```text
-15 passed
+17 passed
 ```
 
 전체 lint 결과:
@@ -1120,27 +1325,15 @@ HTTP / Response Handling
 All checks passed!
 ```
 
-실제 ECOS API 호출을 통해 다음 흐름도 확인했다.
-
-```text
-ECOS API
-    ↓
-EcosService
-    ↓
-EcosStatisticPoint[]
-    ↓
-normalized float value
-```
-
 ---
 
 # 🚧 Current Status
 
-현재 프로젝트는 **Foundation과 Model Layer v1을 완료하고 Service Layer를 구현 중인 상태**다.
+현재 프로젝트는 **Foundation과 Model Layer v1을 완료하고 외부 데이터 Service / Tool / MCP integration을 구현하는 단계**다.
 
-첫 번째 Service인 **EcosService v1 구현 및 실제 ECOS API 연동까지 완료**했다.
+첫 번째 데이터 소스인 **한국은행 ECOS는 Service부터 MCP까지 end-to-end 연결을 완료**했다.
 
-완료된 작업:
+완료된 주요 작업:
 
 - [x] WSL2 Ubuntu 개발환경 구성
 - [x] VS Code WSL integration
@@ -1154,24 +1347,25 @@ normalized float value
 - [x] `pydantic-settings` 기반 `app/config.py` 구성
 - [x] OpenAI / Kiwoom / ECOS / OpenDART API Key 설정 확인
 - [x] Model Layer v1 구현
-- [x] `UserRequest` / `Evidence` 공통 모델 구현
-- [x] `MarketAnalysis` 모델 구현
-- [x] `StockAnalysis` 모델 구현
-- [x] `PortfolioContext` / `InvestorProfile` 모델 구현
-- [x] `StrategyResult` 모델 구현
 - [x] Model validation tests
-- [x] README Architecture / Project Structure 정리
 - [x] `httpx` dependency 추가
 - [x] `EcosService` v1 구현
-- [x] ECOS `StatisticSearch` API 호출
+- [x] ECOS `StatisticSearch` API integration
 - [x] Async HTTP request
 - [x] HTTP error handling
 - [x] ECOS JSON parsing
 - [x] `EcosStatisticPoint` response model
 - [x] ECOS data normalization
 - [x] ECOS Service unit tests
-- [x] 실제 ECOS API integration 확인
-- [x] 전체 test suite — 15 passed
+- [x] `EcosTools` 구현
+- [x] `get_base_rate` Domain Tool 구현
+- [x] MCP Python SDK 도입
+- [x] MCP Server 구현
+- [x] `get_base_rate` MCP Tool 노출
+- [x] MCP Tool discovery 검증
+- [x] MCP Tool invocation 검증
+- [x] 실제 ECOS API MCP end-to-end 검증
+- [x] 전체 test suite — 17 passed
 - [x] Ruff — All checks passed
 
 현재 진행 단계:
@@ -1185,16 +1379,23 @@ Model Layer v1
     │
     │ completed
     ▼
-Service Layer
+ECOS Integration
     │
-    ├── EcosService          ✓ v1 COMPLETED
-    │
-    ├── OpenDartService      ← NEXT
-    │
-    └── KiwoomService
+    ├── Service            ✓
+    ├── Domain Tool        ✓
+    ├── MCP Tool           ✓
+    └── End-to-End Test    ✓
     │
     ▼
-MCP / Tool Integration
+OpenDART Integration      ← NEXT
+    │
+    ├── Service
+    ├── Domain Tool
+    ├── MCP Tool
+    └── End-to-End Test
+    │
+    ▼
+Kiwoom Integration
     │
     ▼
 Agent Implementation
@@ -1225,44 +1426,68 @@ app/services/opendart.py
 - [x] Basic validation test framework
 - [x] Initial Service interface pattern
 
-## Phase 2 — Market Data / Market Agent
+## Phase 2 — ECOS Integration
 
 - [x] ECOS API integration
+- [x] ECOS Service
 - [x] ECOS response normalization
 - [x] ECOS Service tests
+- [x] ECOS Domain Tool
+- [x] `get_base_rate` Tool
+- [x] MCP Server integration
+- [x] MCP Tool discovery
+- [x] MCP Tool invocation
+- [x] ECOS MCP end-to-end test
+- [ ] Additional ECOS market indicators
+
+## Phase 3 — OpenDART Integration
+
+- [ ] OpenDART Service
+- [ ] OpenDART response normalization
+- [ ] OpenDART Service tests
+- [ ] OpenDART Domain Tools
+- [ ] OpenDART MCP Tools
+- [ ] OpenDART MCP end-to-end tests
+
+## Phase 4 — Kiwoom Integration
+
+- [ ] Kiwoom market data integration
+- [ ] Kiwoom account integration
+- [ ] Position / P&L data
+- [ ] Trade history
+- [ ] Kiwoom Domain Tools
+- [ ] Kiwoom MCP Tools
+- [ ] Kiwoom MCP end-to-end tests
+
+## Phase 5 — Market Agent
+
 - [ ] Market data collection expansion
 - [ ] Market indicator normalization
 - [ ] Market regime analysis
+- [ ] Risk-On / Risk-Off analysis
 - [ ] Market Agent implementation
+- [ ] MarketAnalysis generation
 
-## Phase 3 — Stock Research Agent
+## Phase 6 — Stock Research Agent
 
-- [ ] OpenDART Service
-- [ ] OpenDART integration
-- [ ] Kiwoom market data integration
 - [ ] Fundamental analysis
+- [ ] Market data analysis
+- [ ] OpenDART analysis
 - [ ] Stock Research Agent implementation
 - [ ] Bull / Base / Bear scenarios
+- [ ] StockAnalysis generation
 
-## Phase 4 — Portfolio Strategy Agent
+## Phase 7 — Portfolio Strategy Agent
 
 - [x] Portfolio data model
 - [x] Investor profile model
 - [x] Strategy result model
-- [ ] Kiwoom account integration
 - [ ] Position / P&L analysis
-- [ ] Risk analysis
+- [ ] Portfolio risk analysis
 - [ ] Personalized strategy generation
+- [ ] StrategyResult generation
 
-## Phase 5 — MCP / Tool Integration
-
-- [ ] Service-to-Tool interface design
-- [ ] MCP server structure
-- [ ] ECOS Tool integration
-- [ ] OpenDART Tool integration
-- [ ] Kiwoom Tool integration
-
-## Phase 6 — Supervisor / Router
+## Phase 8 — Supervisor / Router
 
 - [ ] User Request routing
 - [ ] Agent orchestration
@@ -1271,7 +1496,7 @@ app/services/opendart.py
 - [ ] Evidence tracking
 - [ ] Final response generation
 
-## Phase 7 — Expansion
+## Phase 9 — Expansion
 
 - [ ] News integration
 - [ ] Additional market data
