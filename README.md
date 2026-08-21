@@ -67,93 +67,319 @@
 
 # 🏗 Architecture
 
-전체 시스템은 크게 다음 계층으로 구성한다.
+전체 시스템은 **Agent Layer**, **Model Layer**, **Service Layer**, **MCP / Tool Layer**, **External Data Sources**로 구성한다.
+
+각 Layer는 가능한 한 명확한 책임을 가지며, Agent의 투자 판단 로직과 외부 데이터 접근 로직을 분리하는 것을 기본 원칙으로 한다.
+
+## Overall Architecture
 
 ```text
-┌──────────────────────────────────────────────┐
-│                    User                      │
-└──────────────────────┬───────────────────────┘
-                       │
-                       ▼
-┌──────────────────────────────────────────────┐
-│             Supervisor / Router              │
-│                                              │
-│  User Request 분석                           │
-│  필요한 Agent 선택                           │
-│  Agent 호출 및 결과 종합                     │
-│  Cross-Agent consistency 확인                │
-└──────────────┬───────────────┬───────────────┘
-               │               │
-        ┌──────▼───────┐ ┌─────▼─────────────┐
-        │ Market Agent │ │ Stock Research     │
-        │              │ │ Agent              │
-        └──────┬───────┘ └─────┬─────────────┘
-               │               │
-        MarketAnalysis    StockAnalysis[]
-               │               │
-               └───────┬───────┘
-                       │
-               ┌───────▼──────────────┐
-               │ Portfolio Strategy   │
-               │ Agent                │
-               │                      │
-               │ + PortfolioContext   │
-               │ + InvestorProfile    │
-               └────────┬─────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                            User                              │
+└──────────────────────────────┬───────────────────────────────┘
+                               │
+                               │ UserRequest
+                               ▼
+┌──────────────────────────────────────────────────────────────┐
+│                  Supervisor / Router                         │
+│                                                              │
+│  • User Request 분석                                         │
+│  • Agent routing / orchestration                            │
+│  • Agent 결과 종합                                           │
+│  • Cross-Agent consistency 확인                             │
+│  • Final response composition                               │
+└───────────────────────┬──────────────────────────────────────┘
                         │
                         ▼
-                  StrategyResult
+
+════════════════════════ AGENT LAYER ═══════════════════════════
+
+             ┌───────────────────────┐
+             │     Market Agent      │
+             │                       │
+             │  Market reasoning     │
+             └───────────┬───────────┘
+                         │
+                         │ MarketAnalysis
+                         │
+                         │
+             ┌───────────┴───────────┐
+             │                       │
+             │                       │
+             │              ┌────────▼─────────────┐
+             │              │ Stock Research Agent │
+             │              │                      │
+             │              │ Stock reasoning      │
+             │              └────────┬─────────────┘
+             │                       │
+             │                       │ StockAnalysis[]
+             │                       │
+             └───────────────┬───────┘
+                             │
+                             │
+                    PortfolioContext
+                    InvestorProfile
+                             │
+                             ▼
+                ┌──────────────────────────┐
+                │ Portfolio Strategy Agent │
+                │                          │
+                │ Portfolio reasoning      │
+                └────────────┬─────────────┘
+                             │
+                             │ StrategyResult
+                             ▼
+                    Investment Strategy
+
+
+════════════════════════ MODEL LAYER ═══════════════════════════
+
+          Agent 간 명시적인 Pydantic Data Contract
+
+┌───────────────────────┐       ┌────────────────────────┐
+│ Common Models         │       │ Analysis Models        │
+│                       │       │                        │
+│ • UserRequest         │       │ • MarketAnalysis       │
+│ • Evidence            │       │ • StockAnalysis        │
+│ • RiskLevel           │       │ • PortfolioContext     │
+│ • AnalysisConfidence  │       │ • InvestorProfile      │
+│                       │       │ • StrategyResult       │
+└───────────────────────┘       └────────────────────────┘
+
+Model Layer는 특정 API에 의존하지 않는다.
+
+Agent와 Service 사이에서 사용하는 데이터 구조와
+Agent 간 Input / Output 계약을 명시적으로 정의한다.
+
+
+═══════════════════════ SERVICE LAYER ══════════════════════════
+
+             External Data Access / Normalization
+
+      ┌────────────────┐
+      │  EcosService   │  ← Current Development
+      │                │
+      │ • API request  │
+      │ • HTTP errors  │
+      │ • JSON parsing │
+      │ • Conversion   │
+      └───────┬────────┘
+              │
+              │
+      ┌───────┴────────┐
+      │ OpenDartService│
+      │                │
+      │ • API request  │
+      │ • Parsing      │
+      │ • Conversion   │
+      └───────┬────────┘
+              │
+              │
+      ┌───────┴────────┐
+      │ KiwoomService  │
+      │                │
+      │ • Market data  │
+      │ • Account data │
+      │ • Trade data   │
+      └────────────────┘
+
+Service Layer는 외부 데이터를 가져오고,
+애플리케이션 내부에서 사용할 수 있는 형태로 변환한다.
+
+투자 판단이나 Agent reasoning은 Service Layer에 포함하지 않는다.
+
+
+════════════════════ MCP / TOOL INTERFACE ══════════════════════
+
+             Agent-accessible Tool Interfaces
+
+                 ┌─────────────────┐
+                 │ MCP Servers /   │
+                 │ Tool Interfaces │
+                 └────────┬────────┘
+                          │
+                          │
+                Agent가 필요한 데이터와
+                기능을 호출할 수 있도록
+                Tool Interface 제공
+
+MCP와 Service의 구체적인 연결 방식은
+Service 및 Agent 구현 과정에서 확정한다.
+
+
+══════════════════ EXTERNAL DATA SOURCES ═══════════════════════
+
+       ┌────────────────┐
+       │    ECOS API    │
+       │                │
+       │ 금리 / 환율 /  │
+       │ 거시경제 지표  │
+       └────────────────┘
+
+       ┌────────────────┐
+       │  OpenDART API  │
+       │                │
+       │ 공시 / 재무    │
+       │ 기업 데이터    │
+       └────────────────┘
+
+       ┌────────────────┐
+       │ Kiwoom REST API│
+       │                │
+       │ 주가 / 계좌 /  │
+       │ 거래 / 수급    │
+       └────────────────┘
 ```
-
-`Market Agent`와 `Stock Research Agent`의 분석 결과는 사용자의 실제 `PortfolioContext` 및 `InvestorProfile`과 함께 `Portfolio Strategy Agent`의 입력으로 사용된다.
-
-이를 통해 동일한 시장 및 종목 분석 결과라도 사용자의 실제 보유 포지션, 투자 성향, 투자 기간 및 제약 조건에 따라 서로 다른 개인화 투자 전략을 생성할 수 있다.
 
 ## Layer Responsibilities
 
-각 계층의 책임을 명확하게 분리한다.
+각 Layer의 책임은 다음과 같이 분리한다.
 
-```text
-Agent
-  │
-  │ reasoning / investment decision
-  ▼
-Service / Tool Interface
-  │
-  │ data access / normalization
-  ▼
-External Data Sources
-  │
-  ├── Kiwoom REST API
-  ├── ECOS API
-  ├── OpenDART API
-  └── Other Data Sources
-```
+| Layer                     | Responsibility                                       |
+| ------------------------- | ---------------------------------------------------- |
+| **Supervisor / Router**   | User Request 분석, Agent routing, orchestration, 결과 종합 |
+| **Agent Layer**           | 시장·종목·포트폴리오 reasoning 및 투자 판단                        |
+| **Model Layer**           | Agent 및 Service 사이의 명시적인 데이터 계약                      |
+| **Service Layer**         | 외부 API 호출, 오류 처리, parsing, 데이터 변환                    |
+| **MCP / Tool Layer**      | Agent가 사용할 수 있는 Tool Interface 제공                    |
+| **External Data Sources** | 실제 시장·기업·계좌 데이터 제공                                   |
 
-기본적인 책임은 다음과 같다.
+핵심적인 책임 분리는 다음과 같다.
 
 ```text
 Agent
 → reasoning / investment decision
 
 Model
-→ Agent 간 데이터 계약
+→ data contract
 
 Service
-→ 외부 데이터 접근 및 변환
+→ external data access / parsing / normalization
 
-MCP / Tool Interface
-→ Agent가 사용할 수 있는 tool interface
+MCP / Tool
+→ agent-accessible interface
 
 External API
-→ 실제 데이터 제공
+→ raw data provider
 ```
 
-Agent 내부에 외부 API 호출 로직을 직접 구현하지 않는다.
+## Data Access Flow
 
-이를 통해 Agent reasoning과 외부 데이터 접근 로직을 분리하고 테스트 및 확장이 쉽도록 구성한다.
+외부 데이터는 Agent 내부에서 직접 API를 호출하지 않고 별도의 데이터 접근 계층을 통해 가져온다.
 
-MCP와 Service의 구체적인 연결 구조는 각 외부 데이터 소스 및 Agent 구현 과정에서 결정한다.
+개념적으로 다음 흐름을 따른다.
+
+```text
+External API
+     │
+     ▼
+Service Layer
+     │
+     │ structured data
+     ▼
+Agent / Tool Interface
+     │
+     ▼
+Agent Reasoning
+     │
+     ▼
+Analysis Model
+```
+
+예를 들어 Market Agent가 한국은행 경제지표를 사용하는 경우:
+
+```text
+ECOS API
+    │
+    ▼
+EcosService
+    │
+    │ structured economic data
+    ▼
+Market Agent
+    │
+    │ reasoning
+    ▼
+MarketAnalysis
+```
+
+이 구조를 통해 ECOS API의 응답 형식이나 호출 방식이 변경되더라도 Market Agent의 투자 판단 로직에 미치는 영향을 최소화한다.
+
+## Model Flow
+
+현재 구현된 Model Layer v1을 기준으로 주요 데이터 흐름은 다음과 같다.
+
+```text
+UserRequest
+     │
+     ▼
+Supervisor / Router
+     │
+     ├──────────────► Market Agent
+     │                    │
+     │                    ▼
+     │              MarketAnalysis
+     │
+     ├──────────────► Stock Research Agent
+     │                    │
+     │                    ▼
+     │              StockAnalysis[]
+     │
+     │
+     │       PortfolioContext
+     │       InvestorProfile
+     │              │
+     │              ▼
+     └──────► Portfolio Strategy Agent
+                    │
+                    ▼
+               StrategyResult
+```
+
+`MarketAnalysis`, `StockAnalysis[]`, `PortfolioContext`, `InvestorProfile`은 `Portfolio Strategy Agent`의 주요 입력으로 사용한다.
+
+이를 통해 동일한 시장 및 종목 분석 결과라도 사용자의 실제 보유 포지션, 투자 성향, 투자 기간 및 제약 조건에 따라 서로 다른 개인화 투자 전략을 생성할 수 있다.
+
+## Current Development Position
+
+현재 개발 진행 위치는 다음과 같다.
+
+```text
+Foundation
+    │
+    ▼
+Model Layer v1
+    │
+    │ COMPLETED
+    ▼
+Service Layer
+    │
+    ├── EcosService       ← CURRENT
+    │
+    ├── OpenDartService
+    │
+    └── KiwoomService
+    │
+    ▼
+MCP / Tool Integration
+    │
+    ▼
+Agent Implementation
+    │
+    ▼
+Supervisor / Router
+```
+
+현재 다음 구현 대상은:
+
+```text
+app/services/ecos.py
+```
+
+이다.
+
+`EcosService`를 시작으로 실제 외부 데이터를 시스템 내부로 가져오는 **Service Layer 구현을 진행한다.**
+
 
 ---
 
