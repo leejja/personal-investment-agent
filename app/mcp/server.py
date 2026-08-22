@@ -2,12 +2,14 @@ from mcp.server import MCPServer
 
 from app.config import settings
 from app.mcp.ecos_tools import EcosTools
+from app.mcp.kiwoom_tools import KiwoomTools
 from app.mcp.opendart_tools import (
     CompanyFinancials,
     KeyFinancials,
     OpenDartTools,
 )
 from app.services.ecos import EcosService
+from app.services.kiwoom import KiwoomService, KiwoomStockInfo
 from app.services.opendart import OpenDartService
 
 mcp = MCPServer("personal-investment-agent")
@@ -18,6 +20,11 @@ ecos_tools = EcosTools(service=ecos_service)
 opendart_service = OpenDartService(api_key=settings.opendart_api_key)
 opendart_tools = OpenDartTools(service=opendart_service)
 
+kiwoom_service = KiwoomService(
+    app_key=settings.kiwoom_app_key,
+    secret_key=settings.kiwoom_secret_key,
+)
+kiwoom_tools = KiwoomTools(service=kiwoom_service)
 
 @mcp.tool()
 async def get_base_rate(
@@ -61,3 +68,12 @@ async def get_key_financials(
 
 if __name__ == "__main__":
     mcp.run()
+
+@mcp.tool()
+async def get_stock_info(
+    stock_code: str,
+) -> KiwoomStockInfo:
+    """Get normalized stock information from Kiwoom."""
+    return await kiwoom_tools.get_stock_info(
+        stock_code=stock_code,
+    )

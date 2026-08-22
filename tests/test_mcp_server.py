@@ -162,3 +162,46 @@ async def test_mcp_get_key_financials() -> None:
         print(f"total_assets     : {financials['total_assets']}")
         print(f"total_liabilities: {financials['total_liabilities']}")
         print(f"total_equity     : {financials['total_equity']}")
+
+@pytest.mark.anyio
+async def test_mcp_get_stock_info() -> None:
+    async with Client(mcp) as client:
+        # 1. MCP Tool discovery
+        tools = await client.list_tools()
+
+        tool_names = [tool.name for tool in tools.tools]
+        assert "get_stock_info" in tool_names
+
+        # 2. MCP Tool 호출
+        result = await client.call_tool(
+            "get_stock_info",
+            {
+                "stock_code": "005930",
+            },
+        )
+
+        # 3. MCP 호출 결과 검증
+        assert result.is_error is False
+        assert result.structured_content is not None
+
+        stock_info = result.structured_content
+
+        assert stock_info["stock_code"] == "005930"
+        assert stock_info["stock_name"] == "삼성전자"
+        assert stock_info["current_price"] > 0
+
+        # 4. 실제 Kiwoom 데이터 출력
+        print("\n=== Kiwoom Stock Info MCP Response ===")
+        print(f"stock_code     : {stock_info['stock_code']}")
+        print(f"stock_name     : {stock_info['stock_name']}")
+        print(f"current_price  : {stock_info['current_price']}")
+        print(f"change         : {stock_info['change']}")
+        print(f"change_rate    : {stock_info['change_rate']}")
+        print(f"trading_volume : {stock_info['trading_volume']}")
+        print(f"PER            : {stock_info['per']}")
+        print(f"PBR            : {stock_info['pbr']}")
+        print(f"ROE            : {stock_info['roe']}")
+        print(f"EPS            : {stock_info['eps']}")
+        print(f"BPS            : {stock_info['bps']}")
+        print(f"250d_high      : {stock_info['high_250d']}")
+        print(f"250d_low       : {stock_info['low_250d']}")
