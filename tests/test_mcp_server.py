@@ -265,3 +265,62 @@ async def test_mcp_get_account_balance() -> None:
                 f"return={position['return_rate']}% | "
                 f"weight={position['portfolio_weight']}%"
             )
+
+@pytest.mark.anyio
+async def test_mcp_get_portfolio_context() -> None:
+    async with Client(mcp) as client:
+        # 1. MCP Tool discovery
+        tools = await client.list_tools()
+
+        tool_names = [tool.name for tool in tools.tools]
+        assert "get_portfolio_context" in tool_names
+
+        # 2. MCP Tool 호출
+        result = await client.call_tool(
+            "get_portfolio_context",
+            {
+                "query_type": "1",
+                "exchange_type": "KRX",
+            },
+        )
+
+        # 3. MCP 결과 검증
+        assert result.is_error is False
+        assert result.structured_content is not None
+
+        portfolio = result.structured_content
+
+        assert portfolio["total_value"] >= 0
+        assert portfolio["cash"] >= 0
+        assert isinstance(portfolio["positions"], list)
+
+        # 4. 실제 PortfolioContext 출력
+        print("\n=== PortfolioContext MCP Response ===")
+        print(f"total_value   : {portfolio['total_value']:,.0f}")
+        print(f"cash          : {portfolio['cash']:,.0f}")
+        print(f"position_count: {len(portfolio['positions'])}")
+
+        print("\n=== Portfolio Positions ===")
+
+        for position in portfolio["positions"]:
+            print(
+                f"{position['symbol']} | "
+                f"{position['name']} | "
+                f"qty={position['quantity']} | "
+                f"avg={position['average_price']:,.0f} | "
+                f"current={position['current_price']:,.0f} | "
+                f"value={position['market_value']:,.0f} | "
+                f"p/l={position['profit_loss']:,.0f} | "
+                f"return={position['profit_loss_pct']}% | "
+                f"weight={position['weight']:.4f}"
+            )
+
+        # 5. 공통 Portfolio 모델의 핵심 제약조건 검증
+        for position in portfolio["positions"]:
+            assert position["symbol"]
+            assert position["name"]
+            assert position["quantity"] >= 0
+            assert position["average_price"] >= 0
+            assert position["current_price"] >= 0
+            assert position["market_value"] >= 0
+            assert 0 <= position["weight"] <= 1

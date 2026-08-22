@@ -8,6 +8,7 @@ from app.mcp.opendart_tools import (
     KeyFinancials,
     OpenDartTools,
 )
+from app.models.portfolio import PortfolioContext
 from app.services.ecos import EcosService
 from app.services.kiwoom import (
     KiwoomAccountBalance,
@@ -15,6 +16,7 @@ from app.services.kiwoom import (
     KiwoomStockInfo,
 )
 from app.services.opendart import OpenDartService
+from app.services.portfolio_adapter import PortfolioAdapter
 
 mcp = MCPServer("personal-investment-agent")
 
@@ -29,6 +31,7 @@ kiwoom_service = KiwoomService(
     secret_key=settings.kiwoom_secret_key,
 )
 kiwoom_tools = KiwoomTools(service=kiwoom_service)
+
 
 @mcp.tool()
 async def get_base_rate(
@@ -57,6 +60,7 @@ async def get_company_financials(
         report_code=report_code,
     )
 
+
 @mcp.tool()
 async def get_key_financials(
     stock_code: str,
@@ -70,8 +74,6 @@ async def get_key_financials(
         report_code=report_code,
     )
 
-if __name__ == "__main__":
-    mcp.run()
 
 @mcp.tool()
 async def get_stock_info(
@@ -81,6 +83,7 @@ async def get_stock_info(
     return await kiwoom_tools.get_stock_info(
         stock_code=stock_code,
     )
+
 
 @mcp.tool()
 async def get_account_balance(
@@ -92,3 +95,21 @@ async def get_account_balance(
         query_type=query_type,
         exchange_type=exchange_type,
     )
+
+
+@mcp.tool()
+async def get_portfolio_context(
+    query_type: str = "1",
+    exchange_type: str = "KRX",
+) -> PortfolioContext:
+    """Get the current portfolio in the project's common portfolio model."""
+    balance = await kiwoom_tools.get_account_balance(
+        query_type=query_type,
+        exchange_type=exchange_type,
+    )
+
+    return PortfolioAdapter.from_kiwoom_balance(balance)
+
+
+if __name__ == "__main__":
+    mcp.run()
