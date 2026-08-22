@@ -334,3 +334,195 @@ async def test_real_get_stock_info() -> None:
     assert stock_info.stock_code == "005930"
     assert stock_info.stock_name == "삼성전자"
     assert stock_info.current_price != 0
+
+@pytest.mark.anyio
+async def test_get_account_balance_with_continuation() -> None:
+    service = KiwoomService(
+        app_key="test-app-key",
+        secret_key="test-secret-key",
+    )
+
+    service.request = AsyncMock(
+        side_effect=[
+            KiwoomApiResponse(
+                data={
+                    "tot_pur_amt": "1000000",
+                    "tot_evlt_amt": "1200000",
+                    "tot_evlt_pl": "200000",
+                    "tot_prft_rt": "20.0",
+                    "prsm_dpst_aset_amt": "1500000",
+                    "tot_loan_amt": "0",
+                    "tot_crd_loan_amt": "0",
+                    "tot_crd_ls_amt": "0",
+                    "acnt_evlt_remn_indv_tot": [
+                        {
+                            "stk_cd": "005930",
+                            "stk_nm": "삼성전자",
+                            "evltv_prft": "100000",
+                            "prft_rt": "10.0",
+                            "pur_pric": "250000",
+                            "pred_close_pric": "271000",
+                            "rmnd_qty": "4",
+                            "trde_able_qty": "4",
+                            "cur_prc": "+281500",
+                            "pred_buyq": "0",
+                            "pred_sellq": "0",
+                            "tdy_buyq": "0",
+                            "tdy_sellq": "0",
+                            "pur_amt": "1000000",
+                            "pur_cmsn": "0",
+                            "evlt_amt": "1126000",
+                            "sell_cmsn": "0",
+                            "tax": "0",
+                            "sum_cmsn": "0",
+                            "poss_rt": "75.0",
+                            "crd_tp": "00",
+                            "crd_tp_nm": "",
+                            "crd_loan_dt": "",
+                        }
+                    ],
+                    "return_code": 0,
+                    "return_msg": "정상",
+                },
+                cont_yn="Y",
+                next_key="next-key-1",
+            ),
+            KiwoomApiResponse(
+                data={
+                    "acnt_evlt_remn_indv_tot": [
+                        {
+                            "stk_cd": "000660",
+                            "stk_nm": "SK하이닉스",
+                            "evltv_prft": "100000",
+                            "prft_rt": "25.0",
+                            "pur_pric": "200000",
+                            "pred_close_pric": "250000",
+                            "rmnd_qty": "2",
+                            "trde_able_qty": "2",
+                            "cur_prc": "+250000",
+                            "pred_buyq": "0",
+                            "pred_sellq": "0",
+                            "tdy_buyq": "0",
+                            "tdy_sellq": "0",
+                            "pur_amt": "400000",
+                            "pur_cmsn": "0",
+                            "evlt_amt": "500000",
+                            "sell_cmsn": "0",
+                            "tax": "0",
+                            "sum_cmsn": "0",
+                            "poss_rt": "25.0",
+                            "crd_tp": "00",
+                            "crd_tp_nm": "",
+                            "crd_loan_dt": "",
+                        }
+                    ],
+                    "return_code": 0,
+                    "return_msg": "정상",
+                },
+                cont_yn="N",
+                next_key=None,
+            ),
+        ]
+    )
+
+    result = await service.get_account_balance(
+        access_token="test-token",
+        query_type="1",
+        exchange_type="KRX",
+    )
+
+    assert result.total_purchase_amount == 1000000
+    assert result.total_evaluation_amount == 1200000
+    assert result.total_profit_loss == 200000
+    assert result.total_return_rate == 20.0
+    assert result.estimated_asset_amount == 1500000
+
+    assert len(result.positions) == 2
+
+    samsung = result.positions[0]
+
+    assert samsung.stock_code == "005930"
+    assert samsung.stock_name == "삼성전자"
+    assert samsung.quantity == 4
+    assert samsung.tradable_quantity == 4
+    assert samsung.average_price == 250000
+    assert samsung.current_price == 281500
+    assert samsung.purchase_amount == 1000000
+    assert samsung.evaluation_amount == 1126000
+    assert samsung.profit_loss == 100000
+    assert samsung.return_rate == 10.0
+    assert samsung.portfolio_weight == 75.0
+
+    hynix = result.positions[1]
+
+    assert hynix.stock_code == "000660"
+    assert hynix.stock_name == "SK하이닉스"
+    assert hynix.current_price == 250000
+
+    assert service.request.await_count == 2
+
+    first_call = service.request.await_args_list[0]
+    second_call = service.request.await_args_list[1]
+
+    assert first_call.kwargs == {
+        "access_token": "test-token",
+        "api_id": "kt00018",
+        "endpoint": "/api/dostk/acnt",
+        "payload": {
+            "qry_tp": "1",
+            "dmst_stex_tp": "KRX",
+        },
+    }
+
+    assert second_call.kwargs == {
+        "access_token": "test-token",
+        "api_id": "kt00018",
+        "endpoint": "/api/dostk/acnt",
+        "payload": {
+            "qry_tp": "1",
+            "dmst_stex_tp": "KRX",
+        },
+        "cont_yn": "Y",
+        "next_key": "next-key-1",
+    }
+
+@pytest.mark.anyio
+async def test_real_get_account_balance() -> None:
+    load_dotenv()
+
+    service = KiwoomService(
+        app_key=os.environ["KIWOOM_APP_KEY"],
+        secret_key=os.environ["KIWOOM_SECRET_KEY"],
+    )
+
+    token = await service.issue_access_token()
+
+    balance = await service.get_account_balance(
+        access_token=token.token,
+        query_type="1",
+        exchange_type="KRX",
+    )
+
+    print("\n=== Kiwoom Account Balance ===")
+    print(f"total_purchase_amount  : {balance.total_purchase_amount:,}")
+    print(f"total_evaluation_amount: {balance.total_evaluation_amount:,}")
+    print(f"total_profit_loss      : {balance.total_profit_loss:,}")
+    print(f"total_return_rate      : {balance.total_return_rate}")
+    print(f"position_count         : {len(balance.positions)}")
+
+    print("\n=== Positions ===")
+
+    for position in balance.positions:
+        print(
+            f"{position.stock_code} | "
+            f"{position.stock_name} | "
+            f"qty={position.quantity} | "
+            f"avg={position.average_price:,} | "
+            f"current={position.current_price:,} | "
+            f"return={position.return_rate}% | "
+            f"weight={position.portfolio_weight}%"
+        )
+
+    assert balance.total_purchase_amount >= 0
+    assert balance.total_evaluation_amount >= 0
+    assert isinstance(balance.positions, list)

@@ -205,3 +205,63 @@ async def test_mcp_get_stock_info() -> None:
         print(f"BPS            : {stock_info['bps']}")
         print(f"250d_high      : {stock_info['high_250d']}")
         print(f"250d_low       : {stock_info['low_250d']}")
+
+@pytest.mark.anyio
+async def test_mcp_get_account_balance() -> None:
+    async with Client(mcp) as client:
+        tools = await client.list_tools()
+
+        tool_names = [tool.name for tool in tools.tools]
+        assert "get_account_balance" in tool_names
+
+        result = await client.call_tool(
+            "get_account_balance",
+            {
+                "query_type": "1",
+                "exchange_type": "KRX",
+            },
+        )
+
+        assert result.is_error is False
+        assert result.structured_content is not None
+
+        balance = result.structured_content
+
+        assert balance["total_purchase_amount"] >= 0
+        assert balance["total_evaluation_amount"] >= 0
+        assert isinstance(balance["positions"], list)
+
+        print("\n=== Kiwoom Account Balance MCP Response ===")
+        print(
+            f"total_purchase_amount  : "
+            f"{balance['total_purchase_amount']:,}"
+        )
+        print(
+            f"total_evaluation_amount: "
+            f"{balance['total_evaluation_amount']:,}"
+        )
+        print(
+            f"total_profit_loss      : "
+            f"{balance['total_profit_loss']:,}"
+        )
+        print(
+            f"total_return_rate      : "
+            f"{balance['total_return_rate']}"
+        )
+        print(
+            f"position_count         : "
+            f"{len(balance['positions'])}"
+        )
+
+        print("\n=== Positions ===")
+
+        for position in balance["positions"]:
+            print(
+                f"{position['stock_code']} | "
+                f"{position['stock_name']} | "
+                f"qty={position['quantity']} | "
+                f"avg={position['average_price']:,} | "
+                f"current={position['current_price']:,} | "
+                f"return={position['return_rate']}% | "
+                f"weight={position['portfolio_weight']}%"
+            )

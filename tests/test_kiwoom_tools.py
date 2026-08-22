@@ -5,6 +5,8 @@ import pytest
 from app.mcp.kiwoom_tools import KiwoomTools
 from app.services.kiwoom import (
     KiwoomAccessToken,
+    KiwoomAccountBalance,
+    KiwoomAccountPosition,
     KiwoomService,
     KiwoomStockInfo,
 )
@@ -70,4 +72,74 @@ async def test_get_stock_info() -> None:
     service.get_stock_info.assert_awaited_once_with(
         access_token="test-access-token",
         stock_code="005930",
+    )
+
+@pytest.mark.anyio
+async def test_get_account_balance() -> None:
+    service = KiwoomService(
+        app_key="test-app-key",
+        secret_key="test-secret-key",
+    )
+
+    service.issue_access_token = AsyncMock(
+        return_value=KiwoomAccessToken(
+            expires_dt="20260823180000",
+            token_type="bearer",
+            token="test-access-token",
+        )
+    )
+
+    service.get_account_balance = AsyncMock(
+        return_value=KiwoomAccountBalance(
+            total_purchase_amount=1000000,
+            total_evaluation_amount=1200000,
+            total_profit_loss=200000,
+            total_return_rate=20.0,
+            estimated_asset_amount=1500000,
+            total_loan_amount=0,
+            total_credit_loan_amount=0,
+            total_credit_short_amount=0,
+            positions=[
+                KiwoomAccountPosition(
+                    stock_code="005930",
+                    stock_name="삼성전자",
+                    quantity=4,
+                    tradable_quantity=4,
+                    average_price=250000,
+                    current_price=281500,
+                    purchase_amount=1000000,
+                    evaluation_amount=1126000,
+                    profit_loss=126000,
+                    return_rate=12.6,
+                    portfolio_weight=75.0,
+                )
+            ],
+        )
+    )
+
+    tools = KiwoomTools(service=service)
+
+    result = await tools.get_account_balance()
+
+    assert result.total_purchase_amount == 1000000
+    assert result.total_evaluation_amount == 1200000
+    assert result.total_profit_loss == 200000
+    assert result.total_return_rate == 20.0
+    assert len(result.positions) == 1
+
+    position = result.positions[0]
+
+    assert position.stock_code == "005930"
+    assert position.stock_name == "삼성전자"
+    assert position.quantity == 4
+    assert position.average_price == 250000
+    assert position.current_price == 281500
+    assert position.portfolio_weight == 75.0
+
+    service.issue_access_token.assert_awaited_once_with()
+
+    service.get_account_balance.assert_awaited_once_with(
+        access_token="test-access-token",
+        query_type="1",
+        exchange_type="KRX",
     )

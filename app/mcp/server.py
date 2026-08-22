@@ -9,7 +9,11 @@ from app.mcp.opendart_tools import (
     OpenDartTools,
 )
 from app.services.ecos import EcosService
-from app.services.kiwoom import KiwoomService, KiwoomStockInfo
+from app.services.kiwoom import (
+    KiwoomAccountBalance,
+    KiwoomService,
+    KiwoomStockInfo,
+)
 from app.services.opendart import OpenDartService
 
 mcp = MCPServer("personal-investment-agent")
@@ -76,4 +80,15 @@ async def get_stock_info(
     """Get normalized stock information from Kiwoom."""
     return await kiwoom_tools.get_stock_info(
         stock_code=stock_code,
+    )
+
+@mcp.tool()
+async def get_account_balance(
+    query_type: str = "1",
+    exchange_type: str = "KRX",
+) -> KiwoomAccountBalance:
+    """Get normalized Kiwoom account balance and positions."""
+    return await kiwoom_tools.get_account_balance(
+        query_type=query_type,
+        exchange_type=exchange_type,
     )
