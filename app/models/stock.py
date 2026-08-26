@@ -18,11 +18,18 @@ class StockPriceSnapshot(BaseModel):
     change_pct: float | None = None
     volume: int | None = None
 
+    high_250d: float | None = None
+    low_250d: float | None = None
+
 
 class FinancialSnapshot(BaseModel):
     revenue: float | None = None
     operating_profit: float | None = None
     net_income: float | None = None
+
+    total_assets: float | None = None
+    total_liabilities: float | None = None
+    total_equity: float | None = None
 
     per: float | None = None
     pbr: float | None = None

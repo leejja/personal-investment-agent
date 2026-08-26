@@ -4,7 +4,12 @@ from pydantic import ValidationError
 from app.models.common import AnalysisConfidence, RiskLevel, UserRequest
 from app.models.market import MarketAnalysis, MarketRegime
 from app.models.portfolio import InvestorProfile, PortfolioPosition
-from app.models.stock import ScenarioType, StockScenario
+from app.models.stock import (
+    FinancialSnapshot,
+    ScenarioType,
+    StockPriceSnapshot,
+    StockScenario,
+)
 from app.models.strategy import (
     InvestmentAction,
     PositionRecommendation,
@@ -46,6 +51,59 @@ def test_stock_scenario():
 
     assert scenario.scenario == ScenarioType.BASE
     assert scenario.probability == 0.55
+
+
+def test_stock_price_snapshot():
+    snapshot = StockPriceSnapshot(
+        symbol="005930",
+        name="삼성전자",
+        price=281500,
+        change_pct=3.87,
+        volume=15000000,
+        high_250d=374500,
+        low_250d=67500,
+    )
+
+    assert snapshot.price == 281500
+    assert snapshot.high_250d == 374500
+    assert snapshot.low_250d == 67500
+
+
+def test_stock_price_snapshot_optional_fields_default_none():
+    snapshot = StockPriceSnapshot(
+        symbol="005930",
+        name="삼성전자",
+        price=281500,
+    )
+
+    assert snapshot.high_250d is None
+    assert snapshot.low_250d is None
+
+
+def test_financial_snapshot():
+    snapshot = FinancialSnapshot(
+        revenue=333605938000000,
+        operating_profit=43601051000000,
+        net_income=45206805000000,
+        total_assets=566942110000000,
+        total_liabilities=130621773000000,
+        total_equity=436320337000000,
+        per=42.89,
+        pbr=4.4,
+        roe=10.9,
+    )
+
+    assert snapshot.total_assets == 566942110000000
+    assert snapshot.total_liabilities == 130621773000000
+    assert snapshot.total_equity == 436320337000000
+
+
+def test_financial_snapshot_optional_fields_default_none():
+    snapshot = FinancialSnapshot()
+
+    assert snapshot.total_assets is None
+    assert snapshot.total_liabilities is None
+    assert snapshot.total_equity is None
 
 
 def test_portfolio_position():

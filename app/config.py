@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     openai_api_key: str = ""
+    openai_model: str = ""
     kiwoom_app_key: str = ""
     kiwoom_secret_key: str = ""
     ecos_api_key: str = ""
