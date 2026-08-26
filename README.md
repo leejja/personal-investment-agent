@@ -4,8 +4,8 @@
 
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
-> **Current Status:** Model Layer v1 + ECOS Service / Domain Tool / MCP integration completed  
-> **Next:** OpenDART API integration
+> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1 (deterministic analysis + LLM reasoning) completed  
+> **Next:** Market Data 설계/확장 → Market Agent v1
 
 ---
 
@@ -148,24 +148,25 @@ Recommendation Engine 역시 외부 API를 직접 호출하기보다 Agent 및 M
 
 
           ┌──────────────────────┐
+          │ Stock Research Agent │
+          │       (v1 ✓)         │
+          │                      │
+          │ • Deterministic      │
+          │   analysis           │
+          │ • LLM reasoning      │
+          │ • Domain Tool 직접   │
+          │   호출 (in-process)  │
+          └──────────┬───────────┘
+                     │
+          ┌──────────────────────┐
           │     Market Agent     │
+          │      (planned)       │
           │                      │
           │ • Market reasoning   │
-          │ • MCP Client 역할    │
           └──────────┬───────────┘
                      │
-                     │
-                     │ MCP Protocol
-                     │ Tool Calls
-                     │
-          ┌──────────▼───────────┐
-          │ Stock Research Agent │
-          │                      │
-          │ • Stock reasoning    │
-          │ • MCP Client 역할    │
-          └──────────┬───────────┘
-                     │
-                     │
+                     │ Domain Tool 직접 호출
+                     │ (MCP Protocol 아님)
                      ▼
 
 
@@ -180,10 +181,11 @@ Recommendation Engine 역시 외부 API를 직접 호출하기보다 Agent 및 M
           │ Exposed MCP Tools                │
           │                                  │
           │ • get_base_rate                  │
-          │ • get_disclosure        (future) │
-          │ • get_stock_price       (future) │
-          │ • get_positions         (future) │
-          │ • ...                            │
+          │ • get_company_financials         │
+          │ • get_key_financials             │
+          │ • get_stock_info                 │
+          │ • get_account_balance            │
+          │ • get_portfolio_context          │
           └────────────────┬─────────────────┘
                            │
                            │ Python calls
@@ -201,14 +203,21 @@ Recommendation Engine 역시 외부 API를 직접 호출하기보다 Agent 및 M
                  │
                  │
         ┌────────┴─────────┐
-        │ OpenDartTools    │
-        │    (future)      │
+        │  OpenDartTools   │
+        │                  │
+        │ get_company_     │
+        │  financials()    │
+        │ get_key_         │
+        │  financials()    │
         └────────┬─────────┘
                  │
                  │
         ┌────────┴─────────┐
         │   KiwoomTools    │
-        │    (future)      │
+        │                  │
+        │ get_stock_info() │
+        │ get_account_     │
+        │  balance()       │
         └────────┬─────────┘
                  │
                  ▼
@@ -233,14 +242,26 @@ Recommendation Engine 역시 외부 API를 직접 호출하기보다 Agent 및 M
         ┌────────────────────────┐
         │    OpenDartService     │
         │                        │
-        │ ← NEXT                 │
+        │ ✓ implemented          │
         └────────────┬───────────┘
                      │
 
         ┌────────────────────────┐
         │     KiwoomService      │
         │                        │
-        │ future                 │
+        │ ✓ implemented          │
+        └────────────┬───────────┘
+                     │
+
+        ┌────────────────────────┐
+        │       LLMService       │
+        │                        │
+        │ ✓ implemented          │
+        │                        │
+        │ • OpenAI Chat          │
+        │   Completions 호출     │
+        │ • Stock Research       │
+        │   Agent 전용           │
         └────────────┬───────────┘
                      │
                      ▼
@@ -290,6 +311,10 @@ Recommendation Engine 역시 외부 API를 직접 호출하기보다 Agent 및 M
           │                             │
           │ • MarketAnalysis            │
           │ • StockAnalysis             │
+          │   (StockPriceSnapshot /     │
+          │    FinancialSnapshot에      │
+          │    250거래일 고저,          │
+          │    자산/부채/자본 포함)     │
           │ • PortfolioContext          │
           │ • InvestorProfile           │
           │ • StrategyResult            │
@@ -299,6 +324,10 @@ Recommendation Engine 역시 외부 API를 직접 호출하기보다 Agent 및 M
           │     Integration Models      │
           │                             │
           │ • EcosStatisticPoint        │
+          │ • OpenDartCorporation       │
+          │ • OpenDartFinancialAccount  │
+          │ • KiwoomStockInfo           │
+          │ • KiwoomAccountBalance      │
           │ • ...                       │
           └─────────────────────────────┘
 
@@ -341,63 +370,56 @@ app/mcp/server.py
         │
         │ MCP Server
         │
-        │ exposes:
+        │ exposes 6 tools:
         │ get_base_rate
+        │ get_company_financials
+        │ get_key_financials
+        │ get_stock_info
+        │ get_account_balance
+        │ get_portfolio_context
         ▼
-app/mcp/ecos_tools.py
+Domain Tool Layer
         │
-        │ Domain Tool
         ▼
-app/services/ecos.py
+Service Layer
         │
-        │ Service
         ▼
-한국은행 ECOS API
+External API
 ```
 
-현재는 실제 Agent가 아직 구현되지 않았기 때문에 `tests/test_mcp_server.py`의 MCP Client가 Agent Runtime의 역할을 대신하여 end-to-end 경로를 검증한다.
+`tests/test_mcp_server.py`의 MCP Client가 이 경로를 실제 외부 API까지 end-to-end로 검증한다.
+
+**Stock Research Agent v1은 이 MCP Client 경로를 사용하지 않는다.** 같은 Python 프로세스 안에서 Domain Tool(`KiwoomTools`, `OpenDartTools`)을 직접 호출한다. MCP Server는 별도 프로세스나 외부 클라이언트(예: 다른 Agent Runtime, LLM host)를 위한 노출 경계로 유지된다.
 
 ## Future
 
-향후에는 다음 구조가 된다.
+향후 Agent들의 기본 패턴은 다음과 같다.
 
 ```text
-Market Agent
-Stock Research Agent
+Agent (in-process, 예: Stock Research Agent)
         │
-        │ MCP Client
+        │ 직접 호출 (MCP Protocol 아님)
+        ▼
+Domain Tool
+        │
+        ▼
+Service
+        │
+        ▼
+External API
+
+
+External MCP Client (별도 프로세스, 다른 Agent Runtime 등)
         │
         │ MCP Protocol
         ▼
 MCP Server
         │
-        ├── get_base_rate
-        ├── get_disclosure
-        ├── get_stock_price
-        ├── get_positions
-        └── ...
+        ▼
+Domain Tool
 ```
 
-즉,
-
-```text
-현재
-
-Test MCP Client
-       ↓
-MCP Server
-
-
-향후
-
-Agent Runtime
-       │
-       │ MCP Client
-       ▼
-MCP Server
-```
-
-형태로 확장한다.
+즉, MCP Client/Server 경로는 프로세스 경계를 넘는 외부 연동이 필요할 때 사용하고, 같은 프로세스 안의 Agent → Domain Tool 호출에는 사용하지 않는다. Market Agent, Portfolio Strategy Agent 등 향후 Agent도 Stock Research Agent와 동일한 패턴을 따를 예정이다.
 
 ---
 
@@ -660,9 +682,25 @@ strategy.py
 └── StrategyResult
 ```
 
+`stock.py`의 `StockPriceSnapshot`/`FinancialSnapshot`은 Kiwoom·OpenDART에서 이미 확보된 데이터를 손실 없이 담기 위해 다음 필드를 포함한다.
+
+```text
+StockPriceSnapshot
+├── symbol, name, price, change_pct, volume
+├── high_250d   # 250거래일 최고가
+└── low_250d    # 250거래일 최저가
+
+FinancialSnapshot
+├── revenue, operating_profit, net_income
+├── total_assets
+├── total_liabilities
+├── total_equity
+└── per, pbr, roe
+```
+
 외부 API integration에서도 구조화된 데이터 모델을 사용한다.
 
-현재 ECOS:
+현재:
 
 ```text
 EcosStatisticPoint
@@ -673,6 +711,9 @@ EcosStatisticPoint
 ├── unit
 ├── time
 └── value: float
+
+OpenDartCorporation / OpenDartFinancialAccount
+KiwoomStockInfo / KiwoomAccountBalance / KiwoomAccountPosition
 ```
 
 향후 Recommendation Engine 구현 시 다음 모델을 추가한다.
@@ -748,43 +789,35 @@ MarketAnalysis
 
 ---
 
-## 3. Stock Research Agent
+## 3. Stock Research Agent — ✅ v1 구현 완료
 
 개별 종목을 심층 분석한다.
 
-주요 분석 대상:
-
-- 주가
-- 거래량
-- 기술적 흐름
-- 외국인 / 기관 수급
-- 실적
-- 밸류에이션
-- OpenDART 공시
-- 증권사 리포트
-- 산업 자료
-- 기업 뉴스
-- 산업 뉴스
-- Catalyst
-- Risk
-
-향후 다음 MCP Tool들을 사용할 수 있다.
+v1 구현 구조:
 
 ```text
-Stock Research Agent
-        │
-        ├── OpenDART Tools
-        ├── Kiwoom Market Tools
-        └── News Tools
+app/agents/stock_research/
+├── analysis.py       # deterministic 분석 (facts, confidence 상한, risk_level)
+├── reasoning.py       # LLM reasoning (thesis / catalysts / risks / scenarios)
+└── orchestrator.py    # 위 둘을 조합해 최종 StockAnalysis 생성
 ```
 
-필요한 경우 다음 Scenario 분석을 수행한다.
+v1이 실제로 사용하는 데이터:
 
-```text
-Bull Scenario
-Base Scenario
-Bear Scenario
-```
+- Kiwoom `get_stock_info` — 현재가, 등락률, 거래량, PER/PBR/ROE, 250거래일 고/저
+- OpenDART `get_key_financials` — 매출/영업이익/순이익, 자산/부채/자본총계
+
+`PortfolioContext`는 의도적으로 사용하지 않는다. 종목 자체의 분석(재사용 가능)과 사용자별 투자 판단(Portfolio Strategy Agent의 역할)을 분리하기 위함이다.
+
+v1의 핵심 정책:
+
+- **Evidence-grounded**: LLM은 `analysis.py`가 만든 deterministic facts만 근거로 사용하고, 뉴스·공시·산업 동향 등 제공되지 않은 정보를 추측하지 않는다.
+- **평가 없는 raw fact**: PER/PBR/ROE 등 비교 기준이 없는 지표는 수치 사실만 제공하고 "고평가/저평가/양호" 같은 판단을 하지 않는다.
+- **target_price / probability 미생성**: v1에는 목표주가 산정 근거가 없으므로 항상 `null`이며, Python이 파싱 후 구조적으로 강제한다.
+- **catalyst 엄격 정의**: 향후 주가·실적·기업가치에 영향을 줄 구체적 이벤트만 catalyst로 인정하고, 단순 재무 규모 재진술은 catalyst로 취급하지 않는다.
+- **risk_level 고정(MEDIUM)**: 단일연도 재무 데이터만으로는 LOW/HIGH를 판단할 근거가 부족해 v1은 중립값을 사용하며, LLM은 이 값을 변경할 수 없다.
+- **confidence 상한**: `analysis.py`가 데이터 완전성에 따라 계산한 상한과 LLM이 제안한 값 중 더 낮은 쪽을 최종 `confidence`로 사용한다(v1은 HIGH를 반환하지 않는다).
+- `catalysts` / `risks` / `scenarios`는 근거가 없으면 빈 리스트를 정상 출력으로 허용한다.
 
 주요 출력:
 
@@ -1207,6 +1240,36 @@ EcosStatisticPoint[]
 
 ECOS의 문자열 기반 수치 데이터는 애플리케이션에서 사용하기 적합한 타입으로 변환한다.
 
+## OpenDartService / KiwoomService
+
+`EcosService`와 동일한 원칙(URL/parameter 구성, HTTP 오류 처리, JSON/XML 파싱, 정규화)으로 구현되어 있다.
+
+```text
+OpenDartService
+├── corp_code resolution (stock_code → corp_code)
+├── 재무제표 조회 (CFS 우선, 없으면 OFS fallback)
+└── ZIP/XML corpCode 파싱
+
+KiwoomService
+├── OAuth Access Token 발급
+├── 공통 request() (cont-yn / next-key 연속조회 포함)
+├── 주식 기본정보 조회
+└── 계좌평가잔고 조회
+```
+
+## LLMService
+
+Stock Research Agent의 LLM 호출만을 담당하는 얇은 Service wrapper다.
+
+```text
+LLMService
+├── OpenAI Chat Completions API 직접 호출 (httpx, 벤더 SDK 미사용)
+├── HTTP error handling
+└── 응답 파싱 (content, model, finish_reason)
+```
+
+prompt 구성, 재시도 정책, 구조화 검증은 `LLMService`가 아니라 Agent Layer(`reasoning.py`)의 책임이다. `LLMService`는 raw 요청/응답 처리 이상의 판단을 하지 않는다.
+
 ---
 
 # 🛠 Domain Tool Layer
@@ -1242,6 +1305,8 @@ Agent는 다음 ECOS-specific code를 알 필요가 없다.
 
 이러한 API-specific detail은 Domain Tool / Service 계층에서 관리한다.
 
+같은 원칙으로 `OpenDartTools`(`get_company_financials`, `get_key_financials`)와 `KiwoomTools`(`get_stock_info`, `get_account_balance`)도 구현되어 있다.
+
 ---
 
 # 🔗 MCP Layer
@@ -1258,7 +1323,12 @@ app/mcp/server.py
 
 ```text
 personal-investment-agent
-└── get_base_rate
+├── get_base_rate
+├── get_company_financials
+├── get_key_financials
+├── get_stock_info
+├── get_account_balance
+└── get_portfolio_context
 ```
 
 MCP Client에서는 다음 작업을 수행할 수 있다.
@@ -1268,7 +1338,7 @@ Tool Discovery
       │
       │ list_tools()
       ▼
-get_base_rate 발견
+6개 Tool 발견
 
       ↓
 
@@ -1276,12 +1346,12 @@ Tool Invocation
       │
       │ call_tool()
       ▼
-get_base_rate 실행
+Tool 실행
 ```
 
-현재 `tests/test_mcp_server.py`에서 실제 MCP Client를 사용하여 이 경로를 검증한다.
+현재 `tests/test_mcp_server.py`에서 실제 MCP Client를 사용하여 6개 Tool 모두 실제 외부 API까지 end-to-end로 검증한다.
 
-향후 Agent Runtime이 이 MCP Client 역할을 담당한다.
+Stock Research Agent v1은 이 MCP Client 경로를 사용하지 않고 Domain Tool을 직접 호출한다(자세한 내용은 위 "MCP Client / Server Relationship" 참고). 향후 프로세스 경계를 넘는 외부 Agent Runtime이나 다른 클라이언트가 이 MCP Client 역할을 담당할 수 있다.
 
 ---
 
@@ -1291,10 +1361,10 @@ get_base_rate 실행
 
 | Data Source | Purpose | Status |
 | --- | --- | --- |
-| OpenAI API | Agent reasoning 및 자연어 분석 | Planned |
-| Kiwoom REST API | 계좌 / 주가 / 거래 / 수급 데이터 | Planned |
 | 한국은행 ECOS API | 금리 / 환율 / 거시경제 데이터 | **Service + Tool + MCP Integrated** |
-| OpenDART API | 기업 공시 / 재무 데이터 | **Next** |
+| OpenDART API | 기업 공시 / 재무 데이터 | **Service + Tool + MCP Integrated** |
+| Kiwoom REST API | 계좌 / 주가 / 거래 / 수급 데이터 | **Service + Tool + MCP Integrated** |
+| OpenAI API | Stock Research Agent LLM reasoning | **Service Integrated (LLMService, Agent 전용, MCP 미노출)** |
 
 향후 필요에 따라 추가할 수 있다.
 
@@ -1416,7 +1486,10 @@ personal-investment-agent/
 ├── app/
 │   ├── agents/                     # AI Agent Layer
 │   │   ├── market/                 # Market Agent (planned)
-│   │   ├── stock_research/         # Stock Research Agent (planned)
+│   │   ├── stock_research/         # Stock Research Agent — v1 구현 완료
+│   │   │   ├── analysis.py         # Deterministic 분석 (facts, confidence 상한, risk_level)
+│   │   │   ├── reasoning.py        # LLM reasoning
+│   │   │   └── orchestrator.py     # StockAnalysis 조립
 │   │   └── portfolio/              # Portfolio Strategy Agent (planned)
 │   │
 │   ├── recommendation/             # Recommendation Engine (planned)
@@ -1424,10 +1497,16 @@ personal-investment-agent/
 │   │
 │   ├── mcp/
 │   │   ├── ecos_tools.py           # ECOS Domain Tools
+│   │   ├── opendart_tools.py       # OpenDART Domain Tools
+│   │   ├── kiwoom_tools.py         # Kiwoom Domain Tools
 │   │   └── server.py               # MCP Server / Tool exposure
 │   │
 │   ├── services/
-│   │   └── ecos.py                 # ECOS Service
+│   │   ├── ecos.py                 # ECOS Service
+│   │   ├── opendart.py             # OpenDART Service
+│   │   ├── kiwoom.py               # Kiwoom Service
+│   │   ├── portfolio_adapter.py    # Kiwoom → PortfolioContext 변환
+│   │   └── llm.py                  # LLM Service (Stock Research Agent 전용)
 │   │
 │   ├── models/
 │   │   ├── common.py
@@ -1442,11 +1521,20 @@ personal-investment-agent/
 │
 ├── tests/
 │   ├── test_models.py
-│   ├── test_ecos_service.py
-│   ├── test_ecos_tools.py
+│   ├── test_ecos_service.py / test_ecos_tools.py
+│   ├── test_opendart_service.py / test_opendart_tools.py
+│   ├── test_kiwoom_service.py / test_kiwoom_tools.py
+│   ├── test_portfolio_adapter.py
+│   ├── test_llm_service.py
+│   ├── test_stock_research_analysis.py
+│   ├── test_stock_research_reasoning.py
+│   ├── test_stock_research_orchestrator.py
 │   └── test_mcp_server.py
 │
 ├── scripts/
+│   ├── demo.py
+│   ├── kiwoom_stock_info_demo.py
+│   └── stock_research_demo.py      # Stock Research Agent v1 실제 E2E 데모
 ├── docs/
 │
 ├── .env
@@ -1456,7 +1544,7 @@ personal-investment-agent/
 └── README.md
 ```
 
-> `app/recommendation/`과 Recommendation 관련 모델은 프로젝트의 공식 설계에 포함되었지만 아직 구현되지 않았다.
+> `app/recommendation/`, `app/agents/market/`, `app/agents/portfolio/`와 관련 모델은 프로젝트의 공식 설계에 포함되었지만 아직 구현되지 않았다.
 
 ---
 
@@ -1627,13 +1715,19 @@ ruff check .
 
 # 🧪 Testing
 
-현재 Model Layer와 ECOS 전체 integration path에 대한 테스트를 구현했다.
+현재 Model Layer, ECOS / OpenDART / Kiwoom integration, LLMService, Stock Research Agent v1 전체 경로에 대한 테스트를 구현했다.
 
 ```text
 tests/
 ├── test_models.py
-├── test_ecos_service.py
-├── test_ecos_tools.py
+├── test_ecos_service.py / test_ecos_tools.py
+├── test_opendart_service.py / test_opendart_tools.py
+├── test_kiwoom_service.py / test_kiwoom_tools.py
+├── test_portfolio_adapter.py
+├── test_llm_service.py
+├── test_stock_research_analysis.py
+├── test_stock_research_reasoning.py
+├── test_stock_research_orchestrator.py
 └── test_mcp_server.py
 ```
 
@@ -1644,6 +1738,7 @@ Valid Input
 ├── UserRequest
 ├── MarketAnalysis
 ├── StockScenario
+├── StockPriceSnapshot / FinancialSnapshot
 ├── PortfolioPosition
 ├── InvestorProfile
 └── StrategyResult
@@ -1655,61 +1750,46 @@ Invalid Input
 └── negative quantity
 ```
 
-## ECOS Service Tests
+## Service / Domain Tool Tests
+
+ECOS, OpenDART, Kiwoom 각 Service/Domain Tool을 `httpx.MockTransport` 또는 `AsyncMock` 기반으로 검증한다(URL/parameter 구성, HTTP 오류 처리, 응답 정규화, Kiwoom continuation 처리 등). 일부는 실제 외부 API를 호출하는 real-path 테스트(`test_real_*`)도 함께 포함한다.
+
+## LLMService Tests
+
+OpenAI Chat Completions 호출을 `httpx.MockTransport`로 mock하여 검증한다. 실제 OpenAI API는 호출하지 않는다.
+
+## Stock Research Agent Tests
 
 ```text
-URL Construction
-├── item_code1 only
-└── multiple item codes
+test_stock_research_analysis.py
+├── StockPriceSnapshot / FinancialSnapshot 매핑 손실 없음
+├── deterministic facts (250거래일 가격 위치, 부채비율, raw 수치 10종)
+├── confidence 상한 (핵심 재무 완전 → MEDIUM, 불완전 → LOW, HIGH 없음)
+└── risk_level 고정 (v1은 항상 MEDIUM)
 
-HTTP / Response Handling
-├── successful response
-├── HTTP error
-└── unexpected ECOS response
-```
+test_stock_research_reasoning.py
+├── LLM 응답 구조화 검증 + 최소 재시도 (mock, 실제 OpenAI 미호출)
+├── target_price / probability는 항상 null로 강제
+├── scenarios=[] 정상 허용
+├── catalyst 엄격 정의(정적 규모 재진술은 catalyst 아님) 프롬프트 반영
+└── catalysts / risks 빈 리스트 허용
 
-## ECOS Domain Tool Test
-
-```text
-EcosTools.get_base_rate()
-        │
-        ▼
-Correct ECOS statistic mapping
+test_stock_research_orchestrator.py
+├── KiwoomTools / OpenDartTools / LLMService 전부 mock/fake 주입
+├── confidence = min(LLM 제안값, analysis 상한)
+├── risk_level은 analysis 결과만 사용 (LLM이 변경 불가)
+├── evidence는 deterministic facts + 실제 tool 호출 출처로만 구성
+└── ReasoningError 발생 시 fallback 없이 예외 전파
 ```
 
 ## MCP End-to-End Test
 
-```text
-MCP Client
-    │
-    ├── list_tools()
-    │
-    ▼
-MCP Server
-    │
-    ├── get_base_rate 발견
-    │
-    ├── call_tool()
-    │
-    ▼
-EcosTools
-    │
-    ▼
-EcosService
-    │
-    ▼
-Real ECOS API
-    │
-    ▼
-structured_content
-    │
-    └── value = 2.75
-```
+`tests/test_mcp_server.py`에서 실제 MCP Client로 6개 Tool 전체를 실제 외부 API까지 end-to-end로 검증한다.
 
 현재 전체 테스트 결과:
 
 ```text
-17 passed
+103 passed
 ```
 
 전체 lint 결과:
@@ -1722,40 +1802,40 @@ All checks passed!
 
 # 🚧 Current Status
 
-현재 프로젝트는 **Foundation과 Model Layer v1을 완료하고 외부 데이터 Integration을 구축하는 단계**다.
+현재 프로젝트는 **Foundation, Model Layer v1, ECOS / OpenDART / Kiwoom 외부 데이터 Integration을 완료하고, 첫 번째 Agent인 Stock Research Agent v1까지 구현·실제 E2E 검증을 마친 단계**다.
 
-첫 번째 데이터 소스인 **한국은행 ECOS는 Service → Domain Tool → MCP Server까지 end-to-end integration을 완료**했다.
+Market Agent보다 Stock Research Agent를 먼저 구현했다. Kiwoom/OpenDART로 이미 종목 단위 데이터(가격, 재무)가 충분히 확보된 반면, 시장 전체 데이터는 아직 기준금리뿐이라 Market Agent 구현의 우선순위가 낮았기 때문이다.
 
-Recommendation Engine은 프로젝트 공식 범위에 추가되었으며 OpenDART / Kiwoom 및 주요 분석 기반이 구축된 이후 구현할 예정이다.
+Recommendation Engine은 프로젝트 공식 범위에 추가되었으며 Market Agent 및 추가 분석 기반이 구축된 이후 구현할 예정이다.
 
 ```text
-Foundation
-    │
-    │ completed
-    ▼
-Model Layer v1
-    │
-    │ completed
-    ▼
-ECOS Integration
-    │
-    ├── Service            ✓
-    ├── Domain Tool        ✓
-    ├── MCP Server         ✓
-    ├── MCP Tool           ✓
-    └── End-to-End Test    ✓
+Foundation                         completed
     │
     ▼
-OpenDART Integration      ← NEXT
+Model Layer v1                     completed
     │
     ▼
-Kiwoom Integration
+ECOS Integration                   completed
     │
     ▼
-Market Agent
+OpenDART Integration                completed
     │
     ▼
-Stock Research Agent
+Kiwoom Integration                  completed
+    │
+    ▼
+Stock Research Agent v1             completed
+    ├── LLMService              ✓
+    ├── Deterministic Analysis  ✓
+    ├── LLM Reasoning           ✓
+    ├── Orchestrator            ✓
+    └── 실제 E2E Demo           ✓
+    │
+    ▼
+Market Data 설계/확장               ← NEXT
+    │
+    ▼
+Market Agent v1
     │
     ▼
 Recommendation Engine
@@ -1765,12 +1845,6 @@ Portfolio Strategy Agent
     │
     ▼
 Supervisor / Router
-```
-
-다음 구현 대상:
-
-```text
-app/services/opendart.py
 ```
 
 ---
@@ -1805,22 +1879,22 @@ app/services/opendart.py
 
 ## Phase 3 — OpenDART Integration
 
-- [ ] OpenDART Service
-- [ ] OpenDART response normalization
-- [ ] OpenDART Service tests
-- [ ] OpenDART Domain Tools
-- [ ] OpenDART MCP Tools
-- [ ] OpenDART MCP end-to-end tests
+- [x] OpenDART Service
+- [x] OpenDART response normalization
+- [x] OpenDART Service tests
+- [x] OpenDART Domain Tools
+- [x] OpenDART MCP Tools
+- [x] OpenDART MCP end-to-end tests
 
 ## Phase 4 — Kiwoom Integration
 
-- [ ] Kiwoom market data integration
-- [ ] Kiwoom account integration
-- [ ] Position / P&L data
+- [x] Kiwoom market data integration
+- [x] Kiwoom account integration
+- [x] Position / P&L data
 - [ ] Trade history
-- [ ] Kiwoom Domain Tools
-- [ ] Kiwoom MCP Tools
-- [ ] Kiwoom MCP end-to-end tests
+- [x] Kiwoom Domain Tools
+- [x] Kiwoom MCP Tools
+- [x] Kiwoom MCP end-to-end tests
 
 ## Phase 5 — Market Agent
 
@@ -1833,15 +1907,20 @@ app/services/opendart.py
 - [ ] Market Agent implementation
 - [ ] MarketAnalysis generation
 
-## Phase 6 — Stock Research Agent
+## Phase 6 — Stock Research Agent ✅ v1 완료
 
-- [ ] MCP Client integration
-- [ ] OpenDART Tool invocation
-- [ ] Kiwoom Tool invocation
-- [ ] Fundamental analysis
-- [ ] Stock Research Agent implementation
-- [ ] Bull / Base / Bear scenarios
-- [ ] StockAnalysis generation
+> Market Agent(Phase 5)보다 먼저 구현했다. 이유는 위 "Current Status" 참고.
+
+- [x] Direct Domain Tool invocation (MCP Client 대신 in-process 직접 호출)
+- [x] OpenDART Tool invocation
+- [x] Kiwoom Tool invocation
+- [x] LLMService (OpenAI Chat Completions wrapper)
+- [x] Deterministic fundamental analysis (`analysis.py`)
+- [x] LLM reasoning (`reasoning.py`) — evidence-grounded catalysts/risks/scenarios
+- [x] Stock Research Agent implementation (`orchestrator.py`)
+- [x] Bull / Base / Bear scenarios (근거 없으면 빈 배열 허용)
+- [x] StockAnalysis generation
+- [x] 실제 E2E demo (`scripts/stock_research_demo.py`)
 
 ## Phase 7 — Recommendation Engine
 
