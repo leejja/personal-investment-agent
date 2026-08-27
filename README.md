@@ -4,7 +4,7 @@
 
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
-> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1 + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1 (constraint-based, Kiwoom `ka10099` 기반) completed  
+> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1 + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1 + REST API v1 (FastAPI, `POST /analysis`) completed  
 > **Next:** Recommendation Engine (scoring/ranking)
 
 ---
@@ -1316,6 +1316,80 @@ Supervisor
 
 ---
 
+# 🌐 REST API — ✅ v1 구현 완료
+
+기존 `SupervisorOrchestrator`를 외부 client(향후 Web/Flutter 등)에서 호출할 수 있게 하는 **얇은 FastAPI boundary**다. 새로운 투자 판단 로직은 이 레이어에 넣지 않는다 — routing/reasoning/필터링은 전부 이미 존재하는 Core(`SupervisorOrchestrator`)의 책임으로 남긴다.
+
+```text
+app/api/
+├── main.py     # FastAPI 앱, lifespan(의존성 그래프 1회 생성), 예외 핸들러
+└── routes.py   # AnalysisRequest DTO, GET /health, POST /analysis
+```
+
+## Endpoint
+
+v1은 **`POST /analysis` 단일 endpoint**로 Supervisor의 모든 intent(`market_only`/`stock_research`/`candidate_discovery`/`portfolio_strategy`)를 처리한다. Market/Stock/Portfolio/Discovery별로 endpoint를 나누지 않는다 — Supervisor 자체가 이미 "어떤 종류의 요청인가"를 안전하게 판단하는 역할을 하므로, endpoint를 나누면 client와 Supervisor가 이 판단을 각자 따로 내리게 되어 서로 어긋날 위험이 생긴다.
+
+```text
+HTTP Request
+    ↓
+AnalysisRequest (API 전용 DTO)
+    ↓
+UserRequest + investor_profile (분리 유지)
+    ↓
+SupervisorOrchestrator.run()
+    ↓
+SupervisorResult
+    ↓
+JSON Response (별도 response model 없이 그대로 반환)
+```
+
+`AnalysisRequest`는 `app/api/routes.py`에만 존재하는 API 전용 DTO다. **Core의 domain model인 `UserRequest`에는 `investor_profile`을 추가하지 않는다** — `SupervisorOrchestrator.run(request, investor_profile=...)`이 이미 이 둘을 의도적으로 분리하고 있으므로, HTTP transport 편의를 위해 그 경계를 허물지 않고 endpoint에서 다시 나눠 넘긴다.
+
+`GET /health`는 외부 API(Kiwoom/OpenAI/ECOS/OpenDART)를 호출하지 않고 프로세스 생존 여부만 확인한다.
+
+## Dependency lifecycle
+
+`lifespan`에서 `KiwoomService`/`EcosService`/`OpenDartService`/`LLMService`와 그 위의 Orchestrator 전체를 **프로세스 생애주기 동안 1회만** 생성해 `app.state.supervisor`에 저장한다(`scripts/supervisor_demo.py`와 동일한 구성). 요청마다 새로 만들지 않아야 `KiwoomService`의 access token instance-level 캐싱이 의미가 있다. `routes.py`의 `get_supervisor(request: Request)`가 이 인스턴스를 꺼내 `Depends()`로 주입한다 — 테스트에서는 `app.dependency_overrides[get_supervisor]`로 fake Supervisor를 주입해 실제 외부 API 없이 검증한다. 별도 dependency injection framework나 `dependencies.py`는 만들지 않았다.
+
+v1은 `--workers 1`(uvicorn 기본값) 전제다 — 멀티 워커는 워커마다 별도 프로세스라 token 캐시가 워커별로 분리되고, 이를 공유하려면 Redis 등이 필요한데 원칙상 미리 넣지 않는다(v2+).
+
+## Error mapping
+
+`RoutingError`/`SupervisorError`/`DiscoveryError`/`FilterIntentError`/`ReasoningError`(Market/Stock Research/Portfolio Strategy — 이름은 같지만 각기 다른 클래스 3개) 전부를 확인해 다음과 같이 매핑했다.
+
+```text
+400  SupervisorError, DiscoveryError
+     → 클라이언트가 요청을 고치면 해결 가능한 실패
+       (investor_profile 누락, 후보 과다, 종목 특정 불가 등)
+
+502  RoutingError, FilterIntentError, ReasoningError(3종)
+     → 이 프로젝트에서 502는 단순 "네트워크 게이트웨이 오류"가 아니라
+       routing/filter-intent/reasoning 같은 이 프로젝트의 LLM 기반
+       dependency를 통해 요청을 정상 완료하지 못한 경우(재시도까지
+       실패)를 가리키는 API 정책이다.
+
+500  그 외 모든 미분류 예외
+     → 원문(str(exc))을 절대 client에 노출하지 않는다.
+```
+
+**미분류 예외를 원문 그대로 노출하지 않는 것이 특히 중요하다.** 실제 코드로 확인한 결과 **ECOS는 API key가 URL 경로 세그먼트에**(`app/services/ecos.py`), **OpenDART는 쿼리 파라미터에**(`app/services/opendart.py`) 그대로 포함된다. `httpx.HTTPStatusError` 등 예외의 기본 `str()`에는 request URL이 포함되므로, 이런 예외를 그대로 client에 전달하면 API key가 유출된다. 서버 로그에는 전체 스택트레이스를 남기고, client에는 고정된 일반 메시지만 반환한다 — 실패를 숨기는 게 아니라(500은 정직하게 알림), 실패의 원문 내용만 감춘다. 실제 `httpx.HTTPStatusError`(URL에 가짜 API key 포함)를 이용한 회귀 테스트로 이 정책을 검증했다.
+
+## Response contract
+
+`SupervisorResult`를 별도 FastAPI response model 없이 그대로 반환한다. 모든 Enum이 `str, Enum`이라 JSON에서 평문 문자열로, `Evidence.timestamp`는 ISO 8601 문자열/`null`로, Optional 필드는 `null`로 직렬화되어 Flutter/Web client가 별도 변환 없이 소비할 수 있다.
+
+## 처리 시간 / 아직 넣지 않은 것
+
+전체 포트폴리오 분석처럼 실제로 수 분이 걸릴 수 있는 요청도 v1은 **동기 HTTP request-response**로 그대로 처리한다(client가 넉넉한 timeout을 두는 것을 전제). 아래는 의도적으로 v1에 넣지 않았다(v2+ 후보):
+
+```text
+DB, login/auth, history, Redis/Celery, background job, WebSocket,
+Service 레이어 httpx client lifecycle 리팩터링, multi-worker 지원
+```
+
+---
+
 # 🔌 Service Layer
 
 Service Layer는 외부 API 접근과 응답 정규화를 담당한다.
@@ -1609,6 +1683,10 @@ ECOS API
 personal-investment-agent/
 │
 ├── app/
+│   ├── api/                         # REST API v1 — 구현 완료
+│   │   ├── main.py                 # FastAPI 앱, lifespan, 예외 핸들러
+│   │   └── routes.py                # AnalysisRequest DTO, GET /health, POST /analysis
+│   │
 │   ├── agents/                     # AI Agent Layer
 │   │   ├── market/                 # Market Agent — v1 구현 완료
 │   │   │   ├── analysis.py         # Deterministic 분석 (raw facts, 20/60일 변화율, confidence 상한)
@@ -1680,6 +1758,7 @@ personal-investment-agent/
 │   ├── test_supervisor_orchestrator.py
 │   ├── test_discovery_filter_intent.py
 │   ├── test_discovery_orchestrator.py
+│   ├── test_api.py
 │   └── test_mcp_server.py
 │
 ├── scripts/
@@ -1755,6 +1834,8 @@ httpx
 mcp
 pydantic
 pydantic-settings
+fastapi
+uvicorn
 
 Development:
 pytest
@@ -1765,6 +1846,8 @@ ruff
 - `mcp`: Model Context Protocol Server / Client
 - `pydantic`: 구조화된 Data Model 및 validation
 - `pydantic-settings`: 환경변수 및 API Key 관리
+- `fastapi`: REST API v1 (`app/api/`)
+- `uvicorn`: FastAPI용 ASGI 서버(`mcp[cli]`의 transitive dependency로 이미 설치되어 있었으나 REST API v1부터 직접 의존성으로 명시)
 - `pytest`: automated testing
 - `ruff`: lint 및 code quality 검사
 
@@ -1865,11 +1948,27 @@ Lint:
 ruff check .
 ```
 
+REST API v1 로컬 실행(WSL):
+
+```bash
+uvicorn app.api.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+```bash
+curl http://127.0.0.1:8000/health
+
+curl -X POST http://127.0.0.1:8000/analysis \
+  -H "Content-Type: application/json" \
+  -d '{"question": "요즘 시장 상황 어때?"}'
+```
+
+`--host 127.0.0.1`(기본값)로 로컬 머신 밖에서 접근할 수 없게 하는 것이 v1의 실질적인 보안 경계다 — 아직 인증 시스템은 없다.
+
 ---
 
 # 🧪 Testing
 
-현재 Model Layer, ECOS / OpenDART / Kiwoom integration, LLMService, Stock Research Agent v1, Market Agent v1, Portfolio Strategy Agent v1, Supervisor / Router v1 전체 경로에 대한 테스트를 구현했다.
+현재 Model Layer, ECOS / OpenDART / Kiwoom integration, LLMService, Stock Research Agent v1, Market Agent v1, Portfolio Strategy Agent v1, Supervisor / Router v1, Candidate Discovery v1, REST API v1 전체 경로에 대한 테스트를 구현했다.
 
 ```text
 tests/
@@ -1892,6 +1991,7 @@ tests/
 ├── test_supervisor_orchestrator.py
 ├── test_discovery_filter_intent.py
 ├── test_discovery_orchestrator.py
+├── test_api.py
 └── test_mcp_server.py
 ```
 
@@ -2049,6 +2149,20 @@ test_discovery_orchestrator.py
 └── symbol/name이 비어있는 항목은 제외
 ```
 
+## REST API Tests
+
+`tests/test_api.py` — 전부 `app.dependency_overrides`로 fake Supervisor를 주입해 실제 외부 API 없이 검증한다(FastAPI `TestClient`).
+
+```text
+├── GET /health는 200 반환, Supervisor 호출 없음
+├── POST /analysis (market_only)가 SupervisorResult를 그대로 JSON으로 반환
+├── investor_profile이 UserRequest가 아니라 별도 인자로 전달됨 (UserRequest.model_fields에 investor_profile 없음 확인)
+├── 빈 question → 422 (Pydantic 자동 검증, Supervisor 호출 없음)
+├── RoutingError/FilterIntentError/ReasoningError → 502, SupervisorError/DiscoveryError → 400 (parametrize)
+├── 미분류 예외(RuntimeError) → 500 + 원문(exception 메시지, 타입명) 응답 바디에 없음
+└── 실제 httpx.HTTPStatusError(URL에 가짜 ECOS API key 포함) → 500 + key가 응답 바디에 없음
+```
+
 ## MCP End-to-End Test
 
 `tests/test_mcp_server.py`에서 실제 MCP Client로 9개 Tool 전체를 실제 외부 API까지 end-to-end로 검증한다.
@@ -2056,7 +2170,7 @@ test_discovery_orchestrator.py
 현재 전체 테스트 결과:
 
 ```text
-227 passed
+238 passed
 ```
 
 전체 lint 결과:
@@ -2069,7 +2183,7 @@ All checks passed!
 
 # 🚧 Current Status
 
-현재 프로젝트는 **Foundation, Model Layer v1, ECOS / OpenDART / Kiwoom 외부 데이터 Integration을 완료하고, Stock Research Agent v1·Market Agent v1·Portfolio Strategy Agent v1·Supervisor / Router v1 네 Agent까지 구현·실제 E2E 검증을 마친 단계**다.
+현재 프로젝트는 **Foundation, Model Layer v1, ECOS / OpenDART / Kiwoom 외부 데이터 Integration을 완료하고, Stock Research Agent v1·Market Agent v1·Portfolio Strategy Agent v1·Supervisor / Router v1·Candidate Discovery v1까지 구현하고 그 위에 REST API v1(FastAPI)까지 얹어 실제 E2E 검증을 마친 단계**다.
 
 Market Agent보다 Stock Research Agent를 먼저 구현했다. Kiwoom/OpenDART로 이미 종목 단위 데이터(가격, 재무)가 충분히 확보된 반면, 시장 전체 데이터는 기준금리뿐이었기 때문이다. Market Agent v1을 구현하며 ECOS를 환율/KOSPI/KOSDAQ까지 확장했고, regime/risk_level 판단은 Stock Research Agent의 `risk_level`처럼 Python 상수로 고정할 수 없어 대신 fact-id grounding(존재하지 않거나 비어 있는 참조는 검증 실패 → 재시도 → `ReasoningError`)으로 구조적으로 통제했다.
 
@@ -2078,6 +2192,8 @@ Market Agent보다 Stock Research Agent를 먼저 구현했다. Kiwoom/OpenDART�
 세 Agent가 모두 갖춰진 뒤 이를 실제 사용자 요청 하나로 연결하는 Supervisor / Router v1을 구현했다. Router(intent 분류)와 Supervisor(실행·조립)를 분리하지 않고 하나의 `SupervisorOrchestrator`로 시작했고, LLM은 closed enum만 제안하며 어떤 Agent를 호출할지는 Python의 고정 dispatch가 전담해 LLM이 존재하지 않는 Agent/tool을 호출하는 경로 자체를 없앴다. 종목명(예: "삼성전자")은 OpenDART 회사 목록과 정확히 일치할 때만 종목코드로 해석하고, 특정 종목을 명시한 질문은 보유종목 전체가 아니라 그 종목만 재분석해 비용을 아낀다. 부분 실패는 위치별로 다르게 처리한다 — root(Market Agent, 명시적 종목의 Stock Research) 실패는 요청 전체 실패, 보유종목 fan-out의 개별 실패는 skip, sink(Portfolio Strategy reasoning) 실패는 부분 결과 반환. 실제 계좌(보유 28종목) E2E 검증 중 보유종목 전체를 무제한 병렬 실행하면 Kiwoom OAuth 토큰 발급이 몰려 429가 발생하는 문제와, Portfolio Agent의 프롬프트에서 "이름(코드)" 표기가 LLM의 `symbol` 필드 혼동을 유발하는 문제를 발견해 각각 동시성 제한(Semaphore)과 프롬프트 포맷 분리로 수정했다. 이후 Kiwoom access token을 매 호출마다 재발급하던 근본 원인을 확인해 `KiwoomService`에 instance-level 캐싱(`asyncio.Lock` 기반 double-checked locking)을 추가했다(자세한 내용은 dev-log 참고).
 
 "지금 살 만한 종목 찾아줘" 같은 요청을 처리하려면 Stock Research Agent의 분석 대상을 스스로 찾는 Candidate Discovery가 필요했다. 처음에는 현재 데이터로 안전한 Stock Universe를 구성할 수 없다고 판단해 보류했으나, Kiwoom 공식 REST API를 실측 조사한 결과 `ka10099`(종목정보 리스트)로 KOSPI/KOSDAQ 전체 종목과 종목코드/종목명/시장구분/업종명/규모구분/상장주식수를 단일 호출로 확보할 수 있음을 확인해 v1을 구현했다. Candidate Discovery는 Agent가 아니라 Supervisor와 같은 얇은 구조(LLM 조건 구조화 + deterministic 필터 실행)로 만들었다 — 투자 판단(reasoning) 단계가 전혀 없기 때문이다. 실제 업종명(`upName`)이 "반도체" 같은 세분화된 업종이 아니라 27개의 굵직한 KRX 대분류라는 것도 실측으로 확인했고, 매칭되는 업종이 없으면 근거 없이 대체하지 않고 실패시킨다. 후보가 `MAX_STOCK_RESEARCH_FANOUT`(투자 threshold가 아닌 fan-out 실행/비용 안전 한도)을 초과하면 momentum 등 암묵적 기준으로 일부를 골라내지 않고 Stock Research를 0건 실행한 뒤 조건을 더 좁혀달라고 요청한다. `exclude_owned`(보유종목 제외 여부)는 Portfolio Strategy 경로를 탄다는 사실과 무관하게 사용자 문장 자체("내 포트폴리오에 없는" 등)에서만 grounding하도록 설계해, 실제 E2E로 같은 종목 집합에 대해 표현에 따라 이 값이 정확히 갈리는 것을 확인했다.
+
+다섯 Agent/컴포넌트가 전부 갖춰진 뒤, 이를 실제 client에서 호출할 수 있는 REST API v1(FastAPI)을 얇게 얹었다. 새 투자 로직은 넣지 않고 `SupervisorOrchestrator`를 그대로 core로 재사용하며, `POST /analysis` 단일 endpoint로 Supervisor의 모든 intent를 처리한다(Market/Stock/Portfolio/Discovery별 endpoint를 나누지 않음 — Supervisor가 이미 라우팅을 담당하므로 나누면 판단 주체가 이중화됨). `UserRequest`/`investor_profile` 분리 계약을 지키기 위해 API 전용 `AnalysisRequest` DTO에서만 investor_profile을 받고, Core의 domain model 자체는 바꾸지 않았다. `lifespan`에서 의존성 그래프를 프로세스 생애주기 동안 1회만 생성해 Kiwoom access token 캐싱이 그대로 유효하게 했다. 미분류 예외를 client에 그대로 노출하면 안 되는 이유를 실제 코드로 확인했다 — **ECOS는 API key가 URL 경로에, OpenDART는 쿼리 파라미터에 그대로 포함**되어 있어(`app/services/ecos.py`, `app/services/opendart.py`), 이런 예외의 원문이 그대로 client에 전달되면 credential이 유출된다. 실제 `httpx.HTTPStatusError`(URL에 가짜 key 포함)로 이 정책을 회귀 테스트했다. 502는 이 프로젝트에서 단순 네트워크 게이트웨이 오류가 아니라 routing/filter-intent/reasoning 같은 LLM 기반 dependency 실패를 가리키는 API 정책으로 정의했다.
 
 Recommendation Engine(scoring/ranking 기반 신규 투자 후보 평가)은 프로젝트 공식 범위에 포함되어 있으며 다음 구현 대상이다.
 
@@ -2138,6 +2254,15 @@ Candidate Discovery v1               completed
     ├── exclude_owned 사용자 문장 기반 grounding                  ✓
     ├── Supervisor candidate_discovery intent 연결                ✓
     └── 실제 E2E Demo (성공/과다/personalized 케이스 전부)        ✓
+    │
+    ▼
+REST API v1                          completed
+    ├── POST /analysis 단일 endpoint (Supervisor가 라우팅 전담)    ✓
+    ├── AnalysisRequest DTO (Core domain model 변경 없음)          ✓
+    ├── lifespan 의존성 그래프 1회 생성 (token 캐싱 유지)          ✓
+    ├── Core exception → HTTP status 매핑 + 원문 비노출            ✓
+    ├── GET /health (외부 API 미호출)                              ✓
+    └── 실제 E2E (health/MARKET_ONLY/STOCK_RESEARCH)               ✓
     │
     ▼
 Recommendation Engine               ← NEXT (scoring/ranking)
@@ -2284,6 +2409,19 @@ Recommendation Engine               ← NEXT (scoring/ranking)
 - [x] 종목명 해석 (OpenDART 정확 일치, 추측 없음)
 - [x] 위치별 부분 실패 정책 (root 실패=전체 실패 / fan-out 개별 실패=skip / sink 실패=부분 결과)
 - [x] 실제 E2E demo (`scripts/supervisor_demo.py`, market_only/stock_research/portfolio_strategy 전체·특정종목 4개 시나리오)
+
+## Phase 9a — REST API v1 ✅ 완료
+
+> 새로운 투자 로직을 추가하는 게 아니라, 완성된 `SupervisorOrchestrator`를 외부 client에서 호출할 수 있는 최소 API boundary를 만드는 것이 목적이다.
+
+- [x] `app/api/main.py` — FastAPI 앱, lifespan에서 의존성 그래프 1회 생성
+- [x] `app/api/routes.py` — `AnalysisRequest` DTO, `GET /health`, `POST /analysis`
+- [x] `SupervisorResult`를 별도 response model 없이 그대로 반환
+- [x] Core exception → HTTP status 매핑 (400/502/500, 502의 의미를 API 정책으로 문서화)
+- [x] 미분류 예외 원문 미노출 (ECOS/OpenDART API key가 URL에 포함되는 문제 회귀 테스트 포함)
+- [x] `GET /health`는 외부 API 미호출
+- [x] 실제 E2E (`GET /health`, `POST /analysis` MARKET_ONLY/STOCK_RESEARCH)
+- [ ] DB / login·auth / history / Redis·Celery / background job / WebSocket / multi-worker (v1 범위 밖, 의도적으로 보류)
 
 ## Phase 10 — Expansion
 
