@@ -4,8 +4,8 @@
 
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
-> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1 + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 completed  
-> **Next:** Recommendation Engine
+> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1 + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1 (constraint-based, Kiwoom `ka10099` 기반) completed  
+> **Next:** Recommendation Engine (scoring/ranking)
 
 ---
 
@@ -134,7 +134,8 @@ Recommendation Engine 역시 외부 API를 직접 호출하기보다 Agent 및 M
 │                Supervisor / Router — v1 ✓                    │
 │                                                              │
 │  • LLM 기반 intent 분류 (closed enum, Python이 강제)          │
-│    market_only / stock_research / portfolio_strategy         │
+│    market_only / stock_research / candidate_discovery /      │
+│    portfolio_strategy                                        │
 │  • 종목명/코드 해석 (OpenDART 정확 일치, 추측 없음)            │
 │  • intent별 고정 실행 단계 (범용 DAG 엔진 없음)                │
 │  • 부분 실패 정책 (root 실패=전체 실패 /                       │
@@ -781,12 +782,14 @@ app/supervisor/
 
 다른 세 Agent와 달리 `analysis.py`가 없다 — routing의 입력은 외부 API 수치가 아니라 사용자의 자연어 자체라, "LLM에게 넘기기 전에 Python이 먼저 정리할 deterministic fact"가 없기 때문이다.
 
-v1이 지원하는 intent 3종(closed enum, LLM이 이 중 하나만 고를 수 있고 Python이 강제):
+v1이 지원하는 intent 4종(closed enum, LLM이 이 중 하나만 고를 수 있고 Python이 강제):
 
 ```text
 market_only          → Market Agent만 실행
 stock_research        → 언급된 종목의 Stock Research Agent만 실행
-portfolio_strategy     → Market + (보유종목 또는 명시 종목) Stock Research
+candidate_discovery    → Candidate Discovery → 후보 종목들의 Stock Research 실행
+                          (개인화 BUY/AVOID 판단 없음)
+portfolio_strategy     → Market + (명시 종목 | discovery 후보 | 보유종목 전체) Stock Research
                           + PortfolioContext + InvestorProfile → Portfolio Strategy Agent
 ```
 
@@ -794,7 +797,7 @@ v1의 핵심 정책:
 
 - **LLM은 tool-calling 권한이 없다**: LLM은 `intent` enum과 `mentioned_stock_terms`(원문에 언급된 종목명/코드 텍스트)만 구조화 출력하고, 어떤 Agent를 어떤 순서로 실행할지는 Python의 고정 dispatch가 100% 결정한다. 존재하지 않는 Agent/tool을 LLM이 호출하는 경로 자체가 없다.
 - **종목명 해석도 Python이 결정론적으로 검증한다**: `UserRequest.symbols`가 있으면 그대로 신뢰하고, 없으면 LLM이 추출한 텍스트를 `OpenDartTools.find_stock_code_by_name()`(OpenDART 회사 목록과 정확히 일치할 때만)으로 해석한다. 모호하거나 못 찾으면 추측하지 않고 실패시킨다 — LLM이 종목코드를 자기 지식으로 만들어내는 경로를 원천 차단한다.
-- **PORTFOLIO_STRATEGY 내부에서 explicit symbol 유무로 분기한다**(새 intent 추가 없음): 특정 종목을 명시한 질문(예: "삼성전자 더 사도 될까?")은 그 종목만 Stock Research를 실행하고, 전체 포트폴리오 질문(예: "내 포트폴리오 분석해줘")은 보유종목 전체를 실행한다. 매번 보유종목 전체를 재분석하는 비용을 피하기 위한 정책이다.
+- **PORTFOLIO_STRATEGY 내부에서 우선순위 3단 분기를 쓴다**(discovery 자체는 새 intent를 추가했지만, portfolio_strategy에 discovery를 엮는 것은 새 intent 없이 기존 실행 로직을 재사용): 특정 종목을 명시한 질문(예: "삼성전자 더 사도 될까?")은 그 종목만 Stock Research를 실행하고, discovery 조건이 있는 질문(예: "내 포트폴리오에 없는 반도체 후보 찾아줘")은 Candidate Discovery로 찾은 후보를, 둘 다 없으면(예: "내 포트폴리오 분석해줘") 보유종목 전체를 실행한다. 매번 보유종목 전체를 재분석하는 비용을 피하기 위한 정책이다.
 - **부분 실패 정책은 위치에 따라 다르다**: 다른 단계가 의존하는 root(Market Agent, 명시적으로 물어본 종목의 Stock Research)가 실패하면 전체 요청을 실패시킨다(근거 없는 fallback을 만들지 않음). 전체 포트폴리오 fan-out의 개별 종목 실패(예: OpenDART에 재무 데이터가 없는 ETF)는 그 종목만 skip하고 나머지로 계속 진행한다. 아무도 의존하지 않는 sink인 Portfolio Strategy Agent의 reasoning 실패(`ReasoningError`)는 이미 확보한 `MarketAnalysis`/`StockAnalysis[]`/`PortfolioContext`를 그대로 반환하는 부분 결과를 허용한다.
 - **보유종목 fan-out은 동시성을 제한한다**: 종목 수만큼 무제한 병렬 실행하면 Kiwoom OAuth 토큰 발급이 몰려 429가 발생함을 실제 E2E에서 확인해, `Semaphore`로 동시 실행 개수를 제한했다(자세한 내용은 dev-log 참고).
 - **최종 조립은 결정론적이며, 별도 LLM synthesis가 없다**: `SupervisorResult`는 각 Agent가 이미 만든 evidence-grounded 결과 객체를 그대로 담을 뿐, 이를 재해석해 새 문장을 생성하는 추가 LLM 호출을 두지 않는다 — 그 자체가 새로운 fabrication 위험을 재도입하기 때문이다.
@@ -806,6 +809,7 @@ v1의 핵심 정책:
 SupervisorResult
 ├── intent
 ├── resolved_symbols[]
+├── candidates[]       # Candidate Discovery를 거친 경우에만 채워짐
 ├── market_analysis
 ├── stock_analyses[]
 ├── portfolio_context
@@ -971,6 +975,42 @@ StrategyResult
 ├── portfolio_risk
 ├── confidence
 └── evidence[]
+```
+
+---
+
+## 5. Candidate Discovery — ✅ v1 구현 완료
+
+"어떤 종목을 Stock Research Agent의 분석 대상으로 올릴 것인가"만 담당한다. 종목 자체의 매력도(Stock Research Agent)나 사용자별 BUY/AVOID 판단(Portfolio Strategy Agent)에는 관여하지 않는다 — 아래 전체 범위의 Recommendation Engine(scoring/ranking)과는 다른, 더 좁은 v1 기능이다.
+
+Agent가 아니라 Supervisor와 동일한 얇은 2단 구조로 구현했다 — "투자 판단을 내리는 reasoning" 단계가 없기 때문이다(LLM은 자유 텍스트를 구조화하는 역할만 한다).
+
+```text
+app/discovery/
+├── filter_intent.py   # LLM이 질문 → DiscoveryFilter로 구조화 (closed set 검증 + 재시도)
+└── orchestrator.py     # universe 조회, 필터 적용, 후보 과다 시 정책, Candidate[] 조립
+```
+
+v1이 실제로 사용하는 데이터: Kiwoom `ka10099`(종목정보 리스트, 실제 API 호출로 검증). KOSPI/KOSDAQ 각각 단일 호출로 전체 종목(2026-08 기준 KOSPI 2,481종목)과 함께 종목코드/종목명/시장구분/업종명(`upName`)/규모구분(`upSizeName`)/상장주식수/최근가/감리구분/투자유의여부를 확보한다. ETF/ETN(`mrkt_tp` 8/60 등)은 애초에 조회 대상에 넣지 않아 구조적으로 제외된다.
+
+v1의 핵심 정책:
+
+- **LLM은 조건만 구조화하고 절대 종목을 고르지 않는다**: `DiscoveryFilter`(market/sector_terms/size_terms/exclude_owned)만 제안하고, 실제 종목 선택은 Python이 실제 universe 데이터로 수행한다.
+- **sector_terms/size_terms는 실제 관측된 값만 허용한다**: 매 요청마다 universe를 먼저 조회해 실제 존재하는 업종명/규모구분 집합을 만들고, 이 집합을 LLM 프롬프트에 제공해 그 안에서만 고르게 한 뒤 Python이 다시 한번 검증한다(재시도 → 최종 실패 시 `FilterIntentError`). 실제 확인 결과 `upName`은 세분화된 업종(예: "반도체")이 아니라 27개의 굵직한 KRX 대분류(전기/전자, 제약, 통신 등)라, "반도체 종목 찾아줘" 같은 요청은 매칭되는 값이 없어 정상적으로 실패 처리된다 — 근거 없이 유사한 값으로 대체하지 않는다.
+- **exclude_owned은 개인화 여부와 별개로, 사용자 문장 자체에서만 결정한다**: Portfolio Strategy Agent 경로를 탄다는 사실만으로 보유종목을 자동으로 제외하지 않는다. "내 포트폴리오에 없는", "미보유" 등 실제 제외 의도가 문장에 있을 때만 `exclude_owned=true`로 grounding한다(실제 E2E로 True/False 두 표현이 정확히 구분됨을 확인).
+- **후보 과다 시 subset을 고르지 않는다**: `MAX_STOCK_RESEARCH_FANOUT`(투자 threshold가 아니라 Stock Research fan-out의 실행/비용 안전 한도)을 초과하면 일부를 임의로 골라내는 대신 Stock Research를 0건 실행하고 조건을 더 좁혀달라고 요청한다. 사용자가 개수를 지정해도 순서 기준이 없으면 "어떤 N개"를 고를지 자체가 임의적이므로, 한도 이하로 들어오면 전체를 그대로 통과시키고 초과하면 통과시키지 않는 이분법만 사용한다 — momentum/거래량 기반 랭킹은 암묵적 투자 전략 편향을 시스템 기본값으로 주입하는 것이라 v1에서 배제했다.
+- **관리종목/투자유의/거래정지는 filter 조건으로 쓰지 않는다**: `auditInfo`/`orderWarning` 필드는 확인했지만 실제 flagged 값을 관측하지 못해, 해석하지 않고 raw fact로만 `Candidate`에 실어 보낸다.
+
+Supervisor 연결: 새 intent `candidate_discovery`(후보만 반환) 추가. `portfolio_strategy`는 기존 "특정 종목 우선 → 보유종목 전체" 2단 분기에 "discovery 조건 있으면 그 후보로" 분기를 하나 추가해 확장했다(새 intent 아님, 기존 실행 로직 재사용).
+
+주요 출력:
+
+```text
+Candidate
+├── symbol / name
+├── market
+├── sector
+└── matched_filters   # {"sector": "통신", "size": "대형주", ...} — 점수/매력도 없음
 ```
 
 ---
@@ -1587,19 +1627,23 @@ personal-investment-agent/
 │   │   ├── routing.py              # LLM intent 분류 (closed enum 검증 + 재시도)
 │   │   └── orchestrator.py         # intent별 실행, 부분 실패 처리, SupervisorResult 조립
 │   │
+│   ├── discovery/                  # Candidate Discovery — v1 구현 완료
+│   │   ├── filter_intent.py        # LLM → DiscoveryFilter (closed set 검증 + 재시도)
+│   │   └── orchestrator.py         # universe 조회, 필터 적용, 후보 과다 정책
+│   │
 │   ├── recommendation/             # Recommendation Engine (planned)
 │   │   └── engine.py               # Recommendation logic (planned)
 │   │
 │   ├── mcp/
 │   │   ├── ecos_tools.py           # ECOS Domain Tools (기준금리/환율/KOSPI/KOSDAQ)
 │   │   ├── opendart_tools.py       # OpenDART Domain Tools (find_stock_code_by_name 포함)
-│   │   ├── kiwoom_tools.py         # Kiwoom Domain Tools
+│   │   ├── kiwoom_tools.py         # Kiwoom Domain Tools (get_kospi/kosdaq_stock_list 포함)
 │   │   └── server.py               # MCP Server / Tool exposure
 │   │
 │   ├── services/
 │   │   ├── ecos.py                 # ECOS Service
 │   │   ├── opendart.py             # OpenDART Service
-│   │   ├── kiwoom.py               # Kiwoom Service
+│   │   ├── kiwoom.py               # Kiwoom Service (get_stock_list/ka10099 포함)
 │   │   ├── portfolio_adapter.py    # Kiwoom → PortfolioContext 변환
 │   │   └── llm.py                  # LLM Service (Stock Research / Market / Portfolio Strategy Agent 전용)
 │   │
@@ -1609,7 +1653,8 @@ personal-investment-agent/
 │   │   ├── stock.py
 │   │   ├── portfolio.py
 │   │   ├── strategy.py
-│   │   └── supervisor.py           # Intent, SupervisorResult
+│   │   ├── supervisor.py           # Intent, SupervisorResult
+│   │   └── discovery.py            # MarketFilter, Candidate
 │   │
 │   ├── config.py
 │   ├── main.py
@@ -1633,6 +1678,8 @@ personal-investment-agent/
 │   ├── test_portfolio_orchestrator.py
 │   ├── test_supervisor_routing.py
 │   ├── test_supervisor_orchestrator.py
+│   ├── test_discovery_filter_intent.py
+│   ├── test_discovery_orchestrator.py
 │   └── test_mcp_server.py
 │
 ├── scripts/
@@ -1641,7 +1688,7 @@ personal-investment-agent/
 │   ├── stock_research_demo.py      # Stock Research Agent v1 실제 E2E 데모
 │   ├── market_agent_demo.py        # Market Agent v1 실제 E2E 데모
 │   ├── portfolio_strategy_demo.py  # Portfolio Strategy Agent v1 실제 E2E 데모
-│   └── supervisor_demo.py          # Supervisor v1 실제 E2E 데모 (4개 시나리오)
+│   └── supervisor_demo.py          # Supervisor v1 실제 E2E 데모 (6개 시나리오, discovery 포함)
 ├── docs/
 │
 ├── .env
@@ -1843,6 +1890,8 @@ tests/
 ├── test_portfolio_orchestrator.py
 ├── test_supervisor_routing.py
 ├── test_supervisor_orchestrator.py
+├── test_discovery_filter_intent.py
+├── test_discovery_orchestrator.py
 └── test_mcp_server.py
 ```
 
@@ -1966,16 +2015,38 @@ test_supervisor_routing.py
 └── 최종 실패 시 RoutingError
 
 test_supervisor_orchestrator.py
-├── 세 Agent orchestrator/KiwoomTools/OpenDartTools 전부 fake 주입
+├── 네 Agent/Discovery orchestrator + KiwoomTools/OpenDartTools 전부 fake 주입
 ├── market_only: Market Agent 실행, 실패 시 그대로 전파
 ├── stock_research: UserRequest.symbols 우선 신뢰, 없으면 회사명 조회로 해석, 실패 시 SupervisorError/전파
-├── portfolio_strategy(explicit symbol 없음): 보유종목 전체만 Stock Research 실행
+├── candidate_discovery: 찾은 후보로 Stock Research 실행, 조건 없으면 SupervisorError, DiscoveryError 시 Stock Research 0건
+├── portfolio_strategy(explicit symbol 없음, discovery 조건도 없음): 보유종목 전체만 Stock Research 실행
 ├── portfolio_strategy(explicit symbol 있음): 그 종목만 실행(보유종목 20개가 있어도 재실행 안 함) — PortfolioContext는 전체 유지
+├── portfolio_strategy(discovery 조건 있음): discovery 후보로 fan-out(개별 실패 skip 허용), DiscoveryError는 held-symbols로 폴백하지 않고 전체 요청 실패
 ├── explicit symbol의 Stock Research 실패 → 전체 요청 실패(필수 dependency)
 ├── 보유종목 fan-out 개별 실패 → skip하고 나머지로 계속 진행
 ├── Market Agent 실패(root) → 전체 요청 실패
 ├── Portfolio Strategy reasoning 실패(sink, ReasoningError) → market_analysis/stock_analyses/portfolio_context는 그대로 반환하는 부분 결과
 └── investor_profile 없이 portfolio_strategy 요청 시 SupervisorError
+```
+
+## Candidate Discovery Tests
+
+```text
+test_discovery_filter_intent.py
+├── LLM 응답 구조화 검증 + 최소 재시도 (mock, 실제 OpenAI 미호출)
+├── 빈 필터(모든 필드 기본값) 정상 허용 — fact-id grounding과 달리 "언급 없음"은 유효한 응답
+├── market은 closed enum이라 알 수 없는 값이면 ValidationError로 재시도
+├── sector_terms/size_terms가 실제 관측된 집합(known_sectors/known_sizes) 밖이면 검증 실패 → 재시도 → 최종 실패 시 FilterIntentError
+│  (일부만 유효해도 전체 실패 처리, 부분 valid만 남기지 않음)
+└── exclude_owned은 LLM이 문장에서 판단한 값을 그대로 신뢰(구조 검증 대상 아님, 의미 판단은 프롬프트 책임)
+
+test_discovery_orchestrator.py
+├── KiwoomTools fake로 KOSPI/KOSDAQ universe 주입
+├── 조건 없음(모든 필드 기본값) → None 반환
+├── market/sector/size 필터 적용, matched_filters에 매칭 근거 기록
+├── exclude_owned=True/False에 따라 보유종목 제외 여부가 실제로 달라짐
+├── 후보가 MAX_STOCK_RESEARCH_FANOUT 초과 시 DiscoveryError, 이하면 일부를 고르지 않고 전체 통과
+└── symbol/name이 비어있는 항목은 제외
 ```
 
 ## MCP End-to-End Test
@@ -1985,7 +2056,7 @@ test_supervisor_orchestrator.py
 현재 전체 테스트 결과:
 
 ```text
-197 passed
+227 passed
 ```
 
 전체 lint 결과:
@@ -2004,9 +2075,11 @@ Market Agent보다 Stock Research Agent를 먼저 구현했다. Kiwoom/OpenDART�
 
 당초 로드맵은 Recommendation Engine을 다음 단계로 잡았지만, Portfolio Strategy Agent v1은 `RecommendationResult` 없이도(v1은 이 입력을 아예 받지 않음, 보유 종목 + 호출자가 명시적으로 분석 요청한 종목만 다룸) 독립적으로 구현 가능하다고 판단해 순서를 바꿔 먼저 구현했다. Portfolio Strategy Agent v1은 Market Agent의 fact-id grounding 패턴을 확장해 **symbol/fact-id/action 3중 grounding**을 적용했고(새 종목 지어내기·보유여부에 안 맞는 action을 구조적으로 차단), `target_weight`는 Stock Research Agent의 `target_price`와 동일한 이유(포지션 사이징 근거 없음)로 v1에서 항상 `null`로 강제한다. 실제 계좌(보유 종목 다수 + ETF 포함) E2E 검증 과정에서 Kiwoom 계좌 종목코드 시장 접두문자(`"A005930"`) 미정규화, OpenDART `"-"` placeholder 금액 파싱 오류라는 두 개의 기존 Service 버그를 추가로 발견해 수정했다(자세한 내용은 dev-log 참고).
 
-세 Agent가 모두 갖춰진 뒤 이를 실제 사용자 요청 하나로 연결하는 Supervisor / Router v1을 구현했다. Router(intent 분류)와 Supervisor(실행·조립)를 분리하지 않고 하나의 `SupervisorOrchestrator`로 시작했고, LLM은 `market_only`/`stock_research`/`portfolio_strategy` 3종 closed enum만 제안하며 어떤 Agent를 호출할지는 Python의 고정 dispatch가 전담해 LLM이 존재하지 않는 Agent/tool을 호출하는 경로 자체를 없앴다. 종목명(예: "삼성전자")은 OpenDART 회사 목록과 정확히 일치할 때만 종목코드로 해석하고, 특정 종목을 명시한 질문은 보유종목 전체가 아니라 그 종목만 재분석해 비용을 아낀다. 부분 실패는 위치별로 다르게 처리한다 — root(Market Agent, 명시적 종목의 Stock Research) 실패는 요청 전체 실패, 보유종목 fan-out의 개별 실패는 skip, sink(Portfolio Strategy reasoning) 실패는 부분 결과 반환. 실제 계좌(보유 28종목) E2E 검증 중 보유종목 전체를 무제한 병렬 실행하면 Kiwoom OAuth 토큰 발급이 몰려 429가 발생하는 문제와, Portfolio Agent의 프롬프트에서 "이름(코드)" 표기가 LLM의 `symbol` 필드 혼동을 유발하는 문제를 발견해 각각 동시성 제한(Semaphore)과 프롬프트 포맷 분리로 수정했다(자세한 내용은 dev-log 참고).
+세 Agent가 모두 갖춰진 뒤 이를 실제 사용자 요청 하나로 연결하는 Supervisor / Router v1을 구현했다. Router(intent 분류)와 Supervisor(실행·조립)를 분리하지 않고 하나의 `SupervisorOrchestrator`로 시작했고, LLM은 closed enum만 제안하며 어떤 Agent를 호출할지는 Python의 고정 dispatch가 전담해 LLM이 존재하지 않는 Agent/tool을 호출하는 경로 자체를 없앴다. 종목명(예: "삼성전자")은 OpenDART 회사 목록과 정확히 일치할 때만 종목코드로 해석하고, 특정 종목을 명시한 질문은 보유종목 전체가 아니라 그 종목만 재분석해 비용을 아낀다. 부분 실패는 위치별로 다르게 처리한다 — root(Market Agent, 명시적 종목의 Stock Research) 실패는 요청 전체 실패, 보유종목 fan-out의 개별 실패는 skip, sink(Portfolio Strategy reasoning) 실패는 부분 결과 반환. 실제 계좌(보유 28종목) E2E 검증 중 보유종목 전체를 무제한 병렬 실행하면 Kiwoom OAuth 토큰 발급이 몰려 429가 발생하는 문제와, Portfolio Agent의 프롬프트에서 "이름(코드)" 표기가 LLM의 `symbol` 필드 혼동을 유발하는 문제를 발견해 각각 동시성 제한(Semaphore)과 프롬프트 포맷 분리로 수정했다. 이후 Kiwoom access token을 매 호출마다 재발급하던 근본 원인을 확인해 `KiwoomService`에 instance-level 캐싱(`asyncio.Lock` 기반 double-checked locking)을 추가했다(자세한 내용은 dev-log 참고).
 
-Recommendation Engine은 프로젝트 공식 범위에 포함되어 있으며 다음 구현 대상이다.
+"지금 살 만한 종목 찾아줘" 같은 요청을 처리하려면 Stock Research Agent의 분석 대상을 스스로 찾는 Candidate Discovery가 필요했다. 처음에는 현재 데이터로 안전한 Stock Universe를 구성할 수 없다고 판단해 보류했으나, Kiwoom 공식 REST API를 실측 조사한 결과 `ka10099`(종목정보 리스트)로 KOSPI/KOSDAQ 전체 종목과 종목코드/종목명/시장구분/업종명/규모구분/상장주식수를 단일 호출로 확보할 수 있음을 확인해 v1을 구현했다. Candidate Discovery는 Agent가 아니라 Supervisor와 같은 얇은 구조(LLM 조건 구조화 + deterministic 필터 실행)로 만들었다 — 투자 판단(reasoning) 단계가 전혀 없기 때문이다. 실제 업종명(`upName`)이 "반도체" 같은 세분화된 업종이 아니라 27개의 굵직한 KRX 대분류라는 것도 실측으로 확인했고, 매칭되는 업종이 없으면 근거 없이 대체하지 않고 실패시킨다. 후보가 `MAX_STOCK_RESEARCH_FANOUT`(투자 threshold가 아닌 fan-out 실행/비용 안전 한도)을 초과하면 momentum 등 암묵적 기준으로 일부를 골라내지 않고 Stock Research를 0건 실행한 뒤 조건을 더 좁혀달라고 요청한다. `exclude_owned`(보유종목 제외 여부)는 Portfolio Strategy 경로를 탄다는 사실과 무관하게 사용자 문장 자체("내 포트폴리오에 없는" 등)에서만 grounding하도록 설계해, 실제 E2E로 같은 종목 집합에 대해 표현에 따라 이 값이 정확히 갈리는 것을 확인했다.
+
+Recommendation Engine(scoring/ranking 기반 신규 투자 후보 평가)은 프로젝트 공식 범위에 포함되어 있으며 다음 구현 대상이다.
 
 ```text
 Foundation                         completed
@@ -2054,10 +2127,20 @@ Supervisor / Router v1               completed
     ├── PORTFOLIO_STRATEGY explicit symbol 분기 (비용 절감)      ✓
     ├── 위치별 부분 실패 정책 (root/fan-out/sink)                 ✓
     ├── 보유종목 fan-out 동시성 제한 (Kiwoom 429 대응)            ✓
-    └── 실제 E2E Demo (4개 시나리오 전부)                         ✓
+    ├── Kiwoom access token instance-level 캐싱                  ✓
+    └── 실제 E2E Demo                                             ✓
     │
     ▼
-Recommendation Engine               ← NEXT
+Candidate Discovery v1               completed
+    ├── Kiwoom ka10099 실측 조사 + 연동 (Stock Universe 확보)     ✓
+    ├── LLM 조건 구조화 + closed set(실측 업종/규모) grounding    ✓
+    ├── 후보 과다 시 임의 narrowing 없이 0건 실행 정책             ✓
+    ├── exclude_owned 사용자 문장 기반 grounding                  ✓
+    ├── Supervisor candidate_discovery intent 연결                ✓
+    └── 실제 E2E Demo (성공/과다/personalized 케이스 전부)        ✓
+    │
+    ▼
+Recommendation Engine               ← NEXT (scoring/ranking)
 ```
 
 ---
@@ -2137,10 +2220,11 @@ Recommendation Engine               ← NEXT
 - [x] StockAnalysis generation
 - [x] 실제 E2E demo (`scripts/stock_research_demo.py`)
 
-## Phase 7 — Recommendation Engine
+## Phase 7 — Recommendation Engine (scoring/ranking)
 
-- [ ] Stock Universe definition
-- [ ] Recommendation data models
+> Stock Universe 확보와 조건 기반 후보 탐색은 Phase 7a(Candidate Discovery)로 먼저 구현했다. 이 Phase는 그 위에 얹는 scoring/ranking 기반 전체 Recommendation Engine이다 — 아직 미착수.
+
+- [ ] Recommendation data models (RecommendedStock/RecommendationResult)
 - [ ] Fundamental Score
 - [ ] Earnings Momentum Score
 - [ ] Valuation Score
@@ -2150,13 +2234,26 @@ Recommendation Engine               ← NEXT
 - [ ] Risk Penalty
 - [ ] Portfolio Fit Score
 - [ ] Quantitative scoring engine
-- [ ] Top-N recommendation
-- [ ] Exclusion / constraint handling
+- [ ] Top-N recommendation (scoring 기반)
 - [ ] Recommendation evidence tracking
 - [ ] RecommendationResult generation
 - [ ] Agent-based qualitative evaluation
 - [ ] Hybrid recommendation
 - [ ] Backtesting / scoring validation
+
+## Phase 7a — Candidate Discovery ✅ v1 완료
+
+> "어떤 종목을 Stock Research Agent의 분석 대상으로 올릴 것인가"만 담당하는 constraint-based discovery. 투자 매력도 scoring/ranking(Phase 7)과는 분리했다 — 투자 판단이 아니라 순수 필터링이기 때문이다.
+
+- [x] Kiwoom REST API 실측 조사 (ka10099/ka10019/ka10101 API/필드/파라미터 확인)
+- [x] Stock Universe definition (`ka10099` 기반, KOSPI/KOSDAQ 전체 종목)
+- [x] `DiscoveryFilter` 구조화 (market/sector_terms/size_terms/exclude_owned)
+- [x] sector/size closed set grounding (실측된 값에서만 매칭, 재시도 → `FilterIntentError`)
+- [x] Exclusion / constraint handling (exclude_owned, 사용자 문장 기반)
+- [x] 후보 과다 시 정책 (`MAX_STOCK_RESEARCH_FANOUT`, 임의 narrowing 없이 0건 실행)
+- [x] Candidate 모델 (score 없음, matched_filters로 추적)
+- [x] Supervisor `candidate_discovery` intent + `portfolio_strategy` discovery 분기 연결
+- [x] 실제 E2E Demo (성공/후보 과다/personalized discovery/exclude_owned true·false 전부)
 
 ## Phase 8 — Portfolio Strategy Agent ✅ v1 완료
 

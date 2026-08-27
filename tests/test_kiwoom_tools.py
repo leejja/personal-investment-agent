@@ -9,6 +9,7 @@ from app.services.kiwoom import (
     KiwoomAccountPosition,
     KiwoomService,
     KiwoomStockInfo,
+    KiwoomStockListItem,
 )
 
 
@@ -142,4 +143,64 @@ async def test_get_account_balance() -> None:
         access_token="test-access-token",
         query_type="1",
         exchange_type="KRX",
+    )
+
+
+def _stock_list_item(symbol: str, name: str) -> KiwoomStockListItem:
+    return KiwoomStockListItem(
+        symbol=symbol,
+        name=name,
+        market_name="거래소",
+        sector_name="반도체와반도체장비",
+        size_name="대형주",
+        listed_shares=1_000_000,
+        last_price=50_000,
+        audit_info="정상",
+        order_warning="0",
+    )
+
+
+@pytest.mark.anyio
+async def test_get_kospi_stock_list() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+
+    service.issue_access_token = AsyncMock(
+        return_value=KiwoomAccessToken(
+            expires_dt="20260823180000", token_type="bearer", token="test-access-token"
+        )
+    )
+    service.get_stock_list = AsyncMock(
+        return_value=[_stock_list_item("000660", "SK하이닉스")]
+    )
+
+    tools = KiwoomTools(service=service)
+
+    result = await tools.get_kospi_stock_list()
+
+    assert [item.symbol for item in result] == ["000660"]
+    service.get_stock_list.assert_awaited_once_with(
+        access_token="test-access-token", market_code="0"
+    )
+
+
+@pytest.mark.anyio
+async def test_get_kosdaq_stock_list() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+
+    service.issue_access_token = AsyncMock(
+        return_value=KiwoomAccessToken(
+            expires_dt="20260823180000", token_type="bearer", token="test-access-token"
+        )
+    )
+    service.get_stock_list = AsyncMock(
+        return_value=[_stock_list_item("123456", "코스닥종목")]
+    )
+
+    tools = KiwoomTools(service=service)
+
+    result = await tools.get_kosdaq_stock_list()
+
+    assert [item.symbol for item in result] == ["123456"]
+    service.get_stock_list.assert_awaited_once_with(
+        access_token="test-access-token", market_code="10"
     )

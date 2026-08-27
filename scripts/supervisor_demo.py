@@ -5,6 +5,7 @@ from app.agents.market.orchestrator import MarketOrchestrator
 from app.agents.portfolio.orchestrator import PortfolioStrategyOrchestrator
 from app.agents.stock_research.orchestrator import StockResearchOrchestrator
 from app.config import settings
+from app.discovery.orchestrator import DiscoveryOrchestrator
 from app.mcp.ecos_tools import EcosTools
 from app.mcp.kiwoom_tools import KiwoomTools
 from app.mcp.opendart_tools import OpenDartTools
@@ -21,6 +22,10 @@ _SCENARIOS = {
     "stock": UserRequest(question="삼성전자 어때?"),
     "portfolio": UserRequest(question="내 포트폴리오 분석해줘"),
     "portfolio-stock": UserRequest(question="내가 삼성전자를 더 사도 될까?"),
+    "discovery": UserRequest(question="반도체 종목 중 후보 찾아줘"),
+    "personalized-discovery": UserRequest(
+        question="내 포트폴리오에 없는 반도체 후보 찾아줘"
+    ),
 }
 
 # InvestorProfile은 아직 데이터 소스가 없다(Portfolio Strategy Agent 데모와
@@ -69,6 +74,9 @@ async def main(scenario: str) -> None:
         portfolio_orchestrator=PortfolioStrategyOrchestrator(
             llm_service=llm_service
         ),
+        discovery_orchestrator=DiscoveryOrchestrator(
+            kiwoom_tools=kiwoom_tools, llm_service=llm_service
+        ),
         kiwoom_tools=kiwoom_tools,
         opendart_tools=opendart_tools,
     )
@@ -84,6 +92,15 @@ async def main(scenario: str) -> None:
 
     print(f"intent           : {result.intent.value}")
     print(f"resolved_symbols : {result.resolved_symbols}\n")
+
+    if result.candidates:
+        print("--- Candidates ---")
+        for candidate in result.candidates:
+            print(
+                f"[{candidate.market.value}] {candidate.name}({candidate.symbol}) "
+                f"sector={candidate.sector} matched_filters={candidate.matched_filters}"
+            )
+        print()
 
     if result.market_analysis is not None:
         m = result.market_analysis

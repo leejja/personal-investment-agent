@@ -423,6 +423,126 @@ async def test_real_get_stock_info() -> None:
     assert stock_info.stock_name == "삼성전자"
     assert stock_info.current_price != 0
 
+
+@pytest.mark.anyio
+async def test_get_stock_list_parses_fields() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+
+    service.request = AsyncMock(
+        return_value=KiwoomApiResponse(
+            data={
+                "list": [
+                    {
+                        "code": "000020",
+                        "name": "동화약품",
+                        "listCount": "0000000027931470",
+                        "auditInfo": "정상",
+                        "regDay": "19760324",
+                        "lastPrice": "00005180",
+                        "state": "증거금40%|담보대출|신용가능",
+                        "marketCode": "0",
+                        "marketName": "거래소",
+                        "upName": "제약",
+                        "upSizeName": "소형주",
+                        "companyClassName": "",
+                        "orderWarning": "0",
+                        "nxtEnable": "N",
+                        "kind": "A",
+                    }
+                ],
+                "return_code": 0,
+                "return_msg": "정상적으로 처리되었습니다",
+            },
+            cont_yn="N",
+            next_key=None,
+        )
+    )
+
+    result = await service.get_stock_list(access_token="test-token", market_code="0")
+
+    assert len(result) == 1
+    item = result[0]
+    assert item.symbol == "000020"
+    assert item.name == "동화약품"
+    assert item.market_name == "거래소"
+    assert item.sector_name == "제약"
+    assert item.size_name == "소형주"
+    assert item.listed_shares == 27931470
+    assert item.last_price == 5180
+    assert item.audit_info == "정상"
+    assert item.order_warning == "0"
+
+    service.request.assert_awaited_once_with(
+        access_token="test-token",
+        api_id="ka10099",
+        endpoint="/api/dostk/stkinfo",
+        payload={"mrkt_tp": "0"},
+    )
+
+
+@pytest.mark.anyio
+async def test_get_stock_list_with_continuation() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+
+    def _row(code: str) -> dict:
+        return {
+            "code": code,
+            "name": f"종목{code}",
+            "listCount": "1000",
+            "auditInfo": "정상",
+            "lastPrice": "1000",
+            "marketName": "거래소",
+            "upName": "제약",
+            "upSizeName": "소형주",
+            "orderWarning": "0",
+        }
+
+    service.request = AsyncMock(
+        side_effect=[
+            KiwoomApiResponse(
+                data={"list": [_row("000001")], "return_code": 0, "return_msg": "정상"},
+                cont_yn="Y",
+                next_key="next-key-1",
+            ),
+            KiwoomApiResponse(
+                data={"list": [_row("000002")], "return_code": 0, "return_msg": "정상"},
+                cont_yn="N",
+                next_key=None,
+            ),
+        ]
+    )
+
+    result = await service.get_stock_list(access_token="test-token", market_code="0")
+
+    assert [item.symbol for item in result] == ["000001", "000002"]
+    assert service.request.await_count == 2
+
+
+@pytest.mark.anyio
+async def test_real_get_stock_list_kospi() -> None:
+    load_dotenv()
+
+    service = KiwoomService(
+        app_key=os.environ["KIWOOM_APP_KEY"],
+        secret_key=os.environ["KIWOOM_SECRET_KEY"],
+    )
+
+    token = await service.issue_access_token()
+
+    result = await service.get_stock_list(access_token=token.token, market_code="0")
+
+    print("\n=== Kiwoom KOSPI Stock List ===")
+    print(f"count: {len(result)}")
+    if result:
+        first = result[0]
+        print(f"first: {first.symbol} {first.name} sector={first.sector_name} "
+              f"size={first.size_name} listed_shares={first.listed_shares}")
+
+    assert len(result) > 0
+    assert all(item.symbol for item in result)
+    assert all(item.name for item in result)
+
+
 @pytest.mark.anyio
 async def test_get_account_balance_with_continuation() -> None:
     service = KiwoomService(

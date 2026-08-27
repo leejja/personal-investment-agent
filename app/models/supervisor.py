@@ -2,6 +2,7 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+from app.models.discovery import Candidate
 from app.models.market import MarketAnalysis
 from app.models.portfolio import PortfolioContext
 from app.models.stock import StockAnalysis
@@ -12,11 +13,16 @@ class Intent(str, Enum):
     MARKET_ONLY = "market_only"
     STOCK_RESEARCH = "stock_research"
     PORTFOLIO_STRATEGY = "portfolio_strategy"
+    CANDIDATE_DISCOVERY = "candidate_discovery"
 
 
 class SupervisorResult(BaseModel):
     intent: Intent
     resolved_symbols: list[str] = Field(default_factory=list)
+
+    # Candidate Discovery를 거친 경우에만 채워진다(symbol/name 외에
+    # market/sector/matched_filters 같은 추적 정보를 담기 위함).
+    candidates: list[Candidate] = Field(default_factory=list)
 
     market_analysis: MarketAnalysis | None = None
     stock_analyses: list[StockAnalysis] = Field(default_factory=list)

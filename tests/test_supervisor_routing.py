@@ -91,6 +91,15 @@ async def test_classify_portfolio_strategy_for_specific_symbol() -> None:
 
 
 @pytest.mark.anyio
+async def test_classify_candidate_discovery() -> None:
+    llm_service = _llm_with_responses([_valid_json(intent="candidate_discovery")])
+
+    result = await classify(llm_service, _request("반도체 종목 중 후보 찾아줘"))
+
+    assert result.intent == Intent.CANDIDATE_DISCOVERY
+
+
+@pytest.mark.anyio
 async def test_classify_retries_on_invalid_json() -> None:
     llm_service = _llm_with_responses(
         ["이건 JSON이 아닙니다", _valid_json(intent="market_only")]

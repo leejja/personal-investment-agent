@@ -89,6 +89,30 @@ class KiwoomAccountBalance(BaseModel):
     positions: list[KiwoomAccountPosition]
 
 
+class KiwoomStockListItem(BaseModel):
+    symbol: str
+    name: str
+
+    # market_name은 Kiwoom 원본 marketName을 그대로 보존한다("거래소"/
+    # "코스닥" 등). KOSPI/KOSDAQ 구분 자체는 이 필드를 파싱해서가 아니라
+    # 호출한 mrkt_tp(어느 메서드로 조회했는지)로 이미 알 수 있으므로,
+    # Service 레이어는 Discovery의 MarketFilter 같은 상위 개념을 몰라도
+    # 되게 raw 값만 정규화해 전달한다.
+    market_name: str
+    sector_name: str  # upName
+    size_name: str  # upSizeName
+
+    listed_shares: int  # listCount
+    last_price: int  # lastPrice
+
+    # 관리종목/투자유의/거래정지 여부를 이 필드들이 어떻게 나타내는지
+    # 아직 실측으로 확인하지 못했다(정상 종목의 값만 관측함). 그래서
+    # 해석하지 않고 원문 그대로 보존한다 — 실제 flagged 값이 확인되면
+    # 그때 구조적으로 해석한다.
+    audit_info: str  # auditInfo
+    order_warning: str  # orderWarning
+
+
 class KiwoomService:
     REAL_BASE_URL = "https://api.kiwoom.com"
     MOCK_BASE_URL = "https://mockapi.kiwoom.com"
@@ -349,6 +373,70 @@ class KiwoomService:
             ),
             positions=positions,
         )
+
+    async def get_stock_list(
+        self,
+        access_token: str,
+        market_code: str,
+    ) -> list[KiwoomStockListItem]:
+        # ka10099 종목정보 리스트. mrkt_tp는 실제 API 호출로 검증된 값만
+        # 쓴다(0=코스피, 10=코스닥) — KiwoomTools가 이 raw 코드를 감춘다.
+        payload = {"mrkt_tp": market_code}
+
+        response = await self.request(
+            access_token=access_token,
+            api_id="ka10099",
+            endpoint="/api/dostk/stkinfo",
+            payload=payload,
+        )
+
+        items = self._parse_stock_list_items(response.data.get("list", []))
+
+        # 실제 KOSPI 조회(2,481종목)에서는 페이지네이션이 발생하지 않았지만
+        # (cont_yn=N), 더 큰 시장이나 향후 응답 규모 변화에 대비해 계좌잔고와
+        # 동일한 연속조회 처리를 방어적으로 둔다.
+        while response.cont_yn == "Y" and response.next_key:
+            response = await self.request(
+                access_token=access_token,
+                api_id="ka10099",
+                endpoint="/api/dostk/stkinfo",
+                payload=payload,
+                cont_yn="Y",
+                next_key=response.next_key,
+            )
+            items.extend(self._parse_stock_list_items(response.data.get("list", [])))
+
+        return items
+
+    @classmethod
+    def _parse_stock_list_items(
+        cls,
+        rows: object,
+    ) -> list[KiwoomStockListItem]:
+        if not isinstance(rows, list):
+            raise TypeError("Unexpected Kiwoom stock list response")
+
+        items: list[KiwoomStockListItem] = []
+
+        for row in rows:
+            if not isinstance(row, dict):
+                raise TypeError("Unexpected Kiwoom stock list item")
+
+            items.append(
+                KiwoomStockListItem(
+                    symbol=str(row.get("code", "")),
+                    name=str(row.get("name", "")),
+                    market_name=str(row.get("marketName", "")),
+                    sector_name=str(row.get("upName", "")),
+                    size_name=str(row.get("upSizeName", "")),
+                    listed_shares=cls._parse_int(row.get("listCount", "0")),
+                    last_price=cls._parse_int(row.get("lastPrice", "0")),
+                    audit_info=str(row.get("auditInfo", "")),
+                    order_warning=str(row.get("orderWarning", "")),
+                )
+            )
+
+        return items
 
     def _parse_account_positions(
         self,

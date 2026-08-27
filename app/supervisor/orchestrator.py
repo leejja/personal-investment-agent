@@ -5,9 +5,11 @@ from app.agents.market.orchestrator import MarketOrchestrator
 from app.agents.portfolio.orchestrator import PortfolioStrategyOrchestrator
 from app.agents.portfolio.reasoning import ReasoningError
 from app.agents.stock_research.orchestrator import StockResearchOrchestrator
+from app.discovery.orchestrator import DiscoveryOrchestrator
 from app.mcp.kiwoom_tools import KiwoomTools
 from app.mcp.opendart_tools import OpenDartTools
 from app.models.common import UserRequest
+from app.models.discovery import Candidate
 from app.models.portfolio import InvestorProfile, PortfolioContext
 from app.models.stock import StockAnalysis
 from app.models.supervisor import Intent, SupervisorResult
@@ -36,6 +38,7 @@ class SupervisorOrchestrator:
         market_orchestrator: MarketOrchestrator,
         stock_research_orchestrator: StockResearchOrchestrator,
         portfolio_orchestrator: PortfolioStrategyOrchestrator,
+        discovery_orchestrator: DiscoveryOrchestrator,
         kiwoom_tools: KiwoomTools,
         opendart_tools: OpenDartTools,
         max_concurrent_stock_research: int = MAX_CONCURRENT_STOCK_RESEARCH,
@@ -44,6 +47,7 @@ class SupervisorOrchestrator:
         self.market_orchestrator = market_orchestrator
         self.stock_research_orchestrator = stock_research_orchestrator
         self.portfolio_orchestrator = portfolio_orchestrator
+        self.discovery_orchestrator = discovery_orchestrator
         self.kiwoom_tools = kiwoom_tools
         self.opendart_tools = opendart_tools
         self._stock_research_semaphore = asyncio.Semaphore(
@@ -72,6 +76,9 @@ class SupervisorOrchestrator:
             return await self._run_stock_research(
                 request, routing_result, business_year
             )
+
+        if routing_result.intent == Intent.CANDIDATE_DISCOVERY:
+            return await self._run_candidate_discovery(request, business_year)
 
         return await self._run_portfolio_strategy(
             request, routing_result, as_of_date, business_year, investor_profile
@@ -117,6 +124,43 @@ class SupervisorOrchestrator:
             stock_analyses=stock_analyses,
         )
 
+    async def _run_candidate_discovery(
+        self,
+        request: UserRequest,
+        business_year: str,
+    ) -> SupervisorResult:
+        # exclude_owned 여부는 discovery_filter grounding이 사용자 문장만
+        # 보고 독립적으로 결정한다(아래 참고) — 그 값을 실제로 실행하려면
+        # PortfolioContext가 필요할 수 있으므로 항상 미리 확보해둔다.
+        portfolio_context = await self._fetch_portfolio_context()
+
+        candidates = await self.discovery_orchestrator.run(
+            request.question, portfolio_context=portfolio_context
+        )
+        # DiscoveryError/FilterIntentError는 여기서 삼키지 않고 그대로
+        # 전파한다 — 이 intent의 존재 이유 자체가 discovery이므로, 실행
+        # 불가능하면 근거 없는 결과를 만들지 않고 요청 전체를 실패시킨다.
+
+        if candidates is None:
+            raise SupervisorError(
+                "candidate_discovery intent인데 실행 가능한 조건을 찾지 "
+                "못했습니다. 조건 없는 open-ended 추천은 v1 범위 밖이거나, "
+                "언급된 업종/규모가 실제 지원되는 값과 일치하지 않을 수 "
+                "있습니다"
+            )
+
+        stock_analyses, skipped = await self._run_stock_research_fanout(
+            [candidate.symbol for candidate in candidates], business_year
+        )
+
+        return SupervisorResult(
+            intent=Intent.CANDIDATE_DISCOVERY,
+            resolved_symbols=[candidate.symbol for candidate in candidates],
+            candidates=candidates,
+            stock_analyses=stock_analyses,
+            skipped=skipped,
+        )
+
     async def _run_portfolio_strategy(
         self,
         request: UserRequest,
@@ -130,10 +174,7 @@ class SupervisorOrchestrator:
                 "portfolio_strategy intent에는 investor_profile이 필요합니다"
             )
 
-        balance = await self.kiwoom_tools.get_account_balance()
-        portfolio_context: PortfolioContext = PortfolioAdapter.from_kiwoom_balance(
-            balance
-        )
+        portfolio_context = await self._fetch_portfolio_context()
 
         # Market Agent는 여기서도 root 의존성이다 — 실패 시 전파.
         market_analysis = await self.market_orchestrator.run(as_of_date=as_of_date)
@@ -141,6 +182,8 @@ class SupervisorOrchestrator:
         explicit_symbols = await self._resolve_symbols(
             request.symbols, routing_result.mentioned_stock_terms
         )
+
+        candidates: list[Candidate] = []
 
         if explicit_symbols:
             # 특정 종목 질문: 그 종목만 분석한다(보유종목 전체를 매번 다시
@@ -155,15 +198,32 @@ class SupervisorOrchestrator:
             ]
             skipped: list[str] = []
         else:
-            # 전체 포트폴리오 질문: 보유 종목 전체를 분석하되, 개별 종목의
-            # 실패는 skip하고 나머지로 계속 진행한다(예: ETF처럼 Stock
-            # Research Agent가 지원하지 않는 종목).
-            held_symbols = [
-                position.symbol for position in portfolio_context.positions
-            ]
-            stock_analyses, skipped = await self._run_stock_research_fanout(
-                held_symbols, business_year
+            # 명시적 종목이 없으면 discovery 조건이 있는지 먼저 확인한다.
+            # discovery_filter가 완전히 비어있으면(None) 이 질문은 discovery
+            # 의도가 아니었다는 뜻이므로 기존 "보유종목 전체" 경로로
+            # 폴백한다. 조건은 있으나 실행 불가(DiscoveryError 등)면 여기서
+            # 삼키지 않고 그대로 전파한다 — "내 포트폴리오 전체를 대신
+            # 보여주는" 식으로 조용히 다른 답을 하지 않는다.
+            discovered = await self.discovery_orchestrator.run(
+                request.question, portfolio_context=portfolio_context
             )
+
+            if discovered is not None:
+                candidates = discovered
+                explicit_symbols = [candidate.symbol for candidate in discovered]
+                # discovery로 찾은 종목 집합은 사용자가 이름을 부른 특정
+                # 종목이 아니라 시스템이 찾아낸 후보 집합이므로, 보유종목
+                # fan-out과 동일하게 개별 실패를 skip 허용한다.
+                stock_analyses, skipped = await self._run_stock_research_fanout(
+                    explicit_symbols, business_year
+                )
+            else:
+                held_symbols = [
+                    position.symbol for position in portfolio_context.positions
+                ]
+                stock_analyses, skipped = await self._run_stock_research_fanout(
+                    held_symbols, business_year
+                )
 
         strategy_result = None
         try:
@@ -186,12 +246,17 @@ class SupervisorOrchestrator:
         return SupervisorResult(
             intent=Intent.PORTFOLIO_STRATEGY,
             resolved_symbols=explicit_symbols,
+            candidates=candidates,
             market_analysis=market_analysis,
             stock_analyses=stock_analyses,
             portfolio_context=portfolio_context,
             strategy_result=strategy_result,
             skipped=skipped,
         )
+
+    async def _fetch_portfolio_context(self) -> PortfolioContext:
+        balance = await self.kiwoom_tools.get_account_balance()
+        return PortfolioAdapter.from_kiwoom_balance(balance)
 
     async def _run_stock_research_fanout(
         self,
@@ -224,11 +289,11 @@ class SupervisorOrchestrator:
                 return await self.stock_research_orchestrator.run(
                     stock_code=symbol, business_year=business_year
                 )
-            except Exception as error:  # noqa: BLE001 - 보유종목 전체 fan-out의
-                # 개별 실패 경계. ETF처럼 Stock Research Agent가 지원하지 않는
-                # 종목이나 일시적 네트워크 오류 등 어떤 이유로든 실패하면 이
-                # 종목만 건너뛰고 나머지로 계속 진행한다(전체 포트폴리오 질문
-                # 한정 — 특정 종목 질문은 이 경로를 타지 않는다).
+            except Exception as error:  # noqa: BLE001 - 보유종목/discovery
+                # 후보 fan-out의 개별 실패 경계. ETF처럼 Stock Research
+                # Agent가 지원하지 않는 종목이나 일시적 네트워크 오류 등 어떤
+                # 이유로든 실패하면 이 종목만 건너뛰고 나머지로 계속
+                # 진행한다(명시적 단일 종목 질문은 이 경로를 타지 않는다).
                 return f"{symbol}: {error}"
 
     async def _resolve_symbols(
