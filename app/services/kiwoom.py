@@ -1,7 +1,29 @@
+import asyncio
+from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 from pydantic import BaseModel
+
+# Kiwoom access token(expires_dt)의 timezone 정책
+#
+# Kiwoom OAuth 응답의 expires_dt("YYYYMMDDHHMMSS")에는 timezone offset이
+# 없다. 공식 API 명세에서도 이를 명시적으로 확인하지 못했다. 이 프로젝트는
+# 한국 시장 데이터를 다루는 다른 영역(ECOS 조회 기준일 등, 2026-08-22
+# dev-log 9절 참고)에서 이미 명시적으로 KST(Asia/Seoul)를 기준 timezone으로
+# 채택하고 있으므로, expires_dt도 동일한 프로젝트 관례를 그대로 적용해
+# KST로 해석한다. 공식 Kiwoom 명세에서 timezone이 명확히 확인되면
+# 재검토한다.
+_KST = ZoneInfo("Asia/Seoul")
+
+# 만료 시각 자체에 대한 불확실성(timezone 오차 등)을 흡수하기 위한
+# 값이 아니다 — timezone은 위 정책으로 명시적으로 고정한다. 이 margin은
+# "만료 직전에 캐시된 토큰을 반환했는데 실제 API 요청이 도달하기 전에
+# 만료되어 버리는" race condition과 네트워크 지연만을 방어하기 위한
+# 값이다. 실측 유효기간이 약 18시간대로 넉넉해(2026-08-27 dev-log 참고),
+# 이 정도 margin이 재발급 빈도에 미치는 영향은 무시할 만하다.
+TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
 
 
 class KiwoomAccessToken(BaseModel):
@@ -82,6 +104,50 @@ class KiwoomService:
         self.secret_key = secret_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+
+        # instance-level 캐시. 여러 KiwoomService 인스턴스나 프로세스 간에
+        # 공유하는 전역/singleton 캐시가 아니다 — 이 프로젝트의 모든
+        # 호출자(demo 스크립트, MCP server, Supervisor)는 이미 인스턴스
+        # 하나를 만들어 계속 재사용하는 패턴이라 이걸로 충분하다.
+        self._cached_token: KiwoomAccessToken | None = None
+        self._token_lock = asyncio.Lock()
+
+    async def get_access_token(
+        self,
+        *,
+        force_refresh: bool = False,
+    ) -> KiwoomAccessToken:
+        # 캐시가 유효하면 락 없이 바로 반환한다(매 호출마다 락을 잡지
+        # 않기 위한 빠른 경로).
+        if not force_refresh and self._is_cached_token_valid():
+            assert self._cached_token is not None
+            return self._cached_token
+
+        async with self._token_lock:
+            # 락을 기다리는 동안 다른 coroutine이 이미 갱신했을 수 있으므로
+            # 재확인한다(double-checked locking) — 그래야 동시에 여러
+            # coroutine이 캐시 없음을 보고 각자 재발급을 시도하는 것을
+            # 막을 수 있다.
+            if not force_refresh and self._is_cached_token_valid():
+                assert self._cached_token is not None
+                return self._cached_token
+
+            self._cached_token = await self.issue_access_token()
+            return self._cached_token
+
+    def _is_cached_token_valid(self) -> bool:
+        if self._cached_token is None:
+            return False
+
+        expires_at = self._parse_expires_dt(self._cached_token.expires_dt)
+        now = datetime.now(_KST)
+
+        return now + TOKEN_REFRESH_MARGIN < expires_at
+
+    @staticmethod
+    def _parse_expires_dt(expires_dt: str) -> datetime:
+        # timezone 정책은 모듈 상단 주석 참고 — KST로 명시적으로 해석한다.
+        return datetime.strptime(expires_dt, "%Y%m%d%H%M%S").replace(tzinfo=_KST)
 
     async def issue_access_token(self) -> KiwoomAccessToken:
         url = f"{self.base_url}/oauth2/token"

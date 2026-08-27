@@ -1,3 +1,4 @@
+import asyncio
 import os
 from unittest.mock import AsyncMock
 
@@ -5,7 +6,19 @@ import httpx
 import pytest
 from dotenv import load_dotenv
 
-from app.services.kiwoom import KiwoomApiResponse, KiwoomService
+from app.services.kiwoom import KiwoomAccessToken, KiwoomApiResponse, KiwoomService
+
+
+def _access_token(
+    *,
+    expires_dt: str = "20991231235959",
+    token: str = "test-access-token",
+) -> KiwoomAccessToken:
+    return KiwoomAccessToken(
+        expires_dt=expires_dt,
+        token_type="Bearer",
+        token=token,
+    )
 
 
 @pytest.mark.anyio
@@ -121,6 +134,81 @@ async def test_issue_access_token_unexpected_response(
         match="Unexpected Kiwoom token response",
     ):
         await service.issue_access_token()
+
+
+@pytest.mark.anyio
+async def test_get_access_token_issues_once_on_first_call() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+    service.issue_access_token = AsyncMock(return_value=_access_token())
+
+    token = await service.get_access_token()
+
+    assert token.token == "test-access-token"
+    service.issue_access_token.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_get_access_token_reuses_cached_token() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+    service.issue_access_token = AsyncMock(return_value=_access_token())
+
+    first = await service.get_access_token()
+    second = await service.get_access_token()
+
+    assert first == second
+    service.issue_access_token.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_get_access_token_reissues_when_expired() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+    # 이미 만료된(과거) expires_dt로 캐시를 미리 채워둔다 — "now"를
+    # monkeypatch하지 않아도 확실히 만료로 판정된다.
+    service._cached_token = _access_token(
+        expires_dt="20200101000000", token="stale-token"
+    )
+    service.issue_access_token = AsyncMock(
+        return_value=_access_token(token="fresh-token")
+    )
+
+    token = await service.get_access_token()
+
+    assert token.token == "fresh-token"
+    service.issue_access_token.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_get_access_token_force_refresh_bypasses_valid_cache() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+    service._cached_token = _access_token(token="cached-token")
+    service.issue_access_token = AsyncMock(
+        return_value=_access_token(token="forced-token")
+    )
+
+    token = await service.get_access_token(force_refresh=True)
+
+    assert token.token == "forced-token"
+    service.issue_access_token.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_get_access_token_concurrent_calls_issue_once() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+
+    async def slow_issue() -> KiwoomAccessToken:
+        # 여러 coroutine이 캐시가 비어 있는 상태에서 겹치도록 인위적으로
+        # 지연시킨다 — 지연이 없으면 첫 호출이 너무 빨리 끝나 경쟁 상황
+        # 자체가 재현되지 않는다.
+        await asyncio.sleep(0.01)
+        return _access_token()
+
+    service.issue_access_token = AsyncMock(side_effect=slow_issue)
+
+    results = await asyncio.gather(*[service.get_access_token() for _ in range(5)])
+
+    assert all(result.token == "test-access-token" for result in results)
+    service.issue_access_token.assert_awaited_once()
+
 
 @pytest.mark.anyio
 async def test_real_issue_access_token() -> None:

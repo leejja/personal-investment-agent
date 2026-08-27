@@ -13,7 +13,7 @@ class KiwoomTools:
         self,
         stock_code: str,
     ) -> KiwoomStockInfo:
-        token = await self.service.issue_access_token()
+        token = await self.service.get_access_token()
 
         return await self.service.get_stock_info(
             access_token=token.token,
@@ -25,7 +25,7 @@ class KiwoomTools:
         query_type: str = "1",
         exchange_type: str = "KRX",
     ) -> KiwoomAccountBalance:
-        token = await self.service.issue_access_token()
+        token = await self.service.get_access_token()
 
         return await self.service.get_account_balance(
             access_token=token.token,

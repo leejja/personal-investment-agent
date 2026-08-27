@@ -1329,11 +1329,15 @@ OpenDartService
 └── ZIP/XML corpCode 파싱
 
 KiwoomService
-├── OAuth Access Token 발급
+├── OAuth Access Token 발급 + instance-level 캐싱
+│   (expires_dt 기반 만료 판정, KST로 명시적 해석, asyncio.Lock으로
+│    동시 요청 시 중복 발급 방지)
 ├── 공통 request() (cont-yn / next-key 연속조회 포함)
 ├── 주식 기본정보 조회
 └── 계좌평가잔고 조회
 ```
+
+Access Token 캐싱은 `get_access_token(force_refresh=False)`를 통해 제공된다. `KiwoomTools`의 모든 호출부는 매번 새 토큰을 발급받던 기존 `issue_access_token()` 대신 이 메서드를 사용한다 — Supervisor가 보유종목 다수를 동시에 분석할 때 Kiwoom OAuth 서버에서 실제로 `429 Too Many Requests`가 발생한 것을 계기로 추가했다(자세한 내용은 dev-log 16절 참고). `expires_dt`에는 timezone 정보가 없어 KST로 명시적으로 해석하는 정책을 코드 주석에 남겼고, 공식 Kiwoom 명세로 확정되면 재검토가 필요한 가정임을 함께 기록했다.
 
 ## LLMService
 
@@ -1981,7 +1985,7 @@ test_supervisor_orchestrator.py
 현재 전체 테스트 결과:
 
 ```text
-192 passed
+197 passed
 ```
 
 전체 lint 결과:
