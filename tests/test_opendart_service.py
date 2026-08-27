@@ -267,6 +267,18 @@ def test_parse_amount() -> None:
     assert OpenDartService._parse_amount("   ") is None
     assert OpenDartService._parse_amount(None) is None
 
+
+def test_parse_amount_treats_dash_placeholder_as_none() -> None:
+    # 실제 OpenDART 응답은 값이 없는 계정 항목을 "-" placeholder로 내려주기도
+    # 한다(빈 문자열이 아님). 0이 아니라 None으로 정규화해야 한다.
+    assert OpenDartService._parse_amount("-") is None
+    assert OpenDartService._parse_amount(" - ") is None
+
+
+def test_parse_amount_still_parses_real_negative_numbers() -> None:
+    # placeholder("-")와 실제 음수 금액("-1,234")을 혼동하면 안 된다.
+    assert OpenDartService._parse_amount("-1,234") == -1234
+
 @pytest.mark.anyio
 async def test_real_get_financial_accounts() -> None:
     load_dotenv()

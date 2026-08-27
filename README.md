@@ -4,8 +4,8 @@
 
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
-> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1 + Market Agent v1 (ECOS 확장: 환율/KOSPI/KOSDAQ, fact-grounded regime/risk_level) completed  
-> **Next:** Recommendation Engine
+> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1 + Market Agent v1 + Portfolio Strategy Agent v1 (fact-grounded action/portfolio_risk, target_weight 항상 null) completed  
+> **Next:** Recommendation Engine → Supervisor / Router
 
 ---
 
@@ -168,6 +168,22 @@ Recommendation Engine 역시 외부 API를 직접 호출하기보다 Agent 및 M
           │   (fact-grounded)    │
           │ • Domain Tool 직접   │
           │   호출 (in-process)  │
+          └──────────┬───────────┘
+                     │
+          ┌──────────────────────┐
+          │ Portfolio Strategy   │
+          │   Agent (v1 ✓)       │
+          │                      │
+          │ • Deterministic      │
+          │   analysis           │
+          │ • LLM reasoning      │
+          │   (fact-grounded)    │
+          │ • MarketAnalysis /   │
+          │   StockAnalysis[] /  │
+          │   PortfolioContext / │
+          │   InvestorProfile을  │
+          │   입력으로 받음      │
+          │   (Domain Tool 미호출)│
           └──────────┬───────────┘
                      │
                      │ Domain Tool 직접 호출
@@ -408,6 +424,8 @@ External API
 
 **Stock Research Agent v1과 Market Agent v1 모두 이 MCP Client 경로를 사용하지 않는다.** 같은 Python 프로세스 안에서 Domain Tool(`KiwoomTools`, `OpenDartTools`, `EcosTools`)을 직접 호출한다. MCP Server는 별도 프로세스나 외부 클라이언트(예: 다른 Agent Runtime, LLM host)를 위한 노출 경계로 유지된다.
 
+**Portfolio Strategy Agent v1은 Domain Tool을 아예 호출하지 않는다.** 이미 다른 Agent가 만든 `MarketAnalysis`/`list[StockAnalysis]`와 `PortfolioContext`/`InvestorProfile`을 입력으로 받아 판단만 한다(호출자가 Market Agent·Stock Research Agent·`PortfolioAdapter`를 먼저 실행해 이 입력을 준비한다). `LLMService`만 다른 두 Agent와 동일하게 직접 호출한다.
+
 ## Future
 
 향후 Agent들의 기본 패턴은 다음과 같다.
@@ -436,7 +454,7 @@ MCP Server
 Domain Tool
 ```
 
-즉, MCP Client/Server 경로는 프로세스 경계를 넘는 외부 연동이 필요할 때 사용하고, 같은 프로세스 안의 Agent → Domain Tool 호출에는 사용하지 않는다. Portfolio Strategy Agent 등 향후 Agent도 Stock Research Agent·Market Agent와 동일한 패턴을 따를 예정이다.
+즉, MCP Client/Server 경로는 프로세스 경계를 넘는 외부 연동이 필요할 때 사용하고, 같은 프로세스 안의 Agent → Domain Tool 호출에는 사용하지 않는다. Portfolio Strategy Agent v1도 이 원칙을 그대로 따르되, Domain Tool을 직접 호출할 필요 자체가 없다(위 참고).
 
 ---
 
@@ -860,58 +878,63 @@ StockAnalysis
 
 ---
 
-## 4. Portfolio Strategy Agent
+## 4. Portfolio Strategy Agent — ✅ v1 구현 완료
 
-Market Agent와 Stock Research Agent의 결과, Recommendation Engine 결과를 사용자의 실제 투자 상황과 결합한다.
+Market Agent와 Stock Research Agent의 결과를 사용자의 실제 포트폴리오·투자 성향과 결합해 종목별 action을 판단한다. 이 Agent의 존재 이유는 "종목 자체가 좋은가"(Stock Research Agent)나 "시장이 어떤가"(Market Agent)가 아니라 **"이 사용자는 지금 이 종목에 대해 무엇을 해야 하는가"**를 판단하는 것이다.
 
-주요 입력:
+v1 구현 구조는 Market Agent·Stock Research Agent와 동일한 패턴을 따른다:
+
+```text
+app/agents/portfolio/
+├── analysis.py       # deterministic 분석 (portfolio/market/종목 fact, 종목별 allowed_actions)
+├── reasoning.py       # LLM reasoning (action/portfolio_risk, symbol·fact-id·action 3중 grounding)
+└── orchestrator.py    # 위 둘을 조합해 최종 StrategyResult 생성
+```
+
+v1 최소 input contract:
 
 ```text
 MarketAnalysis
-StockAnalysis[]
-RecommendationResult
+list[StockAnalysis]
 PortfolioContext
 InvestorProfile
 ```
 
-주요 고려 요소:
+`RecommendationResult`는 아직 구현되지 않아(Recommendation Engine 미착수) v1 입력에서 제외했다. 따라서 v1의 "미보유 종목 추천"은 전체 시장을 스캔한 신규 발굴이 아니라, **호출자가 `stock_analyses`에 명시적으로 포함한 종목**(보유 종목 + 사용자가 물어본/워치리스트 종목)에 한정된다 — Recommendation Engine이 구현되면 v2에서 정식 입력으로 추가할 예정이다.
 
-- 보유 종목
-- 보유 수량
-- 평균 매입가
-- 현재 평가금액
-- 종목별 비중
-- 섹터별 비중
-- 손익
-- 투자 목표
-- 투자 기간
-- 기존 투자 전략
-- Risk tolerance
-- 제약 조건
-- 과거 매매
-- 신규 추천 후보
+v1의 핵심 정책:
 
-이를 기반으로 단순 BUY / SELL 판단이 아니라 다음 전략을 생성한다.
+- **Evidence-grounded**: LLM은 `analysis.py`가 만든 deterministic fact와 "판단 대상 종목" 목록만 근거로 사용하고, 뉴스·공시·목록에 없는 종목 등 제공되지 않은 정보를 추측하거나 지어내지 않는다.
+- **평가 없는 raw fact**: 현금 비중, 종목별 비중, 집중도(top1/top3), 평가손익률, 시장 regime/risk_level, 사용자 risk_tolerance 등은 수치·라벨 사실만 제공하고 "과도하다/적절하다" 같은 판단을 하지 않는다. 판단은 reasoning 단계(LLM)의 몫이다. 섹터 집중도는 Kiwoom/OpenDART 어디에도 업종 데이터가 없어 v1 범위에서 제외했다.
+- **action은 3중으로 grounding한다**: ① `recommendations[].symbol`은 반드시 입력으로 주어진 `stock_analyses`의 symbol 집합에 있어야 하고(새 종목을 지어내는 것을 원천 차단), ② `suggested_action`은 보유 여부에 따라 Python이 계산한 허용 action 집합(미보유: BUY/AVOID, 보유: ADD/HOLD/REDUCE/SELL) 안에 있어야 하며, ③ `fact_ids`/`portfolio_risk_fact_ids`는 비어 있으면 안 되고 존재하지 않는 fact id를 포함해도 안 된다(Market Agent의 fact-id grounding과 동일 원칙, 일부만 유효해도 통과시키지 않음). 세 검증 모두 `reasoning.py`의 동일한 재시도 루프 안에서 처리되고, 최종 실패 시 `ReasoningError`를 raise한다 — `orchestrator.py`는 이 검증을 중복하지 않고 target_weight 강제/confidence cap/evidence 조립/최종 조립만 담당한다.
+- **target_weight는 v1에서 항상 null이다**: 포지션 사이징 근거(리스크 버짓, 밸류에이션 모델 등)가 없기 때문이다 — Stock Research Agent가 근거 없는 `target_price`를 항상 null로 강제한 것과 동일한 문제·동일한 해법이다. `reasoning.py`의 응답 스키마 자체에 숫자 필드가 없어 LLM이 애초에 값을 만들 통로가 없고, `orchestrator.py`가 최종 조립 시점에도 명시적으로 `None`을 강제한다.
+- **핵심 분석 근거가 없는 종목은 recommendation을 만들지 않는다**: `stock_analyses`에 없는 보유 종목(예: OpenDART에 재무 데이터가 없는 ETF)은 recommendation 대상에서 제외된다. 다만 portfolio-level fact(비중, 집중도 등)에는 계속 반영된다.
+- **confidence 상한**: `stock_analyses`가 하나라도 있으면 MEDIUM, 없으면 LOW — v1은 HIGH를 절대 반환하지 않는다(Market Agent·Stock Research Agent와 동일 원칙). 최종 confidence는 `min(LLM 제안값, analysis 상한)`이다.
+- `recommendations`는 판단 근거가 부족한 종목을 억지로 채우지 않고 빈 리스트/부분 리스트를 정상 출력으로 허용한다.
 
-- 신규 매수
-- 비중 확대
-- 유지
-- 비중 축소
-- 매도
-- 신규 진입 회피
-- 단계적 매수
-- 단계적 매도
-- 리밸런싱
-- 목표가격 기반 대응
-- 조건 기반 대응
-- Risk 관리
+이를 기반으로 v1은 다음 action을 판단한다(기존 `InvestmentAction` enum 그대로 사용, 신규 enum 값 추가 없음).
 
-주요 출력:
+- BUY (신규 매수) — 미보유 종목에만 허용
+- ADD (비중 확대) — 보유 종목에만 허용
+- HOLD (유지) — 보유 종목에만 허용
+- REDUCE (비중 축소) — 보유 종목에만 허용
+- SELL (매도) — 보유 종목에만 허용
+- AVOID (신규 진입 회피) — 미보유 종목에만 허용
+
+단계적 매수/매도, 리밸런싱, 목표가격 기반 대응 등은 별도 enum이 아니라 `rationale`/`conditions` 텍스트로 표현하며, 정확한 수량·금액 산정과 함께 v2 이후 범위다.
+
+주요 출력(모델 변경 없이 기존 `StrategyResult`/`PositionRecommendation`을 그대로 사용):
 
 ```text
 StrategyResult
 ├── summary
 ├── recommendations[]
+│   ├── symbol / name
+│   ├── action
+│   ├── current_weight   # 보유 종목만, 미보유는 null
+│   ├── target_weight     # v1은 항상 null
+│   ├── rationale
+│   └── conditions[]
 ├── portfolio_risk
 ├── confidence
 └── evidence[]
@@ -1518,7 +1541,10 @@ personal-investment-agent/
 │   │   │   ├── analysis.py         # Deterministic 분석 (facts, confidence 상한, risk_level)
 │   │   │   ├── reasoning.py        # LLM reasoning
 │   │   │   └── orchestrator.py     # StockAnalysis 조립
-│   │   └── portfolio/              # Portfolio Strategy Agent (planned)
+│   │   └── portfolio/              # Portfolio Strategy Agent — v1 구현 완료
+│   │       ├── analysis.py         # Deterministic 분석 (portfolio/market/종목 fact, allowed_actions)
+│   │       ├── reasoning.py        # LLM reasoning (symbol/fact-id/action 3중 grounding)
+│   │       └── orchestrator.py     # StrategyResult 조립 (target_weight=None 강제)
 │   │
 │   ├── recommendation/             # Recommendation Engine (planned)
 │   │   └── engine.py               # Recommendation logic (planned)
@@ -1534,7 +1560,7 @@ personal-investment-agent/
 │   │   ├── opendart.py             # OpenDART Service
 │   │   ├── kiwoom.py               # Kiwoom Service
 │   │   ├── portfolio_adapter.py    # Kiwoom → PortfolioContext 변환
-│   │   └── llm.py                  # LLM Service (Stock Research Agent / Market Agent 전용)
+│   │   └── llm.py                  # LLM Service (Stock Research / Market / Portfolio Strategy Agent 전용)
 │   │
 │   ├── models/
 │   │   ├── common.py
@@ -1560,13 +1586,17 @@ personal-investment-agent/
 │   ├── test_stock_research_analysis.py
 │   ├── test_stock_research_reasoning.py
 │   ├── test_stock_research_orchestrator.py
+│   ├── test_portfolio_analysis.py
+│   ├── test_portfolio_reasoning.py
+│   ├── test_portfolio_orchestrator.py
 │   └── test_mcp_server.py
 │
 ├── scripts/
 │   ├── demo.py
 │   ├── kiwoom_stock_info_demo.py
 │   ├── stock_research_demo.py      # Stock Research Agent v1 실제 E2E 데모
-│   └── market_agent_demo.py        # Market Agent v1 실제 E2E 데모
+│   ├── market_agent_demo.py        # Market Agent v1 실제 E2E 데모
+│   └── portfolio_strategy_demo.py  # Portfolio Strategy Agent v1 실제 E2E 데모
 ├── docs/
 │
 ├── .env
@@ -1576,7 +1606,7 @@ personal-investment-agent/
 └── README.md
 ```
 
-> `app/recommendation/`, `app/agents/portfolio/`와 관련 모델은 프로젝트의 공식 설계에 포함되었지만 아직 구현되지 않았다.
+> `app/recommendation/`과 관련 모델은 프로젝트의 공식 설계에 포함되었지만 아직 구현되지 않았다.
 
 ---
 
@@ -1747,7 +1777,7 @@ ruff check .
 
 # 🧪 Testing
 
-현재 Model Layer, ECOS / OpenDART / Kiwoom integration, LLMService, Stock Research Agent v1, Market Agent v1 전체 경로에 대한 테스트를 구현했다.
+현재 Model Layer, ECOS / OpenDART / Kiwoom integration, LLMService, Stock Research Agent v1, Market Agent v1, Portfolio Strategy Agent v1 전체 경로에 대한 테스트를 구현했다.
 
 ```text
 tests/
@@ -1763,6 +1793,9 @@ tests/
 ├── test_stock_research_analysis.py
 ├── test_stock_research_reasoning.py
 ├── test_stock_research_orchestrator.py
+├── test_portfolio_analysis.py
+├── test_portfolio_reasoning.py
+├── test_portfolio_orchestrator.py
 └── test_mcp_server.py
 ```
 
@@ -1842,6 +1875,40 @@ test_stock_research_orchestrator.py
 └── ReasoningError 발생 시 fallback 없이 예외 전파
 ```
 
+## Portfolio Strategy Agent Tests
+
+```text
+test_portfolio_analysis.py
+├── 보유 종목 → current_weight + held actions(ADD/HOLD/REDUCE/SELL)
+├── 미보유 종목 → current_weight=None + unheld actions(BUY/AVOID)
+├── portfolio-level fact (현금 비중, 주식 노출 비중, top1/top3 집중도)
+├── total_value=0일 때 현금/노출 비중 fact 생략
+├── InvestorProfile 선택 필드(horizon/objectives/constraints) 존재할 때만 fact 포함
+├── 종목별 fact(risk_level/confidence/현재 비중/평가손익률, 미보유는 not_held)
+├── raw fact에 평가어 없음
+├── max_confidence: stock_analyses 있으면 MEDIUM, 없으면 LOW, 개별 StockAnalysis가 HIGH여도 상한 불변
+└── fact id 중복 없음
+
+test_portfolio_reasoning.py
+├── LLM 응답 구조화 검증 + 최소 재시도 (mock, 실제 OpenAI 미호출)
+├── recommendations 빈 배열 정상 허용
+├── portfolio_risk_fact_ids 비어 있거나 존재하지 않는 id 포함 시 검증 실패 → 재시도 → 최종 실패 시 ReasoningError
+├── recommendation의 symbol이 판단 대상 종목 목록에 없으면 검증 실패(새 종목 지어내기 차단)
+├── recommendation의 fact_ids가 비어 있거나 존재하지 않는 id를 포함하면 검증 실패(일부 valid만 남겨 통과시키지 않음)
+├── 보유 종목에 BUY/AVOID, 미보유 종목에 SELL/REDUCE/ADD/HOLD를 제안하면 검증 실패(action-보유여부 구조적 검증)
+├── 미보유 종목에 BUY는 정상 허용
+└── 재시도에서 세 검증(symbol/fact-id/action)을 모두 충족하면 정상 복구
+
+test_portfolio_orchestrator.py
+├── LLMService만 mock 주입 (Domain Tool 호출 없음)
+├── recommendation 조립 (symbol/name/action/current_weight)
+├── target_weight는 LLM이 값을 끼워 넣어도 항상 None으로 강제
+├── confidence = min(LLM 제안값, analysis 상한), v1은 HIGH를 절대 반환하지 않음
+├── evidence는 deterministic facts(PortfolioContext/MarketAnalysis/StockAnalysis/InvestorProfile 출처)로만 구성
+├── ReasoningError(구조화 실패 및 3중 grounding 실패 포함) 발생 시 fallback 없이 예외 전파
+└── 보유 종목에 BUY 같은 허용되지 않은 action은 재시도 루프 안에서 걸러지고 최종 ReasoningError로 전파
+```
+
 ## MCP End-to-End Test
 
 `tests/test_mcp_server.py`에서 실제 MCP Client로 9개 Tool 전체를 실제 외부 API까지 end-to-end로 검증한다.
@@ -1849,7 +1916,7 @@ test_stock_research_orchestrator.py
 현재 전체 테스트 결과:
 
 ```text
-132 passed
+167 passed
 ```
 
 전체 lint 결과:
@@ -1862,9 +1929,11 @@ All checks passed!
 
 # 🚧 Current Status
 
-현재 프로젝트는 **Foundation, Model Layer v1, ECOS / OpenDART / Kiwoom 외부 데이터 Integration을 완료하고, Stock Research Agent v1과 Market Agent v1 두 Agent까지 구현·실제 E2E 검증을 마친 단계**다.
+현재 프로젝트는 **Foundation, Model Layer v1, ECOS / OpenDART / Kiwoom 외부 데이터 Integration을 완료하고, Stock Research Agent v1·Market Agent v1·Portfolio Strategy Agent v1 세 Agent까지 구현·실제 E2E 검증을 마친 단계**다.
 
 Market Agent보다 Stock Research Agent를 먼저 구현했다. Kiwoom/OpenDART로 이미 종목 단위 데이터(가격, 재무)가 충분히 확보된 반면, 시장 전체 데이터는 기준금리뿐이었기 때문이다. Market Agent v1을 구현하며 ECOS를 환율/KOSPI/KOSDAQ까지 확장했고, regime/risk_level 판단은 Stock Research Agent의 `risk_level`처럼 Python 상수로 고정할 수 없어 대신 fact-id grounding(존재하지 않거나 비어 있는 참조는 검증 실패 → 재시도 → `ReasoningError`)으로 구조적으로 통제했다.
+
+당초 로드맵은 Recommendation Engine을 다음 단계로 잡았지만, Portfolio Strategy Agent v1은 `RecommendationResult` 없이도(v1은 이 입력을 아예 받지 않음, 보유 종목 + 호출자가 명시적으로 분석 요청한 종목만 다룸) 독립적으로 구현 가능하다고 판단해 순서를 바꿔 먼저 구현했다. Portfolio Strategy Agent v1은 Market Agent의 fact-id grounding 패턴을 확장해 **symbol/fact-id/action 3중 grounding**을 적용했고(새 종목 지어내기·보유여부에 안 맞는 action을 구조적으로 차단), `target_weight`는 Stock Research Agent의 `target_price`와 동일한 이유(포지션 사이징 근거 없음)로 v1에서 항상 `null`로 강제한다. 실제 계좌(보유 종목 다수 + ETF 포함) E2E 검증 과정에서 Kiwoom 계좌 종목코드 시장 접두문자(`"A005930"`) 미정규화, OpenDART `"-"` placeholder 금액 파싱 오류라는 두 개의 기존 Service 버그를 추가로 발견해 수정했다(자세한 내용은 dev-log 참고).
 
 Recommendation Engine은 프로젝트 공식 범위에 포함되어 있으며 다음 구현 대상이다.
 
@@ -1900,10 +1969,15 @@ Market Agent v1                     completed
     └── 실제 E2E Demo                 ✓
     │
     ▼
-Recommendation Engine               ← NEXT
+Portfolio Strategy Agent v1         completed
+    ├── Deterministic Analysis (portfolio/market/종목 fact) ✓
+    ├── LLM Reasoning + symbol/fact-id/action 3중 grounding ✓
+    ├── target_weight 항상 null 강제                        ✓
+    ├── Orchestrator                                        ✓
+    └── 실제 E2E Demo (실제 계좌 전체)                       ✓
     │
     ▼
-Portfolio Strategy Agent
+Recommendation Engine               ← NEXT
     │
     ▼
 Supervisor / Router
@@ -2007,17 +2081,20 @@ Supervisor / Router
 - [ ] Hybrid recommendation
 - [ ] Backtesting / scoring validation
 
-## Phase 8 — Portfolio Strategy Agent
+## Phase 8 — Portfolio Strategy Agent ✅ v1 완료
+
+> Recommendation Engine(Phase 7)보다 먼저 구현했다. 이유는 위 "Current Status" 참고 — v1은 `RecommendationResult` 없이 보유 종목 + 명시적으로 분석 요청된 종목만으로 동작한다.
 
 - [x] Portfolio data model
 - [x] Investor profile model
 - [x] Strategy result model
-- [ ] Account Tool integration
-- [ ] RecommendationResult integration
-- [ ] Position / P&L analysis
-- [ ] Portfolio risk analysis
-- [ ] Personalized strategy generation
-- [ ] StrategyResult generation
+- [x] Account Tool integration (Kiwoom 계좌 → `PortfolioAdapter` → `PortfolioContext`)
+- [ ] RecommendationResult integration (Recommendation Engine 완성 후 v2)
+- [x] Position / P&L analysis (deterministic fact: 비중, 집중도, 평가손익률)
+- [x] Portfolio risk analysis (LLM 제안 + fact-id grounding)
+- [x] Personalized strategy generation (symbol/fact-id/action 3중 grounding, target_weight 항상 null)
+- [x] StrategyResult generation
+- [x] 실제 E2E demo (`scripts/portfolio_strategy_demo.py`, 실제 계좌 전체)
 
 ## Phase 9 — Supervisor / Router
 

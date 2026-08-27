@@ -303,7 +303,7 @@ class KiwoomService:
 
             positions.append(
                 KiwoomAccountPosition(
-                    stock_code=str(row.get("stk_cd", "")),
+                    stock_code=self._normalize_stock_code(str(row.get("stk_cd", ""))),
                     stock_name=str(row.get("stk_nm", "")),
                     quantity=self._parse_int(
                         row.get("rmnd_qty", "0")
@@ -336,6 +336,18 @@ class KiwoomService:
             )
 
         return positions
+
+    @staticmethod
+    def _normalize_stock_code(code: str) -> str:
+        # 계좌평가잔고(kt00018) 응답의 stk_cd는 실제로 시장 구분 접두문자가
+        # 붙은 채로 내려온다(예: "A005930"). 주식기본정보 조회(get_stock_info)
+        # 등 다른 Kiwoom API는 접두문자 없는 순수 종목코드("005930")를
+        # 기대하므로, Service 계층에서 정규화해 시스템 전체가 항상 일관된
+        # 종목코드를 쓰도록 한다.
+        if len(code) == 7 and code[0].isalpha() and code[1:].isdigit():
+            return code[1:]
+
+        return code
 
     @staticmethod
     def _parse_int(value: object) -> int:

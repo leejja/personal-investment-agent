@@ -486,6 +486,61 @@ async def test_get_account_balance_with_continuation() -> None:
         "next_key": "next-key-1",
     }
 
+
+@pytest.mark.anyio
+async def test_get_account_balance_strips_market_prefix_from_stock_code() -> None:
+    # 실제 Kiwoom 계좌평가잔고(kt00018) 응답의 stk_cd는 시장 구분
+    # 접두문자가 붙은 채로 내려온다(예: "A005930"). 다른 Kiwoom API
+    # (get_stock_info 등)는 접두문자 없는 순수 종목코드를 기대하므로
+    # Service 계층에서 정규화해야 한다.
+    service = KiwoomService(
+        app_key="test-app-key",
+        secret_key="test-secret-key",
+    )
+
+    service.request = AsyncMock(
+        return_value=KiwoomApiResponse(
+            data={
+                "tot_pur_amt": "1000000",
+                "tot_evlt_amt": "1200000",
+                "tot_evlt_pl": "200000",
+                "tot_prft_rt": "20.0",
+                "prsm_dpst_aset_amt": "1500000",
+                "tot_loan_amt": "0",
+                "tot_crd_loan_amt": "0",
+                "tot_crd_ls_amt": "0",
+                "acnt_evlt_remn_indv_tot": [
+                    {
+                        "stk_cd": "A005930",
+                        "stk_nm": "삼성전자",
+                        "evltv_prft": "100000",
+                        "prft_rt": "10.0",
+                        "pur_pric": "250000",
+                        "rmnd_qty": "4",
+                        "trde_able_qty": "4",
+                        "cur_prc": "+281500",
+                        "pur_amt": "1000000",
+                        "evlt_amt": "1126000",
+                        "poss_rt": "75.0",
+                    }
+                ],
+                "return_code": 0,
+                "return_msg": "정상",
+            },
+            cont_yn="N",
+            next_key=None,
+        )
+    )
+
+    result = await service.get_account_balance(
+        access_token="test-token",
+        query_type="1",
+        exchange_type="KRX",
+    )
+
+    assert result.positions[0].stock_code == "005930"
+
+
 @pytest.mark.anyio
 async def test_real_get_account_balance() -> None:
     load_dotenv()

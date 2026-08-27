@@ -180,4 +180,14 @@ class OpenDartService:
         if not value:
             return None
 
-        return int(value.replace(",", ""))
+        normalized = value.replace(",", "")
+
+        # OpenDART는 값이 없는 계정 항목을 빈 문자열이 아니라 "-" 같은
+        # placeholder로 내려주기도 한다(실제 API 응답에서 확인). 이는 0이
+        # 아니라 "값 없음"을 뜻하므로 None으로 정규화한다. 실제 음수 금액
+        # ("-1,234")과 구분하기 위해 부호만 있고 숫자가 없는 경우만
+        # placeholder로 취급한다.
+        if normalized in {"-", "+"}:
+            return None
+
+        return int(normalized)
