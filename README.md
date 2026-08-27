@@ -4,8 +4,8 @@
 
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
-> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1 (deterministic analysis + LLM reasoning) completed  
-> **Next:** Market Data 설계/확장 → Market Agent v1
+> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1 + Market Agent v1 (ECOS 확장: 환율/KOSPI/KOSDAQ, fact-grounded regime/risk_level) completed  
+> **Next:** Recommendation Engine
 
 ---
 
@@ -160,9 +160,14 @@ Recommendation Engine 역시 외부 API를 직접 호출하기보다 Agent 및 M
                      │
           ┌──────────────────────┐
           │     Market Agent     │
-          │      (planned)       │
+          │       (v1 ✓)         │
           │                      │
-          │ • Market reasoning   │
+          │ • Deterministic      │
+          │   analysis           │
+          │ • LLM reasoning      │
+          │   (fact-grounded)    │
+          │ • Domain Tool 직접   │
+          │   호출 (in-process)  │
           └──────────┬───────────┘
                      │
                      │ Domain Tool 직접 호출
@@ -181,6 +186,9 @@ Recommendation Engine 역시 외부 API를 직접 호출하기보다 Agent 및 M
           │ Exposed MCP Tools                │
           │                                  │
           │ • get_base_rate                  │
+          │ • get_exchange_rate              │
+          │ • get_kospi_index                │
+          │ • get_kosdaq_index               │
           │ • get_company_financials         │
           │ • get_key_financials             │
           │ • get_stock_info                 │
@@ -199,6 +207,12 @@ Recommendation Engine 역시 외부 API를 직접 호출하기보다 Agent 및 M
         │    EcosTools     │
         │                  │
         │ get_base_rate()  │
+        │ get_exchange_    │
+        │  rate()          │
+        │ get_kospi_       │
+        │  index()         │
+        │ get_kosdaq_      │
+        │  index()         │
         └────────┬─────────┘
                  │
                  │
@@ -370,8 +384,11 @@ app/mcp/server.py
         │
         │ MCP Server
         │
-        │ exposes 6 tools:
+        │ exposes 9 tools:
         │ get_base_rate
+        │ get_exchange_rate
+        │ get_kospi_index
+        │ get_kosdaq_index
         │ get_company_financials
         │ get_key_financials
         │ get_stock_info
@@ -389,14 +406,14 @@ External API
 
 `tests/test_mcp_server.py`의 MCP Client가 이 경로를 실제 외부 API까지 end-to-end로 검증한다.
 
-**Stock Research Agent v1은 이 MCP Client 경로를 사용하지 않는다.** 같은 Python 프로세스 안에서 Domain Tool(`KiwoomTools`, `OpenDartTools`)을 직접 호출한다. MCP Server는 별도 프로세스나 외부 클라이언트(예: 다른 Agent Runtime, LLM host)를 위한 노출 경계로 유지된다.
+**Stock Research Agent v1과 Market Agent v1 모두 이 MCP Client 경로를 사용하지 않는다.** 같은 Python 프로세스 안에서 Domain Tool(`KiwoomTools`, `OpenDartTools`, `EcosTools`)을 직접 호출한다. MCP Server는 별도 프로세스나 외부 클라이언트(예: 다른 Agent Runtime, LLM host)를 위한 노출 경계로 유지된다.
 
 ## Future
 
 향후 Agent들의 기본 패턴은 다음과 같다.
 
 ```text
-Agent (in-process, 예: Stock Research Agent)
+Agent (in-process, 예: Stock Research Agent, Market Agent)
         │
         │ 직접 호출 (MCP Protocol 아님)
         ▼
@@ -419,7 +436,7 @@ MCP Server
 Domain Tool
 ```
 
-즉, MCP Client/Server 경로는 프로세스 경계를 넘는 외부 연동이 필요할 때 사용하고, 같은 프로세스 안의 Agent → Domain Tool 호출에는 사용하지 않는다. Market Agent, Portfolio Strategy Agent 등 향후 Agent도 Stock Research Agent와 동일한 패턴을 따를 예정이다.
+즉, MCP Client/Server 경로는 프로세스 경계를 넘는 외부 연동이 필요할 때 사용하고, 같은 프로세스 안의 Agent → Domain Tool 호출에는 사용하지 않는다. Portfolio Strategy Agent 등 향후 Agent도 Stock Research Agent·Market Agent와 동일한 패턴을 따를 예정이다.
 
 ---
 
@@ -747,33 +764,36 @@ Supervisor는 개별 시장·종목 분석을 직접 수행하기보다 각 Agen
 
 ---
 
-## 2. Market Agent
+## 2. Market Agent — ✅ v1 구현 완료
 
 전체 시장 환경을 분석한다.
 
-주요 분석 대상:
-
-- 한국 / 미국 증시
-- 주요 지수
-- 금리
-- 환율
-- 거시경제 지표
-- 경기 선행지표
-- 업종 상대강도
-- 외국인 / 기관 수급
-- 시장 뉴스
-- Risk-On / Risk-Off 환경
-
-향후 MCP Client를 통해 Market Tool을 호출한다.
+v1 구현 구조는 Stock Research Agent와 동일한 패턴을 따른다:
 
 ```text
-Market Agent
-    │
-    ├── get_base_rate
-    ├── get_exchange_rate
-    ├── get_market_index
-    └── ...
+app/agents/market/
+├── analysis.py       # deterministic 분석 (raw facts, 20/60일 변화율, confidence 상한)
+├── reasoning.py       # LLM reasoning (summary / suggested_regime / suggested_risk_level)
+└── orchestrator.py    # 위 둘을 조합해 최종 MarketAnalysis 생성
 ```
+
+v1이 실제로 사용하는 데이터 (모두 ECOS, `as_of_date` 기준 lookback 조회):
+
+- `get_base_rate` — 한국 기준금리
+- `get_exchange_rate` — USD/KRW 환율
+- `get_kospi_index` — KOSPI지수
+- `get_kosdaq_index` — KOSDAQ지수
+
+해외 지수(S&P500/NASDAQ), 외국인/기관 수급, 시장 뉴스는 v1 범위에서 제외했다(추가 외부 데이터 소스 또는 신규 Kiwoom 엔드포인트가 필요해 v2 이후로 미룸). 다만 ECOS `802Y001` 테이블에 외국인 순매수 데이터도 이미 존재함을 확인했고, 이는 향후 별도 외부 연동 없이 확장 가능한 후보로 남겨둔다.
+
+v1의 핵심 정책:
+
+- **Evidence-grounded**: LLM은 `analysis.py`가 만든 deterministic facts만 근거로 사용하고, 뉴스·수급·해외 지수 등 제공되지 않은 정보를 추측하지 않는다.
+- **평가 없는 raw fact**: 기준금리 변경폭(bp), 환율/지수 20·60거래일 변화율은 수치 사실만 제공하고 "긴축적/완화적" 같은 판단을 하지 않는다. 해석은 reasoning 단계(LLM)의 몫이다.
+- **날짜 계산의 두 가지 방식**: 기준금리는 주말 포함 매일 값이 채워지므로 "60일 전"을 달력일 기준으로 찾고, 환율/지수는 영업일에만 값이 존재하므로 리스트 위치("20/60거래일 전") 기준으로 찾는다 — 실제 ECOS 데이터로 두 지표의 밀도 차이를 확인하고 반영했다.
+- **regime / risk_level은 Python 상수로 고정하지 않는다**: Stock Research Agent의 `risk_level`과 달리 Market Agent의 존재 이유 자체이므로 LLM의 `suggested_regime`/`suggested_risk_level`을 사용한다. 대신 **fact-id grounding**으로 구조적으로 통제한다 — `regime_fact_ids`/`risk_fact_ids`가 각각 비어 있거나, 존재하지 않는 fact id를 하나라도 포함하면 검증 실패로 처리한다(일부만 유효해도 조용히 걸러내고 통과시키지 않음).
+- **grounding 실패 시 1회 재시도 후 예외 전파**: JSON 파싱 실패와 동일하게, grounding 검증 실패도 최대 2회 시도 후에도 실패하면 `ReasoningError`를 raise한다 — 근거 없는 regime/risk_level을 confidence만 낮춰 반환하지 않고, "근거 없는 결과는 반환하지 않는다"는 원칙을 그대로 유지한다.
+- **confidence 상한**: 기준금리·USD/KRW 20일 변화율·KOSPI 20일 변화율이 모두 계산 가능하면 MEDIUM, 하나라도 없으면 LOW(v1은 HIGH를 반환하지 않는다).
 
 주요 출력:
 
@@ -786,6 +806,8 @@ MarketAnalysis
 ├── confidence
 └── evidence[]
 ```
+
+`MarketAnalysis`/`MarketIndicator` 모델은 변경 없이 그대로 사용한다 — v1 지표(기준금리/환율/KOSPI/KOSDAQ)를 표현하기에 이미 충분히 범용적이었다.
 
 ---
 
@@ -1324,6 +1346,9 @@ app/mcp/server.py
 ```text
 personal-investment-agent
 ├── get_base_rate
+├── get_exchange_rate
+├── get_kospi_index
+├── get_kosdaq_index
 ├── get_company_financials
 ├── get_key_financials
 ├── get_stock_info
@@ -1338,7 +1363,7 @@ Tool Discovery
       │
       │ list_tools()
       ▼
-6개 Tool 발견
+9개 Tool 발견
 
       ↓
 
@@ -1349,9 +1374,9 @@ Tool Invocation
 Tool 실행
 ```
 
-현재 `tests/test_mcp_server.py`에서 실제 MCP Client를 사용하여 6개 Tool 모두 실제 외부 API까지 end-to-end로 검증한다.
+현재 `tests/test_mcp_server.py`에서 실제 MCP Client를 사용하여 9개 Tool 모두 실제 외부 API까지 end-to-end로 검증한다.
 
-Stock Research Agent v1은 이 MCP Client 경로를 사용하지 않고 Domain Tool을 직접 호출한다(자세한 내용은 위 "MCP Client / Server Relationship" 참고). 향후 프로세스 경계를 넘는 외부 Agent Runtime이나 다른 클라이언트가 이 MCP Client 역할을 담당할 수 있다.
+Stock Research Agent v1과 Market Agent v1 모두 이 MCP Client 경로를 사용하지 않고 Domain Tool을 직접 호출한다(자세한 내용은 위 "MCP Client / Server Relationship" 참고). 향후 프로세스 경계를 넘는 외부 Agent Runtime이나 다른 클라이언트가 이 MCP Client 역할을 담당할 수 있다.
 
 ---
 
@@ -1361,10 +1386,10 @@ Stock Research Agent v1은 이 MCP Client 경로를 사용하지 않고 Domain T
 
 | Data Source | Purpose | Status |
 | --- | --- | --- |
-| 한국은행 ECOS API | 금리 / 환율 / 거시경제 데이터 | **Service + Tool + MCP Integrated** |
+| 한국은행 ECOS API | 기준금리 / USD-KRW 환율 / KOSPI·KOSDAQ 지수 | **Service + Tool + MCP Integrated** |
 | OpenDART API | 기업 공시 / 재무 데이터 | **Service + Tool + MCP Integrated** |
 | Kiwoom REST API | 계좌 / 주가 / 거래 / 수급 데이터 | **Service + Tool + MCP Integrated** |
-| OpenAI API | Stock Research Agent LLM reasoning | **Service Integrated (LLMService, Agent 전용, MCP 미노출)** |
+| OpenAI API | Stock Research Agent / Market Agent LLM reasoning | **Service Integrated (LLMService, Agent 전용, MCP 미노출)** |
 
 향후 필요에 따라 추가할 수 있다.
 
@@ -1485,7 +1510,10 @@ personal-investment-agent/
 │
 ├── app/
 │   ├── agents/                     # AI Agent Layer
-│   │   ├── market/                 # Market Agent (planned)
+│   │   ├── market/                 # Market Agent — v1 구현 완료
+│   │   │   ├── analysis.py         # Deterministic 분석 (raw facts, 20/60일 변화율, confidence 상한)
+│   │   │   ├── reasoning.py        # LLM reasoning (fact-id grounding 검증 포함)
+│   │   │   └── orchestrator.py     # MarketAnalysis 조립
 │   │   ├── stock_research/         # Stock Research Agent — v1 구현 완료
 │   │   │   ├── analysis.py         # Deterministic 분석 (facts, confidence 상한, risk_level)
 │   │   │   ├── reasoning.py        # LLM reasoning
@@ -1496,7 +1524,7 @@ personal-investment-agent/
 │   │   └── engine.py               # Recommendation logic (planned)
 │   │
 │   ├── mcp/
-│   │   ├── ecos_tools.py           # ECOS Domain Tools
+│   │   ├── ecos_tools.py           # ECOS Domain Tools (기준금리/환율/KOSPI/KOSDAQ)
 │   │   ├── opendart_tools.py       # OpenDART Domain Tools
 │   │   ├── kiwoom_tools.py         # Kiwoom Domain Tools
 │   │   └── server.py               # MCP Server / Tool exposure
@@ -1506,7 +1534,7 @@ personal-investment-agent/
 │   │   ├── opendart.py             # OpenDART Service
 │   │   ├── kiwoom.py               # Kiwoom Service
 │   │   ├── portfolio_adapter.py    # Kiwoom → PortfolioContext 변환
-│   │   └── llm.py                  # LLM Service (Stock Research Agent 전용)
+│   │   └── llm.py                  # LLM Service (Stock Research Agent / Market Agent 전용)
 │   │
 │   ├── models/
 │   │   ├── common.py
@@ -1526,6 +1554,9 @@ personal-investment-agent/
 │   ├── test_kiwoom_service.py / test_kiwoom_tools.py
 │   ├── test_portfolio_adapter.py
 │   ├── test_llm_service.py
+│   ├── test_market_analysis.py
+│   ├── test_market_reasoning.py
+│   ├── test_market_orchestrator.py
 │   ├── test_stock_research_analysis.py
 │   ├── test_stock_research_reasoning.py
 │   ├── test_stock_research_orchestrator.py
@@ -1534,7 +1565,8 @@ personal-investment-agent/
 ├── scripts/
 │   ├── demo.py
 │   ├── kiwoom_stock_info_demo.py
-│   └── stock_research_demo.py      # Stock Research Agent v1 실제 E2E 데모
+│   ├── stock_research_demo.py      # Stock Research Agent v1 실제 E2E 데모
+│   └── market_agent_demo.py        # Market Agent v1 실제 E2E 데모
 ├── docs/
 │
 ├── .env
@@ -1544,7 +1576,7 @@ personal-investment-agent/
 └── README.md
 ```
 
-> `app/recommendation/`, `app/agents/market/`, `app/agents/portfolio/`와 관련 모델은 프로젝트의 공식 설계에 포함되었지만 아직 구현되지 않았다.
+> `app/recommendation/`, `app/agents/portfolio/`와 관련 모델은 프로젝트의 공식 설계에 포함되었지만 아직 구현되지 않았다.
 
 ---
 
@@ -1715,7 +1747,7 @@ ruff check .
 
 # 🧪 Testing
 
-현재 Model Layer, ECOS / OpenDART / Kiwoom integration, LLMService, Stock Research Agent v1 전체 경로에 대한 테스트를 구현했다.
+현재 Model Layer, ECOS / OpenDART / Kiwoom integration, LLMService, Stock Research Agent v1, Market Agent v1 전체 경로에 대한 테스트를 구현했다.
 
 ```text
 tests/
@@ -1725,6 +1757,9 @@ tests/
 ├── test_kiwoom_service.py / test_kiwoom_tools.py
 ├── test_portfolio_adapter.py
 ├── test_llm_service.py
+├── test_market_analysis.py
+├── test_market_reasoning.py
+├── test_market_orchestrator.py
 ├── test_stock_research_analysis.py
 ├── test_stock_research_reasoning.py
 ├── test_stock_research_orchestrator.py
@@ -1758,6 +1793,31 @@ ECOS, OpenDART, Kiwoom 각 Service/Domain Tool을 `httpx.MockTransport` 또는 `
 
 OpenAI Chat Completions 호출을 `httpx.MockTransport`로 mock하여 검증한다. 실제 OpenAI API는 호출하지 않는다.
 
+## Market Agent Tests
+
+```text
+test_market_analysis.py
+├── 기준금리 변경 방향/변경폭(bp) — 달력일 기준 lookback
+├── USD/KRW·KOSPI·KOSDAQ 20/60거래일 변화율 — 리스트 위치 기준 lookback
+├── lookback 데이터 부족 시 change fact 조용히 생략
+├── confidence 상한 (핵심 지표 3종 20일 변화율 완전 → MEDIUM, 불완전 → LOW)
+├── raw fact에 평가어("높다/낮다/양호/부진/고평가/저평가/긴축적/완화적") 없음
+└── fact id 중복 없음
+
+test_market_reasoning.py
+├── LLM 응답 구조화 검증 + 최소 재시도 (mock, 실제 OpenAI 미호출)
+├── regime_fact_ids / risk_fact_ids가 비어 있으면 검증 실패 → 재시도 → 최종 실패 시 ReasoningError
+├── 존재하지 않는 fact id가 하나라도 섞이면 검증 실패(일부 valid만 남겨 통과시키지 않음)
+└── 재시도에서 grounding을 충족하면 정상 복구
+
+test_market_orchestrator.py
+├── EcosTools / LLMService 전부 mock 주입
+├── as_of_date → start_date(LOOKBACK_DAYS=100) 계산 및 4개 tool 호출 검증
+├── confidence = min(LLM 제안값, analysis 상한)
+├── evidence는 deterministic facts + 실제 tool 호출 출처로만 구성
+└── ReasoningError(구조화 실패 및 grounding 실패 포함) 발생 시 fallback 없이 예외 전파
+```
+
 ## Stock Research Agent Tests
 
 ```text
@@ -1784,12 +1844,12 @@ test_stock_research_orchestrator.py
 
 ## MCP End-to-End Test
 
-`tests/test_mcp_server.py`에서 실제 MCP Client로 6개 Tool 전체를 실제 외부 API까지 end-to-end로 검증한다.
+`tests/test_mcp_server.py`에서 실제 MCP Client로 9개 Tool 전체를 실제 외부 API까지 end-to-end로 검증한다.
 
 현재 전체 테스트 결과:
 
 ```text
-103 passed
+132 passed
 ```
 
 전체 lint 결과:
@@ -1802,11 +1862,11 @@ All checks passed!
 
 # 🚧 Current Status
 
-현재 프로젝트는 **Foundation, Model Layer v1, ECOS / OpenDART / Kiwoom 외부 데이터 Integration을 완료하고, 첫 번째 Agent인 Stock Research Agent v1까지 구현·실제 E2E 검증을 마친 단계**다.
+현재 프로젝트는 **Foundation, Model Layer v1, ECOS / OpenDART / Kiwoom 외부 데이터 Integration을 완료하고, Stock Research Agent v1과 Market Agent v1 두 Agent까지 구현·실제 E2E 검증을 마친 단계**다.
 
-Market Agent보다 Stock Research Agent를 먼저 구현했다. Kiwoom/OpenDART로 이미 종목 단위 데이터(가격, 재무)가 충분히 확보된 반면, 시장 전체 데이터는 아직 기준금리뿐이라 Market Agent 구현의 우선순위가 낮았기 때문이다.
+Market Agent보다 Stock Research Agent를 먼저 구현했다. Kiwoom/OpenDART로 이미 종목 단위 데이터(가격, 재무)가 충분히 확보된 반면, 시장 전체 데이터는 기준금리뿐이었기 때문이다. Market Agent v1을 구현하며 ECOS를 환율/KOSPI/KOSDAQ까지 확장했고, regime/risk_level 판단은 Stock Research Agent의 `risk_level`처럼 Python 상수로 고정할 수 없어 대신 fact-id grounding(존재하지 않거나 비어 있는 참조는 검증 실패 → 재시도 → `ReasoningError`)으로 구조적으로 통제했다.
 
-Recommendation Engine은 프로젝트 공식 범위에 추가되었으며 Market Agent 및 추가 분석 기반이 구축된 이후 구현할 예정이다.
+Recommendation Engine은 프로젝트 공식 범위에 포함되어 있으며 다음 구현 대상이다.
 
 ```text
 Foundation                         completed
@@ -1832,13 +1892,15 @@ Stock Research Agent v1             completed
     └── 실제 E2E Demo           ✓
     │
     ▼
-Market Data 설계/확장               ← NEXT
+Market Agent v1                     completed
+    ├── ECOS 확장 (환율/KOSPI/KOSDAQ)  ✓
+    ├── Deterministic Analysis        ✓
+    ├── LLM Reasoning + fact grounding ✓
+    ├── Orchestrator                  ✓
+    └── 실제 E2E Demo                 ✓
     │
     ▼
-Market Agent v1
-    │
-    ▼
-Recommendation Engine
+Recommendation Engine               ← NEXT
     │
     ▼
 Portfolio Strategy Agent
@@ -1896,16 +1958,18 @@ Supervisor / Router
 - [x] Kiwoom MCP Tools
 - [x] Kiwoom MCP end-to-end tests
 
-## Phase 5 — Market Agent
+## Phase 5 — Market Agent ✅ v1 완료
 
-- [ ] MCP Client integration
-- [ ] Market Tool invocation
-- [ ] Market data collection
-- [ ] Market indicator normalization
-- [ ] Market regime analysis
-- [ ] Risk-On / Risk-Off analysis
-- [ ] Market Agent implementation
-- [ ] MarketAnalysis generation
+> Stock Research Agent(Phase 6)와 동일하게 MCP Client 대신 in-process Domain Tool 직접 호출 방식으로 구현했다.
+
+- [x] Direct Domain Tool invocation (MCP Client 대신 in-process 직접 호출)
+- [x] ECOS 지표 확장 (`get_exchange_rate`, `get_kospi_index`, `get_kosdaq_index`)
+- [x] Market data collection (`as_of_date` 기준 lookback 조회)
+- [x] Market indicator normalization (deterministic fact: 기준금리 변경폭, 환율/지수 20·60거래일 변화율)
+- [x] Market regime / risk_level 분석 (LLM suggested + fact-id grounding, Python 상수 고정 없음)
+- [x] Market Agent implementation (`analysis.py`/`reasoning.py`/`orchestrator.py`)
+- [x] MarketAnalysis generation
+- [x] 실제 E2E demo (`scripts/market_agent_demo.py`)
 
 ## Phase 6 — Stock Research Agent ✅ v1 완료
 

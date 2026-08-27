@@ -59,6 +59,96 @@ async def test_mcp_get_base_rate() -> None:
         )
 
 @pytest.mark.anyio
+async def test_mcp_get_exchange_rate() -> None:
+    async with Client(mcp) as client:
+        tools = await client.list_tools()
+
+        tool_names = [tool.name for tool in tools.tools]
+        assert "get_exchange_rate" in tool_names
+
+        start_date = "20260818"
+        end_date = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d")
+
+        result = await client.call_tool(
+            "get_exchange_rate",
+            {
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+        )
+
+        assert result.is_error is False
+        assert result.structured_content is not None
+
+        rows = result.structured_content["result"]
+        assert len(rows) > 0
+
+        print("\n=== ECOS Exchange Rate MCP Response ===")
+        latest = rows[-1]
+        print(f"{latest['time']} | {latest['item_name1']} | {latest['value']} {latest['unit']}")
+
+
+@pytest.mark.anyio
+async def test_mcp_get_kospi_index() -> None:
+    async with Client(mcp) as client:
+        tools = await client.list_tools()
+
+        tool_names = [tool.name for tool in tools.tools]
+        assert "get_kospi_index" in tool_names
+
+        start_date = "20260818"
+        end_date = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d")
+
+        result = await client.call_tool(
+            "get_kospi_index",
+            {
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+        )
+
+        assert result.is_error is False
+        assert result.structured_content is not None
+
+        rows = result.structured_content["result"]
+        assert len(rows) > 0
+
+        print("\n=== ECOS KOSPI Index MCP Response ===")
+        latest = rows[-1]
+        print(f"{latest['time']} | {latest['item_name1']} | {latest['value']} {latest['unit']}")
+
+
+@pytest.mark.anyio
+async def test_mcp_get_kosdaq_index() -> None:
+    async with Client(mcp) as client:
+        tools = await client.list_tools()
+
+        tool_names = [tool.name for tool in tools.tools]
+        assert "get_kosdaq_index" in tool_names
+
+        start_date = "20260818"
+        end_date = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d")
+
+        result = await client.call_tool(
+            "get_kosdaq_index",
+            {
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+        )
+
+        assert result.is_error is False
+        assert result.structured_content is not None
+
+        rows = result.structured_content["result"]
+        assert len(rows) > 0
+
+        print("\n=== ECOS KOSDAQ Index MCP Response ===")
+        latest = rows[-1]
+        print(f"{latest['time']} | {latest['item_name1']} | {latest['value']} {latest['unit']}")
+
+
+@pytest.mark.anyio
 async def test_mcp_get_company_financials() -> None:
     async with Client(mcp) as client:
         tools = await client.list_tools()

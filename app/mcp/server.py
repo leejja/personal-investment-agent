@@ -48,6 +48,48 @@ async def get_base_rate(
 
 
 @mcp.tool()
+async def get_exchange_rate(
+    start_date: str,
+    end_date: str,
+) -> list[dict]:
+    """Get the KRW/USD market average exchange rate for the requested date range."""
+    points = await ecos_tools.get_exchange_rate(
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    return [point.model_dump() for point in points]
+
+
+@mcp.tool()
+async def get_kospi_index(
+    start_date: str,
+    end_date: str,
+) -> list[dict]:
+    """Get the KOSPI index for the requested date range."""
+    points = await ecos_tools.get_kospi_index(
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    return [point.model_dump() for point in points]
+
+
+@mcp.tool()
+async def get_kosdaq_index(
+    start_date: str,
+    end_date: str,
+) -> list[dict]:
+    """Get the KOSDAQ index for the requested date range."""
+    points = await ecos_tools.get_kosdaq_index(
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    return [point.model_dump() for point in points]
+
+
+@mcp.tool()
 async def get_company_financials(
     stock_code: str,
     business_year: str,
