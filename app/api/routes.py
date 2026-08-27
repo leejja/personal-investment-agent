@@ -1,8 +1,12 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
+from app.api.presentation import build_presentation
 from app.models.common import UserRequest
 from app.models.portfolio import InvestorProfile
+from app.models.presentation import PresentationResult
 from app.models.supervisor import SupervisorResult
 from app.supervisor.orchestrator import SupervisorOrchestrator
 
@@ -34,11 +38,28 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.post("/analysis", response_model=SupervisorResult)
+@router.post("/analysis", response_model=None)
 async def analyze(
     payload: AnalysisRequest,
+    # view 생략(기본값 "detail")은 기존 SupervisorResult 응답 shape을 그대로
+    # 유지한다 — 기존 client와 100% 호환. "summary"만 PresentationResult로
+    # 바꿔 반환한다. Literal 타입이라 그 외 값은 FastAPI가 자동으로 422를
+    # 반환한다(both는 v1 범위 밖 — payload를 줄이는 게 목적인데 요약+상세를
+    # 함께 반환하면 원래 문제가 그대로 남는다. 실제 Flutter 사용에서
+    # summary→detail 재요청 latency가 문제가 되면 그때 caching과 함께
+    # 재검토한다).
+    view: Literal["detail", "summary"] = "detail",
     supervisor: SupervisorOrchestrator = Depends(get_supervisor),  # noqa: B008
-) -> SupervisorResult:
+) -> SupervisorResult | PresentationResult:
     user_request = UserRequest(question=payload.question, symbols=payload.symbols)
 
-    return await supervisor.run(user_request, investor_profile=payload.investor_profile)
+    result = await supervisor.run(
+        user_request, investor_profile=payload.investor_profile
+    )
+
+    if view == "summary":
+        # build_presentation()은 순수 함수다 — LLM/외부 API를 호출하지
+        # 않고 이미 계산된 result만 읽어 옮긴다(app/api/presentation.py 참고).
+        return build_presentation(result)
+
+    return result

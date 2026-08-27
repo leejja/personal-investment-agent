@@ -4,7 +4,7 @@
 
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
-> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1 + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1 + REST API v1 (FastAPI, `POST /analysis`) completed  
+> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1 + REST API v1 (FastAPI, `POST /analysis?view=detail|summary`) completed  
 > **Next:** Recommendation Engine (scoring/ranking)
 
 ---
@@ -1333,8 +1333,9 @@ Supervisor
 
 ```text
 app/api/
-├── main.py     # FastAPI 앱, lifespan(의존성 그래프 1회 생성), 예외 핸들러
-└── routes.py   # AnalysisRequest DTO, GET /health, POST /analysis
+├── main.py           # FastAPI 앱, lifespan(의존성 그래프 1회 생성), 예외 핸들러
+├── routes.py         # AnalysisRequest DTO, GET /health, POST /analysis(?view=)
+└── presentation.py   # SupervisorResult → PresentationResult 순수 조립 함수
 ```
 
 ## Endpoint
@@ -1389,6 +1390,41 @@ v1은 `--workers 1`(uvicorn 기본값) 전제다 — 멀티 워커는 워커마�
 ## Response contract
 
 `SupervisorResult`를 별도 FastAPI response model 없이 그대로 반환한다. 모든 Enum이 `str, Enum`이라 JSON에서 평문 문자열로, `Evidence.timestamp`는 ISO 8601 문자열/`null`로, Optional 필드는 `null`로 직렬화되어 Flutter/Web client가 별도 변환 없이 소비할 수 있다.
+
+## Presentation view — `?view=detail|summary`
+
+`portfolio_strategy` 응답은 보유 종목 수만큼의 `StockAnalysis`(각각 investment_thesis/risks/catalysts/financial_history/evidence를 포함)가 전부 들어가 Swagger에서 사람이 읽기엔 지나치게 길다. 반면 이 상세 데이터는 향후 Web/Flutter의 상세 조회나 machine-readable contract로서 가치가 있어 없애고 싶지는 않았다. 그래서 **기존 `SupervisorResult`는 전혀 바꾸지 않고**, 그 위에 사람이 읽기 쉬운 **읽기 전용 파생 뷰**를 얹었다.
+
+```text
+POST /analysis                  (view 생략, 기본값 detail)
+POST /analysis?view=detail      → 기존과 완전히 동일한 SupervisorResult 그대로
+POST /analysis?view=summary     → PresentationResult(요약)
+POST /analysis?view=아무값       → 422 (Literal["detail", "summary"] 자동 검증)
+```
+
+`view=both`는 v1에 넣지 않았다 — 원래 문제 자체가 "응답이 너무 길다"인데 summary+detail을 함께 반환하면 그 문제가 그대로 남기 때문이다. 향후 실제 Flutter 사용에서 summary→detail 재요청 latency가 문제가 되면 그때 caching/storage와 함께 both를 재검토한다.
+
+**핵심 설계 원칙**: `PresentationResult`는 `SupervisorResult`의 순수 파생이다.
+
+- `app/api/presentation.py`의 `build_presentation(result: SupervisorResult) -> PresentationResult`는 **LLM이나 어떤 외부 API/Service도 인자로 받지 않는 순수 함수**다 — 함수 시그니처 자체가 새 판단을 만들 수단을 없앤다.
+- `MarketAnalysis.summary` / `StrategyResult.summary` / `StockAnalysis.investment_thesis` / `PositionRecommendation.rationale` 등 기존에 이미 grounded된 문자열/구조화 필드를 그대로 옮기거나(pass-through) 개수를 세는 것만 한다. 새 자유생성 LLM synthesis는 v1에서 쓰지 않는다 — 기존 5개 Agent가 지켜온 "grounding 없이 생성하지 않는다" 원칙을 우회하는 새 hallucination 표면을 만들지 않기 위함이다.
+- `RecommendationSummary`에는 `target_weight`/`target_price` 같은 "만들면 안 되는" 필드를 아예 선언하지 않는다 — null로 강제하는 기존 패턴보다 한 단계 더 강한 안전장치(실수로도 채울 수 없음)다.
+
+```text
+PresentationResult
+├── intent
+├── headline              # 해당 intent의 기존 summary/thesis pass-through (여러 종목이면 None)
+├── market: MarketSummary | None            # regime/risk_level/summary/confidence
+├── stocks: list[StockSummary]              # STOCK_RESEARCH/CANDIDATE_DISCOVERY에서만 채움
+│   └── symbol/name/price/change_pct/investment_thesis/risks/catalysts/risk_level/confidence
+├── discovery: DiscoverySummary | None       # candidate_count + Candidate 그대로(matched_filters 포함)
+├── portfolio: PortfolioSummary | None       # portfolio_risk/confidence/summary/recommendation_count
+│   └── recommendations: list[RecommendationSummary]
+│       └── symbol/name/action/current_weight/rationale/conditions
+└── skipped                                  # SupervisorResult.skipped 그대로
+```
+
+`portfolio_strategy`의 `PresentationResult.stocks`는 의도적으로 항상 빈 리스트다 — 종목별 상세는 `portfolio.recommendations`(간결한 `RecommendationSummary`)로만 노출하고, raw `StockAnalysis`/`Evidence`/`financial_history`는 `view=detail`에서만 확인하도록 경계를 나눴다. 이렇게 하지 않으면 원래 문제(응답 과다)가 요약 응답에서도 재현된다.
 
 ## 처리 시간 / 아직 넣지 않은 것
 
@@ -2003,9 +2039,19 @@ curl -X POST http://127.0.0.1:8000/analysis \
     "question": "내 포트폴리오 분석해줘",
     "investor_profile": {"risk_tolerance": "medium"}
   }'
+
+# 사람이 읽기 쉬운 요약(portfolio_strategy처럼 응답이 긴 경우 특히 유용)
+curl -X POST "http://127.0.0.1:8000/analysis?view=summary" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "내 포트폴리오 분석해줘",
+    "investor_profile": {"risk_tolerance": "medium"}
+  }'
 ```
 
 `question`은 자연어 그대로 넣으면 되고, 어떤 intent로 처리할지는 Supervisor가 내부에서 알아서 분류한다(endpoint를 따로 고를 필요 없음). `portfolio_strategy`처럼 보유종목 전체를 분석하는 요청은 실제로 몇 분 걸릴 수 있다 — v1은 synchronous라 client가 넉넉한 timeout을 두는 것을 전제로 한다(자세한 내용은 위 REST API 섹션의 "처리 시간" 참고).
+
+`?view=summary`를 붙이면 같은 요청을 동일하게 한 번만 처리하되, 응답을 사람이 읽기 쉬운 `PresentationResult`(위 REST API 섹션의 "Presentation view" 참고)로 받는다. `view`를 생략하면(또는 `view=detail`) 기존과 완전히 동일한 상세 응답을 받는다.
 
 ---
 
@@ -2224,7 +2270,27 @@ test_discovery_orchestrator.py
 ├── 빈 question → 422 (Pydantic 자동 검증, Supervisor 호출 없음)
 ├── RoutingError/FilterIntentError/ReasoningError → 502, SupervisorError/DiscoveryError → 400 (parametrize)
 ├── 미분류 예외(RuntimeError) → 500 + 원문(exception 메시지, 타입명) 응답 바디에 없음
-└── 실제 httpx.HTTPStatusError(URL에 가짜 ECOS API key 포함) → 500 + key가 응답 바디에 없음
+├── 실제 httpx.HTTPStatusError(URL에 가짜 ECOS API key 포함) → 500 + key가 응답 바디에 없음
+├── view 생략 시 응답이 view=detail과 완전히 동일(headline 등 summary 전용 필드 없음) — 기존 client 호환성 확인
+├── view=summary: MARKET_ONLY/STOCK_RESEARCH/CANDIDATE_DISCOVERY/PORTFOLIO_STRATEGY 4종 모두 정상 응답
+├── view=summary 응답에 financial_history/evidence/target_weight/target_price 없음
+├── PORTFOLIO_STRATEGY view=summary에서 stocks=[](종목별 raw StockAnalysis 미노출, recommendations로만 표현)
+└── view=both(v1 미지원) 등 잘못된 값 → 422, Supervisor 호출 없음
+```
+
+`tests/test_presentation.py` — `build_presentation()` 자체를 실제 외부 API/LLM 없이 순수 unit test로 검증한다(HTTP 레이어 없이 함수 직접 호출).
+
+```text
+├── build_presentation 시그니처가 SupervisorResult 하나만 받음(외부 dependency 없음, 동기 함수) — 순수 함수 구조 자체를 확인
+├── MARKET_ONLY: MarketSummary + headline=market_analysis.summary
+├── STOCK_RESEARCH: 단일 종목이면 headline=investment_thesis, 복수 종목이면 headline=None(합성 문장 생성 안 함)
+├── StockSummary 모델에 financial_history/evidence/financials/scenarios 필드 자체가 없음
+├── CANDIDATE_DISCOVERY: candidate_count + Candidate 그대로 pass-through, 후보 stock_analyses도 stocks에 반영
+├── PORTFOLIO_STRATEGY: market summary 포함, stocks=[](의도적으로 비움), portfolio.recommendations 구성
+├── recommendation의 action/rationale/conditions/current_weight가 원본 PositionRecommendation과 정확히 동일(회귀)
+├── strategy_result가 None(부분 실패)이면 portfolio 섹션 자체를 만들지 않음
+├── RecommendationSummary/PortfolioSummary/PresentationResult에 target_weight/target_price/evidence/stock_analyses/portfolio_context 필드 없음
+└── skipped가 모든 intent에서 그대로 pass-through
 ```
 
 ## MCP End-to-End Test
@@ -2234,7 +2300,7 @@ test_discovery_orchestrator.py
 현재 전체 테스트 결과:
 
 ```text
-265 passed
+283 passed
 ```
 
 전체 lint 결과:
@@ -2260,6 +2326,8 @@ Market Agent보다 Stock Research Agent를 먼저 구현했다. Kiwoom/OpenDART�
 다섯 Agent/컴포넌트가 전부 갖춰진 뒤, 이를 실제 client에서 호출할 수 있는 REST API v1(FastAPI)을 얇게 얹었다. 새 투자 로직은 넣지 않고 `SupervisorOrchestrator`를 그대로 core로 재사용하며, `POST /analysis` 단일 endpoint로 Supervisor의 모든 intent를 처리한다(Market/Stock/Portfolio/Discovery별 endpoint를 나누지 않음 — Supervisor가 이미 라우팅을 담당하므로 나누면 판단 주체가 이중화됨). `UserRequest`/`investor_profile` 분리 계약을 지키기 위해 API 전용 `AnalysisRequest` DTO에서만 investor_profile을 받고, Core의 domain model 자체는 바꾸지 않았다. `lifespan`에서 의존성 그래프를 프로세스 생애주기 동안 1회만 생성해 Kiwoom access token 캐싱이 그대로 유효하게 했다. 미분류 예외를 client에 그대로 노출하면 안 되는 이유를 실제 코드로 확인했다 — **ECOS는 API key가 URL 경로에, OpenDART는 쿼리 파라미터에 그대로 포함**되어 있어(`app/services/ecos.py`, `app/services/opendart.py`), 이런 예외의 원문이 그대로 client에 전달되면 credential이 유출된다. 실제 `httpx.HTTPStatusError`(URL에 가짜 key 포함)로 이 정책을 회귀 테스트했다. 502는 이 프로젝트에서 단순 네트워크 게이트웨이 오류가 아니라 routing/filter-intent/reasoning 같은 LLM 기반 dependency 실패를 가리키는 API 정책으로 정의했다.
 
 REST API v1까지 갖춘 뒤, Stock Research Agent의 `investment_thesis`가 최근 한 해 수치만 재진술하고 `risks`에 비교 기준 없는 단일 PER/PBR/거래량 재진술이 섞이는 문제를 개선하기 위해 OpenDART 다년(3개년) 재무 추세를 추가했다. 실제 API 호출로 OpenDART `fnlttSinglAcnt.json`이 사업보고서(`reprt_code=11011`)일 때 하나의 호출로 당기/전기/전전기(`thstrm`/`frmtrm`/`bfefrmtrm`) 3개 연도를 이미 함께 내려준다는 사실을 확인해, **추가 API 호출이나 새 인프라(캐시/DB) 없이** 기존 단일 호출을 재사용하는 방식으로 설계했다. `analysis.py`는 손익 항목의 흑자↔적자 전환이나 두 해 모두 적자인 경우 백분율 대신 "전환/규모 확대·축소"로 표현해 왜곡을 피하고, 3개년 데이터가 모두 있고 방향이 단조로울 때만 "연속 상승/하락" fact를 만든다. 과거 연도 스냅샷(`financial_history`)에는 PER/PBR/ROE를 절대 채우지 않는다 — OpenDART가 과거 시가총액/주가를 제공하지 않아 계산 근거가 없기 때문이다. `risks` 프롬프트 정책은 애초 설계했던 "단일 수치는 risk가 될 수 없다"는 절대 금지 대신, 사용자 검토를 거쳐 "비교 기준 없는 단일 시점 수치만으로 단정하지 않되 다년 추세/전환 fact는 더 강한 근거로 쓸 수 있다"는 완화된 형태로 반영했다 — deterministic fact와 risk 판단을 혼동하지 않는 것이 핵심이다. 실제 삼성전자(005930) E2E로 확인한 결과 `investment_thesis`가 2023→2024→2025 매출/영업이익/순이익 연속 상승과 마진 추이를 실제로 서술했고, `risks` 3건 중 2건이 다년 추세(수익성 변동, 부채비율 상승 추세)를 근거로 했으며(나머지 1건은 PER 단일 수치를 여전히 근거로 삼되 "고평가"가 아니라 "실적 민감도"로 완화된 표현을 사용), catalysts는 여전히 근거 없이 생성되지 않았고 confidence는 MEDIUM 상한을 유지했다(자세한 내용은 dev-log 참고).
+
+OpenDART 다년 재무 추세를 추가한 뒤, 실제 Swagger 사용에서 `portfolio_strategy` 응답이 보유 종목 수만큼의 `StockAnalysis`를 모두 포함해 사람이 읽기 어려울 정도로 길다는 문제가 확인됐다. `SupervisorResult`는 향후 Web/Flutter의 상세 조회와 machine-readable contract로 계속 가치가 있어 바꾸고 싶지 않았기 때문에, 이를 전혀 건드리지 않고 그 위에 읽기 전용 파생 뷰 `PresentationResult`를 얹었다. `app/api/presentation.py`의 `build_presentation()`은 LLM이나 외부 API를 인자로 받지 않는 순수 함수이며, `MarketAnalysis.summary`/`StockAnalysis.investment_thesis`/`StrategyResult.summary`/`PositionRecommendation.rationale` 같은 기존 grounded 필드를 그대로 옮기거나 개수만 세는 것으로 제한했다 — 새 자유생성 LLM synthesis는 이 프로젝트가 지켜온 "grounding 없이 생성하지 않는다" 원칙을 우회하는 새 hallucination 표면이 되므로 v1에서 명시적으로 배제했다. `RecommendationSummary`에는 `target_weight`/`target_price` 같은 필드를 아예 선언하지 않아 null 강제보다 한 단계 더 강한 안전장치로 새 투자 판단 생성을 구조적으로 차단했다. API는 `POST /analysis?view=detail|summary`로 노출했고, `view` 생략 시 기존 `SupervisorResult` 응답과 완전히 동일해 기존 client 호환성을 100% 유지했다(both는 v1에서 의도적으로 제외 — payload를 줄이는 게 목적인데 요약+상세를 함께 반환하면 문제가 그대로 남기 때문). 실제 E2E로 확인한 결과 `stock_research`(삼성전자)는 9,208바이트(detail) → 3,094바이트(summary), `portfolio_strategy`(보유 20여종목)는 211,862바이트(detail) → 5,123바이트(summary)로 줄었다 — 특히 portfolio는 약 97.6% 감소해 원래 문제를 직접 해결했음을 확인했다(자세한 내용은 dev-log 참고).
 
 Recommendation Engine(scoring/ranking 기반 신규 투자 후보 평가)은 프로젝트 공식 범위에 포함되어 있으며 다음 구현 대상이다.
 
@@ -2488,7 +2556,9 @@ Recommendation Engine               ← NEXT (scoring/ranking)
 - [x] 미분류 예외 원문 미노출 (ECOS/OpenDART API key가 URL에 포함되는 문제 회귀 테스트 포함)
 - [x] `GET /health`는 외부 API 미호출
 - [x] 실제 E2E (`GET /health`, `POST /analysis` MARKET_ONLY/STOCK_RESEARCH)
+- [x] `POST /analysis?view=detail|summary` — `app/api/presentation.py`(순수 함수) + `PresentationResult`, 기존 `SupervisorResult`는 완전 불변
 - [ ] DB / login·auth / history / Redis·Celery / background job / WebSocket / multi-worker (v1 범위 밖, 의도적으로 보류)
+- [ ] `view=both`, summary caching (v2+ — Flutter 사용에서 재요청 latency 문제가 관측되면 재검토)
 
 ## Phase 10 — Expansion
 
