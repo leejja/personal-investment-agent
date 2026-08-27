@@ -4,8 +4,8 @@
 
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
-> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1 + Market Agent v1 + Portfolio Strategy Agent v1 (fact-grounded action/portfolio_risk, target_weight 항상 null) completed  
-> **Next:** Recommendation Engine → Supervisor / Router
+> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1 + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 completed  
+> **Next:** Recommendation Engine
 
 ---
 
@@ -131,14 +131,15 @@ Recommendation Engine 역시 외부 API를 직접 호출하기보다 Agent 및 M
                                │ UserRequest
                                ▼
 ┌──────────────────────────────────────────────────────────────┐
-│                    Supervisor / Router                       │
+│                Supervisor / Router — v1 ✓                    │
 │                                                              │
-│  • User Request 분석                                         │
-│  • Agent routing / orchestration                            │
-│  • Recommendation request routing                           │
-│  • Agent 결과 종합                                           │
-│  • Cross-Agent consistency 확인                             │
-│  • Final response composition                               │
+│  • LLM 기반 intent 분류 (closed enum, Python이 강제)          │
+│    market_only / stock_research / portfolio_strategy         │
+│  • 종목명/코드 해석 (OpenDART 정확 일치, 추측 없음)            │
+│  • intent별 고정 실행 단계 (범용 DAG 엔진 없음)                │
+│  • 부분 실패 정책 (root 실패=전체 실패 /                       │
+│    fan-out 개별 실패=skip / sink 실패=부분 결과)               │
+│  • SupervisorResult 결정론적 조립 (LLM synthesis 없음)         │
 └──────────────────────────────┬───────────────────────────────┘
                                │
                                ▼
@@ -715,6 +716,10 @@ strategy.py
 ├── InvestmentAction
 ├── PositionRecommendation
 └── StrategyResult
+
+supervisor.py
+├── Intent
+└── SupervisorResult
 ```
 
 `stock.py`의 `StockPriceSnapshot`/`FinancialSnapshot`은 Kiwoom·OpenDART에서 이미 확보된 데이터를 손실 없이 담기 위해 다음 필드를 포함한다.
@@ -762,23 +767,51 @@ RecommendationResult
 
 # 🤖 Agents
 
-## 1. Supervisor / Router Agent
+## 1. Supervisor / Router — ✅ v1 구현 완료
 
-사용자의 질문과 투자 상황을 분석하고 필요한 Agent와 분석 경로를 선택한다.
+사용자의 질문(`UserRequest`)을 해석해 필요한 Agent를 선택하고, Agent 간 의존성을 올바른 순서로 실행한 뒤 결과를 조립한다. Router(의도 분류)와 Supervisor(실행·조립)를 별도 컴포넌트로 분리하지 않고 하나의 `SupervisorOrchestrator`로 시작했다 — intent가 3종류뿐인 지금 분리는 간접 계층만 늘릴 뿐이라고 판단했다(원칙: 불필요한 abstraction을 미리 만들지 않는다).
 
-주요 역할:
+v1 구현 구조:
 
-- User Request 분석
-- 필요한 Agent 결정
-- Recommendation 요청 판단
-- Agent 호출 순서 결정
-- Agent 결과 수집
-- 분석 결과 간 충돌 확인
-- Cross-Agent consistency 확인
-- 최종 응답 구성
-- 판단 근거 및 데이터 출처 연결
+```text
+app/supervisor/
+├── routing.py       # LLM 기반 intent 분류 (closed enum 검증 + 재시도)
+└── orchestrator.py  # intent별 고정 실행 단계, 부분 실패 처리, SupervisorResult 조립
+```
 
-Supervisor는 개별 시장·종목 분석을 직접 수행하기보다 각 Agent와 Engine을 조정하고 전체 분석 흐름을 관리한다.
+다른 세 Agent와 달리 `analysis.py`가 없다 — routing의 입력은 외부 API 수치가 아니라 사용자의 자연어 자체라, "LLM에게 넘기기 전에 Python이 먼저 정리할 deterministic fact"가 없기 때문이다.
+
+v1이 지원하는 intent 3종(closed enum, LLM이 이 중 하나만 고를 수 있고 Python이 강제):
+
+```text
+market_only          → Market Agent만 실행
+stock_research        → 언급된 종목의 Stock Research Agent만 실행
+portfolio_strategy     → Market + (보유종목 또는 명시 종목) Stock Research
+                          + PortfolioContext + InvestorProfile → Portfolio Strategy Agent
+```
+
+v1의 핵심 정책:
+
+- **LLM은 tool-calling 권한이 없다**: LLM은 `intent` enum과 `mentioned_stock_terms`(원문에 언급된 종목명/코드 텍스트)만 구조화 출력하고, 어떤 Agent를 어떤 순서로 실행할지는 Python의 고정 dispatch가 100% 결정한다. 존재하지 않는 Agent/tool을 LLM이 호출하는 경로 자체가 없다.
+- **종목명 해석도 Python이 결정론적으로 검증한다**: `UserRequest.symbols`가 있으면 그대로 신뢰하고, 없으면 LLM이 추출한 텍스트를 `OpenDartTools.find_stock_code_by_name()`(OpenDART 회사 목록과 정확히 일치할 때만)으로 해석한다. 모호하거나 못 찾으면 추측하지 않고 실패시킨다 — LLM이 종목코드를 자기 지식으로 만들어내는 경로를 원천 차단한다.
+- **PORTFOLIO_STRATEGY 내부에서 explicit symbol 유무로 분기한다**(새 intent 추가 없음): 특정 종목을 명시한 질문(예: "삼성전자 더 사도 될까?")은 그 종목만 Stock Research를 실행하고, 전체 포트폴리오 질문(예: "내 포트폴리오 분석해줘")은 보유종목 전체를 실행한다. 매번 보유종목 전체를 재분석하는 비용을 피하기 위한 정책이다.
+- **부분 실패 정책은 위치에 따라 다르다**: 다른 단계가 의존하는 root(Market Agent, 명시적으로 물어본 종목의 Stock Research)가 실패하면 전체 요청을 실패시킨다(근거 없는 fallback을 만들지 않음). 전체 포트폴리오 fan-out의 개별 종목 실패(예: OpenDART에 재무 데이터가 없는 ETF)는 그 종목만 skip하고 나머지로 계속 진행한다. 아무도 의존하지 않는 sink인 Portfolio Strategy Agent의 reasoning 실패(`ReasoningError`)는 이미 확보한 `MarketAnalysis`/`StockAnalysis[]`/`PortfolioContext`를 그대로 반환하는 부분 결과를 허용한다.
+- **보유종목 fan-out은 동시성을 제한한다**: 종목 수만큼 무제한 병렬 실행하면 Kiwoom OAuth 토큰 발급이 몰려 429가 발생함을 실제 E2E에서 확인해, `Semaphore`로 동시 실행 개수를 제한했다(자세한 내용은 dev-log 참고).
+- **최종 조립은 결정론적이며, 별도 LLM synthesis가 없다**: `SupervisorResult`는 각 Agent가 이미 만든 evidence-grounded 결과 객체를 그대로 담을 뿐, 이를 재해석해 새 문장을 생성하는 추가 LLM 호출을 두지 않는다 — 그 자체가 새로운 fabrication 위험을 재도입하기 때문이다.
+- `InvestorProfile`은 아직 저장소가 없어 `SupervisorOrchestrator.run()`의 별도 파라미터로 호출자가 공급한다(Portfolio Strategy Agent 데모와 동일한 한계).
+
+주요 출력(`app/models/supervisor.py`, 신규):
+
+```text
+SupervisorResult
+├── intent
+├── resolved_symbols[]
+├── market_analysis
+├── stock_analyses[]
+├── portfolio_context
+├── strategy_result
+└── skipped[]
+```
 
 ---
 
@@ -1546,12 +1579,16 @@ personal-investment-agent/
 │   │       ├── reasoning.py        # LLM reasoning (symbol/fact-id/action 3중 grounding)
 │   │       └── orchestrator.py     # StrategyResult 조립 (target_weight=None 강제)
 │   │
+│   ├── supervisor/                 # Supervisor / Router — v1 구현 완료
+│   │   ├── routing.py              # LLM intent 분류 (closed enum 검증 + 재시도)
+│   │   └── orchestrator.py         # intent별 실행, 부분 실패 처리, SupervisorResult 조립
+│   │
 │   ├── recommendation/             # Recommendation Engine (planned)
 │   │   └── engine.py               # Recommendation logic (planned)
 │   │
 │   ├── mcp/
 │   │   ├── ecos_tools.py           # ECOS Domain Tools (기준금리/환율/KOSPI/KOSDAQ)
-│   │   ├── opendart_tools.py       # OpenDART Domain Tools
+│   │   ├── opendart_tools.py       # OpenDART Domain Tools (find_stock_code_by_name 포함)
 │   │   ├── kiwoom_tools.py         # Kiwoom Domain Tools
 │   │   └── server.py               # MCP Server / Tool exposure
 │   │
@@ -1567,7 +1604,8 @@ personal-investment-agent/
 │   │   ├── market.py
 │   │   ├── stock.py
 │   │   ├── portfolio.py
-│   │   └── strategy.py
+│   │   ├── strategy.py
+│   │   └── supervisor.py           # Intent, SupervisorResult
 │   │
 │   ├── config.py
 │   ├── main.py
@@ -1589,6 +1627,8 @@ personal-investment-agent/
 │   ├── test_portfolio_analysis.py
 │   ├── test_portfolio_reasoning.py
 │   ├── test_portfolio_orchestrator.py
+│   ├── test_supervisor_routing.py
+│   ├── test_supervisor_orchestrator.py
 │   └── test_mcp_server.py
 │
 ├── scripts/
@@ -1596,7 +1636,8 @@ personal-investment-agent/
 │   ├── kiwoom_stock_info_demo.py
 │   ├── stock_research_demo.py      # Stock Research Agent v1 실제 E2E 데모
 │   ├── market_agent_demo.py        # Market Agent v1 실제 E2E 데모
-│   └── portfolio_strategy_demo.py  # Portfolio Strategy Agent v1 실제 E2E 데모
+│   ├── portfolio_strategy_demo.py  # Portfolio Strategy Agent v1 실제 E2E 데모
+│   └── supervisor_demo.py          # Supervisor v1 실제 E2E 데모 (4개 시나리오)
 ├── docs/
 │
 ├── .env
@@ -1777,7 +1818,7 @@ ruff check .
 
 # 🧪 Testing
 
-현재 Model Layer, ECOS / OpenDART / Kiwoom integration, LLMService, Stock Research Agent v1, Market Agent v1, Portfolio Strategy Agent v1 전체 경로에 대한 테스트를 구현했다.
+현재 Model Layer, ECOS / OpenDART / Kiwoom integration, LLMService, Stock Research Agent v1, Market Agent v1, Portfolio Strategy Agent v1, Supervisor / Router v1 전체 경로에 대한 테스트를 구현했다.
 
 ```text
 tests/
@@ -1796,6 +1837,8 @@ tests/
 ├── test_portfolio_analysis.py
 ├── test_portfolio_reasoning.py
 ├── test_portfolio_orchestrator.py
+├── test_supervisor_routing.py
+├── test_supervisor_orchestrator.py
 └── test_mcp_server.py
 ```
 
@@ -1909,6 +1952,28 @@ test_portfolio_orchestrator.py
 └── 보유 종목에 BUY 같은 허용되지 않은 action은 재시도 루프 안에서 걸러지고 최종 ReasoningError로 전파
 ```
 
+## Supervisor / Router Tests
+
+```text
+test_supervisor_routing.py
+├── LLM intent 분류(market_only/stock_research/portfolio_strategy) + mentioned_stock_terms 전달 (mock, 실제 OpenAI 미호출)
+├── 구조화 실패 시 재시도
+├── closed enum에 없는 intent 값도 ValidationError로 걸려 재시도됨
+└── 최종 실패 시 RoutingError
+
+test_supervisor_orchestrator.py
+├── 세 Agent orchestrator/KiwoomTools/OpenDartTools 전부 fake 주입
+├── market_only: Market Agent 실행, 실패 시 그대로 전파
+├── stock_research: UserRequest.symbols 우선 신뢰, 없으면 회사명 조회로 해석, 실패 시 SupervisorError/전파
+├── portfolio_strategy(explicit symbol 없음): 보유종목 전체만 Stock Research 실행
+├── portfolio_strategy(explicit symbol 있음): 그 종목만 실행(보유종목 20개가 있어도 재실행 안 함) — PortfolioContext는 전체 유지
+├── explicit symbol의 Stock Research 실패 → 전체 요청 실패(필수 dependency)
+├── 보유종목 fan-out 개별 실패 → skip하고 나머지로 계속 진행
+├── Market Agent 실패(root) → 전체 요청 실패
+├── Portfolio Strategy reasoning 실패(sink, ReasoningError) → market_analysis/stock_analyses/portfolio_context는 그대로 반환하는 부분 결과
+└── investor_profile 없이 portfolio_strategy 요청 시 SupervisorError
+```
+
 ## MCP End-to-End Test
 
 `tests/test_mcp_server.py`에서 실제 MCP Client로 9개 Tool 전체를 실제 외부 API까지 end-to-end로 검증한다.
@@ -1916,7 +1981,7 @@ test_portfolio_orchestrator.py
 현재 전체 테스트 결과:
 
 ```text
-167 passed
+192 passed
 ```
 
 전체 lint 결과:
@@ -1929,11 +1994,13 @@ All checks passed!
 
 # 🚧 Current Status
 
-현재 프로젝트는 **Foundation, Model Layer v1, ECOS / OpenDART / Kiwoom 외부 데이터 Integration을 완료하고, Stock Research Agent v1·Market Agent v1·Portfolio Strategy Agent v1 세 Agent까지 구현·실제 E2E 검증을 마친 단계**다.
+현재 프로젝트는 **Foundation, Model Layer v1, ECOS / OpenDART / Kiwoom 외부 데이터 Integration을 완료하고, Stock Research Agent v1·Market Agent v1·Portfolio Strategy Agent v1·Supervisor / Router v1 네 Agent까지 구현·실제 E2E 검증을 마친 단계**다.
 
 Market Agent보다 Stock Research Agent를 먼저 구현했다. Kiwoom/OpenDART로 이미 종목 단위 데이터(가격, 재무)가 충분히 확보된 반면, 시장 전체 데이터는 기준금리뿐이었기 때문이다. Market Agent v1을 구현하며 ECOS를 환율/KOSPI/KOSDAQ까지 확장했고, regime/risk_level 판단은 Stock Research Agent의 `risk_level`처럼 Python 상수로 고정할 수 없어 대신 fact-id grounding(존재하지 않거나 비어 있는 참조는 검증 실패 → 재시도 → `ReasoningError`)으로 구조적으로 통제했다.
 
 당초 로드맵은 Recommendation Engine을 다음 단계로 잡았지만, Portfolio Strategy Agent v1은 `RecommendationResult` 없이도(v1은 이 입력을 아예 받지 않음, 보유 종목 + 호출자가 명시적으로 분석 요청한 종목만 다룸) 독립적으로 구현 가능하다고 판단해 순서를 바꿔 먼저 구현했다. Portfolio Strategy Agent v1은 Market Agent의 fact-id grounding 패턴을 확장해 **symbol/fact-id/action 3중 grounding**을 적용했고(새 종목 지어내기·보유여부에 안 맞는 action을 구조적으로 차단), `target_weight`는 Stock Research Agent의 `target_price`와 동일한 이유(포지션 사이징 근거 없음)로 v1에서 항상 `null`로 강제한다. 실제 계좌(보유 종목 다수 + ETF 포함) E2E 검증 과정에서 Kiwoom 계좌 종목코드 시장 접두문자(`"A005930"`) 미정규화, OpenDART `"-"` placeholder 금액 파싱 오류라는 두 개의 기존 Service 버그를 추가로 발견해 수정했다(자세한 내용은 dev-log 참고).
+
+세 Agent가 모두 갖춰진 뒤 이를 실제 사용자 요청 하나로 연결하는 Supervisor / Router v1을 구현했다. Router(intent 분류)와 Supervisor(실행·조립)를 분리하지 않고 하나의 `SupervisorOrchestrator`로 시작했고, LLM은 `market_only`/`stock_research`/`portfolio_strategy` 3종 closed enum만 제안하며 어떤 Agent를 호출할지는 Python의 고정 dispatch가 전담해 LLM이 존재하지 않는 Agent/tool을 호출하는 경로 자체를 없앴다. 종목명(예: "삼성전자")은 OpenDART 회사 목록과 정확히 일치할 때만 종목코드로 해석하고, 특정 종목을 명시한 질문은 보유종목 전체가 아니라 그 종목만 재분석해 비용을 아낀다. 부분 실패는 위치별로 다르게 처리한다 — root(Market Agent, 명시적 종목의 Stock Research) 실패는 요청 전체 실패, 보유종목 fan-out의 개별 실패는 skip, sink(Portfolio Strategy reasoning) 실패는 부분 결과 반환. 실제 계좌(보유 28종목) E2E 검증 중 보유종목 전체를 무제한 병렬 실행하면 Kiwoom OAuth 토큰 발급이 몰려 429가 발생하는 문제와, Portfolio Agent의 프롬프트에서 "이름(코드)" 표기가 LLM의 `symbol` 필드 혼동을 유발하는 문제를 발견해 각각 동시성 제한(Semaphore)과 프롬프트 포맷 분리로 수정했다(자세한 내용은 dev-log 참고).
 
 Recommendation Engine은 프로젝트 공식 범위에 포함되어 있으며 다음 구현 대상이다.
 
@@ -1977,10 +2044,16 @@ Portfolio Strategy Agent v1         completed
     └── 실제 E2E Demo (실제 계좌 전체)                       ✓
     │
     ▼
-Recommendation Engine               ← NEXT
+Supervisor / Router v1               completed
+    ├── LLM intent 분류 (closed enum, LLM tool-calling 권한 없음) ✓
+    ├── 종목명 해석 (OpenDART 정확 일치, 추측 없음)               ✓
+    ├── PORTFOLIO_STRATEGY explicit symbol 분기 (비용 절감)      ✓
+    ├── 위치별 부분 실패 정책 (root/fan-out/sink)                 ✓
+    ├── 보유종목 fan-out 동시성 제한 (Kiwoom 429 대응)            ✓
+    └── 실제 E2E Demo (4개 시나리오 전부)                         ✓
     │
     ▼
-Supervisor / Router
+Recommendation Engine               ← NEXT
 ```
 
 ---
@@ -2096,15 +2169,20 @@ Supervisor / Router
 - [x] StrategyResult generation
 - [x] 실제 E2E demo (`scripts/portfolio_strategy_demo.py`, 실제 계좌 전체)
 
-## Phase 9 — Supervisor / Router
+## Phase 9 — Supervisor / Router ✅ v1 완료
 
-- [ ] User Request routing
-- [ ] Agent orchestration
-- [ ] Recommendation request routing
-- [ ] Cross-Agent result aggregation
-- [ ] Cross-Agent consistency validation
-- [ ] Evidence tracking
-- [ ] Final response generation
+> Recommendation Engine(Phase 7)보다 먼저 구현했다 — 세 Agent(Market/Stock Research/Portfolio Strategy)가 모두 갖춰져 실제 사용자 요청 하나를 end-to-end로 연결하는 것을 우선했다.
+
+- [x] User Request routing (LLM 기반 closed enum 분류, Python이 강제)
+- [x] Agent orchestration (intent별 고정 실행 단계)
+- [ ] Recommendation request routing (Recommendation Engine 완성 후 v2)
+- [x] Cross-Agent result aggregation (`SupervisorResult` 결정론적 조립, 별도 LLM synthesis 없음)
+- [ ] Cross-Agent consistency validation (별도 설계 필요, v2+)
+- [x] Evidence tracking (각 Agent의 evidence를 그대로 보존)
+- [x] Final response generation (부분 실패 시에도 확보한 결과는 보존)
+- [x] 종목명 해석 (OpenDART 정확 일치, 추측 없음)
+- [x] 위치별 부분 실패 정책 (root 실패=전체 실패 / fan-out 개별 실패=skip / sink 실패=부분 결과)
+- [x] 실제 E2E demo (`scripts/supervisor_demo.py`, market_only/stock_research/portfolio_strategy 전체·특정종목 4개 시나리오)
 
 ## Phase 10 — Expansion
 

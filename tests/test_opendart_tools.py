@@ -3,7 +3,82 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.mcp.opendart_tools import OpenDartTools
-from app.services.opendart import OpenDartFinancialAccount, OpenDartService
+from app.services.opendart import (
+    OpenDartCorporation,
+    OpenDartFinancialAccount,
+    OpenDartService,
+)
+
+
+def _corporation(**overrides: object) -> OpenDartCorporation:
+    defaults: dict[object, object] = {
+        "corp_code": "00126380",
+        "corp_name": "삼성전자",
+        "corp_eng_name": "SAMSUNG ELECTRONICS CO,.LTD",
+        "stock_code": "005930",
+        "modify_date": "20260101",
+    }
+    defaults.update(overrides)
+    return OpenDartCorporation(**defaults)
+
+
+@pytest.mark.anyio
+async def test_find_stock_code_by_name_returns_exact_match() -> None:
+    service = OpenDartService(api_key="test-key")
+    service.get_corporations = AsyncMock(
+        return_value=[
+            _corporation(),
+            _corporation(
+                corp_code="00164742",
+                corp_name="SK하이닉스",
+                stock_code="000660",
+            ),
+        ]
+    )
+
+    tools = OpenDartTools(service)
+
+    assert await tools.find_stock_code_by_name("삼성전자") == "005930"
+
+
+@pytest.mark.anyio
+async def test_find_stock_code_by_name_returns_none_when_no_match() -> None:
+    service = OpenDartService(api_key="test-key")
+    service.get_corporations = AsyncMock(return_value=[_corporation()])
+
+    tools = OpenDartTools(service)
+
+    assert await tools.find_stock_code_by_name("존재하지않는회사") is None
+
+
+@pytest.mark.anyio
+async def test_find_stock_code_by_name_returns_none_when_ambiguous() -> None:
+    # 회사명이 정확히 같은 항목이 둘 이상이면(비상장 계열사 포함 등) 추측하지
+    # 않고 None을 반환한다.
+    service = OpenDartService(api_key="test-key")
+    service.get_corporations = AsyncMock(
+        return_value=[
+            _corporation(corp_code="A"),
+            _corporation(corp_code="B"),
+        ]
+    )
+
+    tools = OpenDartTools(service)
+
+    assert await tools.find_stock_code_by_name("삼성전자") is None
+
+
+@pytest.mark.anyio
+async def test_find_stock_code_by_name_ignores_entries_without_stock_code() -> None:
+    # 비상장 법인은 stock_code가 None이므로 매칭 대상에서 제외된다.
+    service = OpenDartService(api_key="test-key")
+    service.get_corporations = AsyncMock(
+        return_value=[_corporation(stock_code=None)]
+    )
+
+    tools = OpenDartTools(service)
+
+    assert await tools.find_stock_code_by_name("삼성전자") is None
 
 
 @pytest.mark.anyio

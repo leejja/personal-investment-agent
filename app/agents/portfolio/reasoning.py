@@ -22,6 +22,12 @@ _SYSTEM_PROMPT = (
     "종목에 대해서만 판단하는 도구입니다. 목록에 없는 종목을 하나라도 포함하면 "
     "응답 전체가 무효 처리되고 재시도됩니다.\n"
     "\n"
+    "symbol 필드에는 반드시 종목코드만 정확히 그대로 적으세요(예: "
+    "\"005930\"). 종목명을 적거나, \"삼성전자(005930)\"처럼 이름과 코드를 "
+    "합쳐 적으면 안 됩니다 — 그런 형식도 목록에 없는 값으로 취급되어 "
+    "무효 처리됩니다. \"판단 대상 종목\" 목록의 symbol= 뒤에 오는 값만 "
+    "그대로 사용하세요.\n"
+    "\n"
     "각 fact 앞에는 대괄호로 표시된 고유 id가 있습니다(예: [portfolio_cash_weight]). "
     "recommendations의 각 항목과 portfolio_risk_fact_ids에는 실제로 판단의 "
     "근거로 삼은 fact의 id만 대괄호 없이 정확히 그대로 적으세요. 주어진 목록에 "
@@ -227,13 +233,22 @@ def _format_analysis(analysis: PortfolioDeterministicAnalysisResult) -> str:
         lines.append("확인된 사실 없음.")
 
     lines.append("")
-    lines.append("판단 대상 종목 (이름(symbol): 보유여부, 허용된 action):")
+    lines.append("판단 대상 종목:")
 
     if analysis.symbol_contexts:
         for context in analysis.symbol_contexts:
             held = "보유" if context.current_weight is not None else "미보유"
             allowed = ", ".join(action.value for action in context.allowed_actions)
-            lines.append(f"- {context.name}({context.symbol}): {held}, 허용 action=[{allowed}]")
+            # symbol과 name을 별도 필드로 명확히 분리해 표기한다. "이름(코드)"
+            # 형태로 붙여 쓰면 LLM이 recommendations[].symbol에 "이름(코드)"
+            # 문자열 전체를 그대로 넣는 경우가 실제 E2E에서 관찰됐다(예:
+            # "에코프로비엠(247540)") — symbol grounding이 이를 정확히
+            # 차단하지만, 애초에 그런 혼동이 생기지 않도록 포맷 자체를
+            # 분리한다.
+            lines.append(
+                f"- symbol={context.symbol}, name={context.name}, {held}, "
+                f"허용 action=[{allowed}]"
+            )
     else:
         lines.append("판단 대상 종목 없음.")
 

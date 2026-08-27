@@ -29,6 +29,26 @@ class OpenDartTools:
     def __init__(self, service: OpenDartService) -> None:
         self.service = service
 
+    async def find_stock_code_by_name(self, company_name: str) -> str | None:
+        # Supervisor가 사용자 발화에 등장한 회사명(예: "삼성전자")을 종목코드로
+        # 정확히 일치하는 경우에만 해석하기 위한 조회다. LLM이 종목코드를
+        # 스스로 만들어내지 않도록, 코드 매핑은 항상 이 결정론적 조회를
+        # 거친다. 정확히 하나로 특정되지 않으면(없거나 모호하면) None을
+        # 반환해 호출자가 추측 없이 실패 처리하게 한다.
+        corporations = await self.service.get_corporations()
+
+        matches = [
+            corporation
+            for corporation in corporations
+            if corporation.stock_code is not None
+            and corporation.corp_name == company_name
+        ]
+
+        if len(matches) != 1:
+            return None
+
+        return matches[0].stock_code
+
     async def get_company_financials(
         self,
         stock_code: str,
