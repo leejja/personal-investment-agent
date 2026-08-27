@@ -31,6 +31,7 @@ _SYSTEM_PROMPT = (
     "- PER/PBR/ROE 수치\n"
     "- 부채비율\n"
     "- 현재 가격 위치\n"
+    "- 과거 재무 추세 개선/악화 자체(예: 매출 증가 추세)\n"
     "주어진 facts 안에 이런 미래 지향적 이벤트나 변화의 근거가 없다면 "
     "catalysts는 반드시 빈 리스트 []를 반환하세요. 근거 없이 catalyst를 "
     "만들지 마세요.\n"
@@ -38,6 +39,22 @@ _SYSTEM_PROMPT = (
     "risks의 각 항목도 반드시 주어진 facts 중 하나 이상에 직접 근거해야 "
     "합니다. 근거가 없는 risk는 만들지 말고, 근거가 없으면 빈 리스트를 "
     "반환하세요.\n"
+    "\n"
+    "업종 평균이나 과거 평균 같은 비교 기준 없이 단일 시점 수치만 있는 "
+    "PER, PBR, ROE, 거래량, 부채비율 등은 그 자체만으로 고평가/저평가나 "
+    "위험/안전 여부를 단정하는 근거로 쓰지 마세요. 이런 수치는 사실로만 "
+    "언급하세요. 반면 다년간 재무 추세나 흑자/적자 전환 같은 fact가 함께 "
+    "제공된 경우, 이는 단일 시점 수치보다 더 강한 risk 판단 근거가 될 수 "
+    "있습니다(예: 영업이익률이 여러 해 연속 하락, 순이익이 흑자에서 "
+    "적자로 전환 등). 그런 추세 fact가 있다면 risks 서술에 적극 "
+    "활용하세요. 핵심은 단순 사실(fact)과 위험 판단(risk)을 혼동하지 "
+    "않는 것입니다.\n"
+    "\n"
+    "여러 사업연도의 재무 추세(financial_history)가 함께 제공된 경우, "
+    "investment_thesis는 최근 한 해 수치만 나열하지 말고 이 추세를 "
+    "적극적으로 활용해 서술하세요. 다만 과거 추세가 존재하더라도 이를 "
+    "근거로 미래 실적이나 주가를 단정하지 마세요 — 추세는 어디까지나 "
+    "과거에 있었던 사실로만 서술하세요.\n"
     "\n"
     "v1에는 목표주가를 산정할 근거(밸류에이션 모델, 애널리스트 컨센서스, "
     "backtest 등)가 없습니다. target_price와 probability는 항상 null로 "
@@ -164,6 +181,20 @@ def _format_analysis(analysis: DeterministicAnalysisResult) -> str:
     _append_if_present(lines, "PER", financials.per)
     _append_if_present(lines, "PBR", financials.pbr)
     _append_if_present(lines, "ROE", financials.roe, suffix="%")
+
+    if analysis.financial_history:
+        lines.append("")
+        lines.append("다년 재무 추세(사업보고서 기준, 오래된 연도 → 최신 연도):")
+        for snapshot in analysis.financial_history:
+            year_label = snapshot.business_year or "?"
+            parts = [f"{year_label}년"]
+            if snapshot.revenue is not None:
+                parts.append(f"매출액 {snapshot.revenue:,.0f}원")
+            if snapshot.operating_profit is not None:
+                parts.append(f"영업이익 {snapshot.operating_profit:,.0f}원")
+            if snapshot.net_income is not None:
+                parts.append(f"순이익 {snapshot.net_income:,.0f}원")
+            lines.append("- " + ", ".join(parts))
 
     if analysis.facts:
         lines.append("추가로 확인된 사실:")

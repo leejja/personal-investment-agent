@@ -79,6 +79,7 @@ def _build_orchestrator(
     *,
     stock_info: KiwoomStockInfo | None = None,
     key_financials: KeyFinancials | None = None,
+    financial_history: list[KeyFinancials] | None = None,
     llm_contents: list[str] | None = None,
 ) -> StockResearchOrchestrator:
     kiwoom_tools = KiwoomTools(
@@ -88,10 +89,18 @@ def _build_orchestrator(
         return_value=stock_info if stock_info is not None else _stock_info()
     )
 
+    resolved_key_financials = (
+        key_financials if key_financials is not None else _key_financials()
+    )
+
     opendart_tools = OpenDartTools(service=OpenDartService(api_key="test-key"))
-    opendart_tools.get_key_financials = AsyncMock(
+    # get_key_financials_history()는 항상 최소 1건(당기)을 반환한다는
+    # 전제를 그대로 fake에도 반영한다.
+    opendart_tools.get_key_financials_history = AsyncMock(
         return_value=(
-            key_financials if key_financials is not None else _key_financials()
+            financial_history
+            if financial_history is not None
+            else [resolved_key_financials]
         )
     )
 
@@ -140,7 +149,7 @@ async def test_run_calls_tools_with_expected_arguments() -> None:
     orchestrator.kiwoom_tools.get_stock_info.assert_awaited_once_with(
         stock_code="005930",
     )
-    orchestrator.opendart_tools.get_key_financials.assert_awaited_once_with(
+    orchestrator.opendart_tools.get_key_financials_history.assert_awaited_once_with(
         stock_code="005930",
         business_year="2025",
         report_code="11012",
@@ -225,6 +234,42 @@ async def test_run_evidence_includes_facts_and_tool_sources() -> None:
         and "get_key_financials" in evidence.description
     )
     assert opendart_tool_evidence.reference == "00126380"
+
+
+@pytest.mark.anyio
+async def test_run_wires_financial_history_into_stock_analysis() -> None:
+    current = _key_financials(business_year="2025", revenue=330)
+    previous = _key_financials(business_year="2024", revenue=300)
+    before_previous = _key_financials(business_year="2023", revenue=270)
+
+    orchestrator = _build_orchestrator(
+        key_financials=current,
+        financial_history=[current, previous, before_previous],
+    )
+
+    result = await orchestrator.run(stock_code="005930", business_year="2025")
+
+    assert [snap.business_year for snap in result.financial_history] == [
+        "2023",
+        "2024",
+        "2025",
+    ]
+
+
+@pytest.mark.anyio
+async def test_run_with_single_year_history_leaves_financial_history_empty() -> (
+    None
+):
+    # report_code가 사업보고서가 아니거나 과거 데이터가 없으면
+    # get_key_financials_history()는 당기 1건만 반환한다 — 이 경우
+    # StockAnalysis.financial_history는 빈 리스트여야 한다.
+    orchestrator = _build_orchestrator()
+
+    result = await orchestrator.run(
+        stock_code="005930", business_year="2025", report_code="11012"
+    )
+
+    assert result.financial_history == []
 
 
 @pytest.mark.anyio

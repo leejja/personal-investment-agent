@@ -18,6 +18,7 @@ from app.services.llm import LLMResponse, LLMService
 
 def _analysis_result(
     facts: list[DeterministicFact] | None = None,
+    financial_history: list[FinancialSnapshot] | None = None,
 ) -> DeterministicAnalysisResult:
     return DeterministicAnalysisResult(
         price=StockPriceSnapshot(
@@ -39,6 +40,9 @@ def _analysis_result(
             per=42.89,
             pbr=4.4,
             roe=10.9,
+        ),
+        financial_history=(
+            financial_history if financial_history is not None else []
         ),
         facts=facts if facts is not None else [],
         max_confidence=AnalysisConfidence.MEDIUM,
@@ -360,3 +364,74 @@ async def test_generate_reasoning_accepts_empty_catalysts_with_only_magnitude_fa
 
     assert result.catalysts == []
     llm_service.complete.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_prompt_includes_multi_year_financial_history_in_user_message() -> (
+    None
+):
+    llm_service = _llm_service_returning(_valid_llm_json())
+    analysis = _analysis_result(
+        financial_history=[
+            FinancialSnapshot(business_year="2023", revenue=250000000000),
+            FinancialSnapshot(business_year="2024", revenue=280000000000),
+            FinancialSnapshot(business_year="2025", revenue=300000000000),
+        ]
+    )
+
+    await generate_reasoning(llm_service, analysis)
+
+    _, kwargs = llm_service.complete.call_args
+    user_message = kwargs["messages"][1]["content"]
+
+    assert "다년 재무 추세" in user_message
+    assert "2023년" in user_message
+    assert "2024년" in user_message
+    assert "2025년" in user_message
+    # 오래된 연도가 먼저 나와야 한다.
+    assert user_message.index("2023년") < user_message.index("2025년")
+
+
+@pytest.mark.anyio
+async def test_prompt_omits_multi_year_section_without_history() -> None:
+    llm_service = _llm_service_returning(_valid_llm_json())
+    analysis = _analysis_result()  # financial_history 없음
+
+    await generate_reasoning(llm_service, analysis)
+
+    _, kwargs = llm_service.complete.call_args
+    user_message = kwargs["messages"][1]["content"]
+
+    assert "다년 재무 추세" not in user_message
+
+
+@pytest.mark.anyio
+async def test_prompt_softens_risk_policy_instead_of_absolute_ban() -> None:
+    # 사용자가 명시적으로 요청한 완화된 정책: 단일 수치는 "절대" risk가 될
+    # 수 없다는 절대적 표현이 아니라, 비교 기준 없는 단일 수치만으로
+    # 단정하지 않는다는 표현이어야 하고, 다년 추세 fact는 더 강한 근거로
+    # 쓸 수 있다는 문구가 있어야 한다.
+    llm_service = _llm_service_returning(_valid_llm_json())
+    analysis = _analysis_result()
+
+    await generate_reasoning(llm_service, analysis)
+
+    _, kwargs = llm_service.complete.call_args
+    system_message = kwargs["messages"][0]["content"]
+
+    assert "단일 시점 수치" in system_message
+    assert "더 강한" in system_message
+    assert "혼동하지" in system_message
+
+
+@pytest.mark.anyio
+async def test_prompt_forbids_predicting_future_from_past_trend() -> None:
+    llm_service = _llm_service_returning(_valid_llm_json())
+    analysis = _analysis_result()
+
+    await generate_reasoning(llm_service, analysis)
+
+    _, kwargs = llm_service.complete.call_args
+    system_message = kwargs["messages"][0]["content"]
+
+    assert "미래 실적이나 주가를 단정하지" in system_message

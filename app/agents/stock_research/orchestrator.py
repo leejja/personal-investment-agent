@@ -34,13 +34,20 @@ class StockResearchOrchestrator:
             stock_code=stock_code,
         )
 
-        key_financials = await self.opendart_tools.get_key_financials(
+        # get_key_financials_history()는 OpenDART API를 한 번만 호출하고,
+        # 항상 최소 1건(당기)을 포함한다. 사업보고서(report_code="11011")일
+        # 때만 전기/전전기가 추가된다 — 그 외에는 get_key_financials()를
+        # 따로 부를 때와 동일하게 당기 1건만 온다(추가 API 호출 없음).
+        financial_history = await self.opendart_tools.get_key_financials_history(
             stock_code=stock_code,
             business_year=business_year,
             report_code=report_code,
         )
+        key_financials = financial_history[0]
 
-        analysis_result = analysis.analyze(stock_info, key_financials)
+        analysis_result = analysis.analyze(
+            stock_info, key_financials, financial_history
+        )
 
         # ReasoningError는 여기서 삼키지 않고 그대로 전파한다.
         # 근거 없는 fallback StockAnalysis를 임의로 만들지 않는다.
@@ -59,6 +66,7 @@ class StockResearchOrchestrator:
             name=analysis_result.price.name,
             price=analysis_result.price,
             financials=analysis_result.financials,
+            financial_history=analysis_result.financial_history,
             investment_thesis=reasoning_result.investment_thesis,
             catalysts=reasoning_result.catalysts,
             risks=reasoning_result.risks,
@@ -102,7 +110,7 @@ def _build_evidence(
     evidence.append(
         Evidence(
             source="OpenDART",
-            description="OpenDART 핵심 재무정보 조회 (get_key_financials)",
+            description="OpenDART 핵심 재무정보 조회 (get_key_financials_history)",
             reference=key_financials.corp_code,
         )
     )

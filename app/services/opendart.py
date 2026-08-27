@@ -31,6 +31,12 @@ class OpenDartFinancialAccount(BaseModel):
     previous_term_name: str
     previous_term_date: str
     previous_term_amount: int | None
+    # 사업보고서(reprt_code=11011)는 실제로 당기/전기 외에 전전기(2년 전)
+    # 컬럼까지 함께 내려준다(bfefrmtrm_*, 실제 API 호출로 확인). 회사에 따라
+    # 이 컬럼 자체가 없을 수 있어(예: 상장 이력이 짧은 회사) Optional로 둔다.
+    before_previous_term_name: str | None = None
+    before_previous_term_date: str | None = None
+    before_previous_term_amount: int | None = None
     currency: str
 
 
@@ -158,6 +164,9 @@ class OpenDartService:
             previous_term_name=row["frmtrm_nm"],
             previous_term_date=row["frmtrm_dt"],
             previous_term_amount=self._parse_amount(row.get("frmtrm_amount")),
+            before_previous_term_name=row.get("bfefrmtrm_nm"),
+            before_previous_term_date=row.get("bfefrmtrm_dt"),
+            before_previous_term_amount=self._parse_amount(row.get("bfefrmtrm_amount")),
             currency=row["currency"],
         )
 

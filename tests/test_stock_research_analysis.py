@@ -262,6 +262,195 @@ def test_raw_value_facts_skip_missing_financial_fields() -> None:
     assert "현재가는 281,500원" in descriptions
 
 
+def test_analyze_without_financial_history_returns_empty_list() -> None:
+    result = analyze(_stock_info(), _key_financials())
+
+    assert result.financial_history == []
+
+
+def test_analyze_with_single_year_history_returns_empty_list() -> None:
+    # history 길이가 1(당기만 있음)이면 추세라 부를 근거가 없으므로 빈
+    # 리스트로 둔다.
+    result = analyze(_stock_info(), _key_financials(), [_key_financials()])
+
+    assert result.financial_history == []
+
+
+def test_analyze_builds_financial_history_oldest_first() -> None:
+    current = _key_financials(
+        business_year="2025", revenue=300, operating_profit=40, net_income=35
+    )
+    previous = _key_financials(
+        business_year="2024", revenue=280, operating_profit=30, net_income=25
+    )
+    before_previous = _key_financials(
+        business_year="2023", revenue=250, operating_profit=20, net_income=15
+    )
+
+    result = analyze(
+        _stock_info(), current, [current, previous, before_previous]
+    )
+
+    assert [snap.business_year for snap in result.financial_history] == [
+        "2023",
+        "2024",
+        "2025",
+    ]
+    assert result.financial_history[-1].revenue == 300.0
+    assert result.financial_history[0].revenue == 250.0
+
+
+def test_financial_history_snapshots_never_carry_historical_valuation_ratios() -> (
+    None
+):
+    # 과거 연도 스냅샷에는 PER/PBR/ROE를 만들어내지 않는다 — OpenDART는
+    # 과거 시점의 시가총액/주가를 제공하지 않으므로 계산 근거가 없다.
+    current = _key_financials(business_year="2025")
+    previous = _key_financials(business_year="2024")
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    for snapshot in result.financial_history:
+        assert snapshot.per is None
+        assert snapshot.pbr is None
+        assert snapshot.roe is None
+
+
+def test_trend_facts_include_normal_yoy_percentage() -> None:
+    current = _key_financials(
+        business_year="2025", revenue=330, operating_profit=44, net_income=45
+    )
+    previous = _key_financials(
+        business_year="2024", revenue=300, operating_profit=40, net_income=40
+    )
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    descriptions = [fact.description for fact in result.facts]
+    assert "매출액는 2024년 대비 2025년 +10.0% 변동" in descriptions
+
+
+def test_trend_facts_omit_yoy_when_past_value_is_zero() -> None:
+    current = _key_financials(business_year="2025", net_income=10)
+    previous = _key_financials(business_year="2024", net_income=0)
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    descriptions = [fact.description for fact in result.facts]
+    assert not any(
+        "순이익" in d and ("변동" in d or "전환" in d or "규모" in d)
+        for d in descriptions
+    )
+
+
+def test_trend_facts_mark_loss_to_profit_transition() -> None:
+    current = _key_financials(business_year="2025", net_income=50)
+    previous = _key_financials(business_year="2024", net_income=-30)
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    descriptions = [fact.description for fact in result.facts]
+    assert "순이익는 2024년 적자에서 2025년 흑자로 전환" in descriptions
+
+
+def test_trend_facts_mark_profit_to_loss_transition() -> None:
+    current = _key_financials(business_year="2025", net_income=-20)
+    previous = _key_financials(business_year="2024", net_income=40)
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    descriptions = [fact.description for fact in result.facts]
+    assert "순이익는 2024년 흑자에서 2025년 적자로 전환" in descriptions
+
+
+def test_trend_facts_describe_loss_widening_without_percentage_distortion() -> None:
+    current = _key_financials(business_year="2025", net_income=-60)
+    previous = _key_financials(business_year="2024", net_income=-30)
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    descriptions = [fact.description for fact in result.facts]
+    assert "순이익는 2024년 대비 2025년 적자 규모가 확대" in descriptions
+    # 부호가 둘 다 음수인 경우 왜곡된 백분율 변동 표현이 나오면 안 된다.
+    assert not any(
+        d.startswith("순이익는 2024년 대비 2025년") and "%" in d
+        for d in descriptions
+    )
+
+
+def test_trend_facts_describe_loss_narrowing() -> None:
+    current = _key_financials(business_year="2025", net_income=-10)
+    previous = _key_financials(business_year="2024", net_income=-30)
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    descriptions = [fact.description for fact in result.facts]
+    assert "순이익는 2024년 대비 2025년 적자 규모가 축소" in descriptions
+
+
+def test_trend_facts_include_margin_and_debt_ratio_per_year() -> None:
+    current = _key_financials(
+        business_year="2025",
+        revenue=300,
+        operating_profit=30,
+        net_income=15,
+        total_liabilities=100,
+        total_equity=200,
+    )
+    previous = _key_financials(
+        business_year="2024",
+        revenue=250,
+        operating_profit=20,
+        net_income=10,
+        total_liabilities=90,
+        total_equity=180,
+    )
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    descriptions = [fact.description for fact in result.facts]
+    assert "2025년 영업이익률은 약 10.0%" in descriptions
+    assert "2025년 순이익률은 약 5.0%" in descriptions
+    assert "2025년 부채비율은 약 50.0%" in descriptions
+    assert "2024년 영업이익률은 약 8.0%" in descriptions
+
+
+def test_trend_facts_mark_three_year_consecutive_increase() -> None:
+    current = _key_financials(business_year="2025", revenue=330)
+    previous = _key_financials(business_year="2024", revenue=300)
+    before_previous = _key_financials(business_year="2023", revenue=270)
+
+    result = analyze(
+        _stock_info(), current, [current, previous, before_previous]
+    )
+
+    descriptions = [fact.description for fact in result.facts]
+    assert "매출액는 최근 3개 연도 연속 상승" in descriptions
+
+
+def test_trend_facts_skip_direction_fact_when_only_two_years() -> None:
+    current = _key_financials(business_year="2025", revenue=330)
+    previous = _key_financials(business_year="2024", revenue=300)
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    descriptions = [fact.description for fact in result.facts]
+    assert not any("연속" in d for d in descriptions)
+
+
+def test_trend_facts_skip_direction_fact_when_not_monotonic() -> None:
+    current = _key_financials(business_year="2025", revenue=300)
+    previous = _key_financials(business_year="2024", revenue=330)
+    before_previous = _key_financials(business_year="2023", revenue=270)
+
+    result = analyze(
+        _stock_info(), current, [current, previous, before_previous]
+    )
+
+    descriptions = [fact.description for fact in result.facts]
+    assert not any("매출액는 최근" in d and "연속" in d for d in descriptions)
+
+
 def test_raw_value_facts_contain_no_evaluative_language() -> None:
     result = analyze(_stock_info(), _key_financials())
 

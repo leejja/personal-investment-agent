@@ -66,6 +66,21 @@ async def main() -> None:
         _print_if_present("ROE", f.roe)
         print()
 
+    if result.financial_history:
+        print("--- Financial History (오래된 연도 → 최신 연도) ---")
+        for snapshot in result.financial_history:
+            print(f"[{snapshot.business_year}]")
+            _print_if_present("  매출액", snapshot.revenue)
+            _print_if_present("  영업이익", snapshot.operating_profit)
+            _print_if_present("  순이익", snapshot.net_income)
+            _print_if_present("  자산총계", snapshot.total_assets)
+            _print_if_present("  부채총계", snapshot.total_liabilities)
+            _print_if_present("  자본총계", snapshot.total_equity)
+            _print_if_present("  PER", snapshot.per)
+            _print_if_present("  PBR", snapshot.pbr)
+            _print_if_present("  ROE", snapshot.roe)
+        print()
+
     print("--- Investment Thesis ---")
     print(result.investment_thesis)
     print()

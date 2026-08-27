@@ -882,7 +882,7 @@ app/agents/stock_research/
 v1이 실제로 사용하는 데이터:
 
 - Kiwoom `get_stock_info` — 현재가, 등락률, 거래량, PER/PBR/ROE, 250거래일 고/저
-- OpenDART `get_key_financials` — 매출/영업이익/순이익, 자산/부채/자본총계
+- OpenDART `get_key_financials_history` — 매출/영업이익/순이익, 자산/부채/자본총계를 **최근 3개 사업연도**(당기·전기·전전기) 분량으로 조회
 
 `PortfolioContext`는 의도적으로 사용하지 않는다. 종목 자체의 분석(재사용 가능)과 사용자별 투자 판단(Portfolio Strategy Agent의 역할)을 분리하기 위함이다.
 
@@ -891,10 +891,20 @@ v1의 핵심 정책:
 - **Evidence-grounded**: LLM은 `analysis.py`가 만든 deterministic facts만 근거로 사용하고, 뉴스·공시·산업 동향 등 제공되지 않은 정보를 추측하지 않는다.
 - **평가 없는 raw fact**: PER/PBR/ROE 등 비교 기준이 없는 지표는 수치 사실만 제공하고 "고평가/저평가/양호" 같은 판단을 하지 않는다.
 - **target_price / probability 미생성**: v1에는 목표주가 산정 근거가 없으므로 항상 `null`이며, Python이 파싱 후 구조적으로 강제한다.
-- **catalyst 엄격 정의**: 향후 주가·실적·기업가치에 영향을 줄 구체적 이벤트만 catalyst로 인정하고, 단순 재무 규모 재진술은 catalyst로 취급하지 않는다.
+- **catalyst 엄격 정의**: 향후 주가·실적·기업가치에 영향을 줄 구체적 이벤트만 catalyst로 인정하고, 단순 재무 규모 재진술이나 과거 재무 추세 개선 자체도 catalyst로 취급하지 않는다.
 - **risk_level 고정(MEDIUM)**: 단일연도 재무 데이터만으로는 LOW/HIGH를 판단할 근거가 부족해 v1은 중립값을 사용하며, LLM은 이 값을 변경할 수 없다.
-- **confidence 상한**: `analysis.py`가 데이터 완전성에 따라 계산한 상한과 LLM이 제안한 값 중 더 낮은 쪽을 최종 `confidence`로 사용한다(v1은 HIGH를 반환하지 않는다).
+- **confidence 상한**: `analysis.py`가 데이터 완전성에 따라 계산한 상한과 LLM이 제안한 값 중 더 낮은 쪽을 최종 `confidence`로 사용한다(v1은 다년 추세 데이터가 있어도 HIGH를 반환하지 않는다).
 - `catalysts` / `risks` / `scenarios`는 근거가 없으면 빈 리스트를 정상 출력으로 허용한다.
+
+**다년 재무 추세(financial_history)**:
+
+- OpenDART `fnlttSinglAcnt.json`은 사업보고서(`report_code="11011"`)일 때 하나의 호출로 당기/전기/전전기(`thstrm`/`frmtrm`/`bfefrmtrm`) 3개 연도를 함께 내려준다는 점을 실제 API 호출로 확인했고, 이를 그대로 재사용한다 — **추가 API 호출 없이** 3개년 추세를 얻는다.
+- 분기/반기 보고서(`report_code != "11011"`)에서는 전기/전전기를 추세로 섞지 않고 당기 1건만 사용한다.
+- `analysis.py`는 매출/영업이익/순이익의 전년 대비 변동을 계산하되, 손익 부호가 바뀌는 경우(흑자→적자, 적자→흑자)나 둘 다 적자인 경우 백분율이 아니라 "흑자전환/적자전환/적자 규모 확대·축소"로 표현해 왜곡을 피한다. 전년 값이 0이면 변동률 자체를 생략한다.
+- 연도별 영업이익률·순이익률·부채비율과, 3개 연도 데이터가 모두 있고 방향이 단조로울 때만 "최근 3개 연도 연속 상승/하락" fact를 만든다 — 이 모든 값은 결정론적으로 계산되며 "좋다/나쁘다" 같은 평가는 포함하지 않는다.
+- `financial_history`의 각 연도 스냅샷은 PER/PBR/ROE를 절대 채우지 않는다 — Kiwoom은 현재 시점 valuation만 제공하고 OpenDART는 과거 시가총액/주가를 주지 않으므로 과거 밸류에이션 지표는 계산 근거가 없다. (`financials`, 즉 최신 연도 스냅샷의 PER/PBR/ROE는 기존과 동일하게 Kiwoom 현재가 기준으로 채워진다.)
+- reasoning 프롬프트는 다년 추세가 있으면 `investment_thesis`가 이를 적극 활용하도록 지시하되, 과거 추세만으로 미래 실적·주가를 단정하지 않도록 명시한다.
+- `risks` 정책은 절대적 금지가 아니라 완화된 형태로 규정한다: 비교 기준(업종 평균 등) 없는 단일 시점 수치(PER/PBR/ROE/거래량/부채비율 등)만으로 고평가/저평가·위험/안전을 단정하지 않되, 다년 추세나 흑자/적자 전환 같은 fact는 더 강한 risk 근거로 사용할 수 있다. 핵심은 deterministic fact와 risk 판단을 혼동하지 않는 것이다.
 
 주요 출력:
 
@@ -903,7 +913,8 @@ StockAnalysis
 ├── symbol
 ├── name
 ├── price
-├── financials
+├── financials           # 최신 연도 스냅샷(PER/PBR/ROE 포함)
+├── financial_history[]  # 오래된 연도 → 최신 연도, 사업보고서 기준 최대 3개년(PER/PBR/ROE는 항상 null)
 ├── investment_thesis
 ├── catalysts[]
 ├── risks[]
@@ -1954,15 +1965,47 @@ REST API v1 로컬 실행(WSL):
 uvicorn app.api.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
+`--reload`는 개발 중 코드 수정 시 자동 재시작(운영 시에는 뺀다). `--host 127.0.0.1`(기본값)로 로컬 머신 밖에서 접근할 수 없게 하는 것이 v1의 실질적인 보안 경계다 — 아직 인증 시스템은 없다.
+
+브라우저에서 바로 써보기 — FastAPI가 자동으로 만들어주는 API 문서 UI로 요청을 직접 날려볼 수 있다:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+`POST /analysis`를 펼쳐 "Try it out" → question 입력 → "Execute"만 누르면 된다(WSL이면 Windows 브라우저에서 `localhost:8000/docs`로 접속).
+
+curl로 각 intent 확인:
+
 ```bash
+# health check (외부 API 미호출)
 curl http://127.0.0.1:8000/health
 
+# 시장 상황 (market_only)
 curl -X POST http://127.0.0.1:8000/analysis \
   -H "Content-Type: application/json" \
   -d '{"question": "요즘 시장 상황 어때?"}'
+
+# 특정 종목 (stock_research)
+curl -X POST http://127.0.0.1:8000/analysis \
+  -H "Content-Type: application/json" \
+  -d '{"question": "삼성전자 어때?"}'
+
+# 조건 기반 후보 탐색 (candidate_discovery)
+curl -X POST http://127.0.0.1:8000/analysis \
+  -H "Content-Type: application/json" \
+  -d '{"question": "대형 통신 종목 후보 찾아줘"}'
+
+# 개인화 판단 (portfolio_strategy) — investor_profile 필요
+curl -X POST http://127.0.0.1:8000/analysis \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "내 포트폴리오 분석해줘",
+    "investor_profile": {"risk_tolerance": "medium"}
+  }'
 ```
 
-`--host 127.0.0.1`(기본값)로 로컬 머신 밖에서 접근할 수 없게 하는 것이 v1의 실질적인 보안 경계다 — 아직 인증 시스템은 없다.
+`question`은 자연어 그대로 넣으면 되고, 어떤 intent로 처리할지는 Supervisor가 내부에서 알아서 분류한다(endpoint를 따로 고를 필요 없음). `portfolio_strategy`처럼 보유종목 전체를 분석하는 요청은 실제로 몇 분 걸릴 수 있다 — v1은 synchronous라 client가 넉넉한 timeout을 두는 것을 전제로 한다(자세한 내용은 위 REST API 섹션의 "처리 시간" 참고).
 
 ---
 
@@ -2054,21 +2097,42 @@ test_stock_research_analysis.py
 ├── StockPriceSnapshot / FinancialSnapshot 매핑 손실 없음
 ├── deterministic facts (250거래일 가격 위치, 부채비율, raw 수치 10종)
 ├── confidence 상한 (핵심 재무 완전 → MEDIUM, 불완전 → LOW, HIGH 없음)
-└── risk_level 고정 (v1은 항상 MEDIUM)
+├── risk_level 고정 (v1은 항상 MEDIUM)
+├── financial_history: 2개 연도 미만이면 빈 리스트, 3개 연도면 오래된 순으로 정렬
+├── financial_history 스냅샷은 PER/PBR/ROE를 절대 생성하지 않음
+├── YoY: 정상 흑자 구간 백분율, 전년 0이면 생략, 흑자↔적자 전환은 "전환" 문구, 둘 다 적자면 "규모 확대/축소" 문구(백분율 왜곡 없음)
+├── 연도별 영업이익률/순이익률/부채비율 fact
+└── "최근 3개 연도 연속 상승/하락"은 3개년이 모두 있고 단조로울 때만 생성
 
 test_stock_research_reasoning.py
 ├── LLM 응답 구조화 검증 + 최소 재시도 (mock, 실제 OpenAI 미호출)
 ├── target_price / probability는 항상 null로 강제
 ├── scenarios=[] 정상 허용
-├── catalyst 엄격 정의(정적 규모 재진술은 catalyst 아님) 프롬프트 반영
-└── catalysts / risks 빈 리스트 허용
+├── catalyst 엄격 정의(정적 규모 재진술·과거 추세 개선 자체는 catalyst 아님) 프롬프트 반영
+├── catalysts / risks 빈 리스트 허용
+├── 다년 재무 추세가 있으면 프롬프트 user message에 오래된 연도 → 최신 연도 순으로 포함, 없으면 섹션 자체 생략
+├── risks 정책이 절대 금지가 아니라 완화된 형태(단일 시점 수치 단정 금지 + 다년 추세는 더 강한 근거)로 반영됨
+└── "과거 추세로 미래 실적/주가 단정 금지" 프롬프트 반영
 
 test_stock_research_orchestrator.py
 ├── KiwoomTools / OpenDartTools / LLMService 전부 mock/fake 주입
 ├── confidence = min(LLM 제안값, analysis 상한)
 ├── risk_level은 analysis 결과만 사용 (LLM이 변경 불가)
-├── evidence는 deterministic facts + 실제 tool 호출 출처로만 구성
+├── evidence는 deterministic facts + 실제 tool 호출 출처로만 구성(get_key_financials_history)
+├── financial_history가 StockAnalysis에 오래된 순으로 그대로 반영됨
+├── history가 1건(당기만)이면 StockAnalysis.financial_history는 빈 리스트
 └── ReasoningError 발생 시 fallback 없이 예외 전파
+
+test_opendart_service.py (추가분)
+├── bfefrmtrm_* 필드가 있으면 before_previous_term_* 로 정상 파싱
+└── bfefrmtrm_* 필드가 응답에 없으면(분기/반기 보고서 등) None으로 안전 처리
+
+test_opendart_tools.py (추가분)
+├── _year_label_for_term: business_year 기준 -1/-2년 계산
+├── get_key_financials_history: 사업보고서(11011)는 3개 연도, 그 외 보고서는 당기 1건만
+├── OpenDART API는 회사당 1회만 호출됨(추가 API 호출 없음)
+├── 전전기 데이터가 전혀 없으면 해당 연도는 결과에서 생략
+└── 당기는 값이 전부 비어 있어도 항상 포함(get_key_financials()와 동일 보장)
 ```
 
 ## Portfolio Strategy Agent Tests
@@ -2170,7 +2234,7 @@ test_discovery_orchestrator.py
 현재 전체 테스트 결과:
 
 ```text
-238 passed
+265 passed
 ```
 
 전체 lint 결과:
@@ -2194,6 +2258,8 @@ Market Agent보다 Stock Research Agent를 먼저 구현했다. Kiwoom/OpenDART�
 "지금 살 만한 종목 찾아줘" 같은 요청을 처리하려면 Stock Research Agent의 분석 대상을 스스로 찾는 Candidate Discovery가 필요했다. 처음에는 현재 데이터로 안전한 Stock Universe를 구성할 수 없다고 판단해 보류했으나, Kiwoom 공식 REST API를 실측 조사한 결과 `ka10099`(종목정보 리스트)로 KOSPI/KOSDAQ 전체 종목과 종목코드/종목명/시장구분/업종명/규모구분/상장주식수를 단일 호출로 확보할 수 있음을 확인해 v1을 구현했다. Candidate Discovery는 Agent가 아니라 Supervisor와 같은 얇은 구조(LLM 조건 구조화 + deterministic 필터 실행)로 만들었다 — 투자 판단(reasoning) 단계가 전혀 없기 때문이다. 실제 업종명(`upName`)이 "반도체" 같은 세분화된 업종이 아니라 27개의 굵직한 KRX 대분류라는 것도 실측으로 확인했고, 매칭되는 업종이 없으면 근거 없이 대체하지 않고 실패시킨다. 후보가 `MAX_STOCK_RESEARCH_FANOUT`(투자 threshold가 아닌 fan-out 실행/비용 안전 한도)을 초과하면 momentum 등 암묵적 기준으로 일부를 골라내지 않고 Stock Research를 0건 실행한 뒤 조건을 더 좁혀달라고 요청한다. `exclude_owned`(보유종목 제외 여부)는 Portfolio Strategy 경로를 탄다는 사실과 무관하게 사용자 문장 자체("내 포트폴리오에 없는" 등)에서만 grounding하도록 설계해, 실제 E2E로 같은 종목 집합에 대해 표현에 따라 이 값이 정확히 갈리는 것을 확인했다.
 
 다섯 Agent/컴포넌트가 전부 갖춰진 뒤, 이를 실제 client에서 호출할 수 있는 REST API v1(FastAPI)을 얇게 얹었다. 새 투자 로직은 넣지 않고 `SupervisorOrchestrator`를 그대로 core로 재사용하며, `POST /analysis` 단일 endpoint로 Supervisor의 모든 intent를 처리한다(Market/Stock/Portfolio/Discovery별 endpoint를 나누지 않음 — Supervisor가 이미 라우팅을 담당하므로 나누면 판단 주체가 이중화됨). `UserRequest`/`investor_profile` 분리 계약을 지키기 위해 API 전용 `AnalysisRequest` DTO에서만 investor_profile을 받고, Core의 domain model 자체는 바꾸지 않았다. `lifespan`에서 의존성 그래프를 프로세스 생애주기 동안 1회만 생성해 Kiwoom access token 캐싱이 그대로 유효하게 했다. 미분류 예외를 client에 그대로 노출하면 안 되는 이유를 실제 코드로 확인했다 — **ECOS는 API key가 URL 경로에, OpenDART는 쿼리 파라미터에 그대로 포함**되어 있어(`app/services/ecos.py`, `app/services/opendart.py`), 이런 예외의 원문이 그대로 client에 전달되면 credential이 유출된다. 실제 `httpx.HTTPStatusError`(URL에 가짜 key 포함)로 이 정책을 회귀 테스트했다. 502는 이 프로젝트에서 단순 네트워크 게이트웨이 오류가 아니라 routing/filter-intent/reasoning 같은 LLM 기반 dependency 실패를 가리키는 API 정책으로 정의했다.
+
+REST API v1까지 갖춘 뒤, Stock Research Agent의 `investment_thesis`가 최근 한 해 수치만 재진술하고 `risks`에 비교 기준 없는 단일 PER/PBR/거래량 재진술이 섞이는 문제를 개선하기 위해 OpenDART 다년(3개년) 재무 추세를 추가했다. 실제 API 호출로 OpenDART `fnlttSinglAcnt.json`이 사업보고서(`reprt_code=11011`)일 때 하나의 호출로 당기/전기/전전기(`thstrm`/`frmtrm`/`bfefrmtrm`) 3개 연도를 이미 함께 내려준다는 사실을 확인해, **추가 API 호출이나 새 인프라(캐시/DB) 없이** 기존 단일 호출을 재사용하는 방식으로 설계했다. `analysis.py`는 손익 항목의 흑자↔적자 전환이나 두 해 모두 적자인 경우 백분율 대신 "전환/규모 확대·축소"로 표현해 왜곡을 피하고, 3개년 데이터가 모두 있고 방향이 단조로울 때만 "연속 상승/하락" fact를 만든다. 과거 연도 스냅샷(`financial_history`)에는 PER/PBR/ROE를 절대 채우지 않는다 — OpenDART가 과거 시가총액/주가를 제공하지 않아 계산 근거가 없기 때문이다. `risks` 프롬프트 정책은 애초 설계했던 "단일 수치는 risk가 될 수 없다"는 절대 금지 대신, 사용자 검토를 거쳐 "비교 기준 없는 단일 시점 수치만으로 단정하지 않되 다년 추세/전환 fact는 더 강한 근거로 쓸 수 있다"는 완화된 형태로 반영했다 — deterministic fact와 risk 판단을 혼동하지 않는 것이 핵심이다. 실제 삼성전자(005930) E2E로 확인한 결과 `investment_thesis`가 2023→2024→2025 매출/영업이익/순이익 연속 상승과 마진 추이를 실제로 서술했고, `risks` 3건 중 2건이 다년 추세(수익성 변동, 부채비율 상승 추세)를 근거로 했으며(나머지 1건은 PER 단일 수치를 여전히 근거로 삼되 "고평가"가 아니라 "실적 민감도"로 완화된 표현을 사용), catalysts는 여전히 근거 없이 생성되지 않았고 confidence는 MEDIUM 상한을 유지했다(자세한 내용은 dev-log 참고).
 
 Recommendation Engine(scoring/ranking 기반 신규 투자 후보 평가)은 프로젝트 공식 범위에 포함되어 있으며 다음 구현 대상이다.
 
@@ -2344,6 +2410,7 @@ Recommendation Engine               ← NEXT (scoring/ranking)
 - [x] Bull / Base / Bear scenarios (근거 없으면 빈 배열 허용)
 - [x] StockAnalysis generation
 - [x] 실제 E2E demo (`scripts/stock_research_demo.py`)
+- [x] OpenDART 다년(최근 3개 사업연도) 재무 추세 (`financial_history`) — 기존 단일 API 호출 재사용, 추가 호출 없음
 
 ## Phase 7 — Recommendation Engine (scoring/ranking)
 

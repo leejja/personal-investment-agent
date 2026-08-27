@@ -225,6 +225,130 @@ async def test_get_financial_accounts(
 
 
 @pytest.mark.anyio
+async def test_get_financial_accounts_parses_before_previous_term(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 사업보고서(reprt_code=11011)는 당기/전기 외에 전전기(bfefrmtrm_*)
+    # 컬럼도 함께 내려준다(실제 API로 확인). 이 컬럼이 정상 파싱되는지
+    # 확인한다.
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "000",
+                "message": "정상",
+                "list": [
+                    {
+                        "rcept_no": "20260316001009",
+                        "bsns_year": "2025",
+                        "stock_code": "005930",
+                        "reprt_code": "11011",
+                        "account_nm": "매출액",
+                        "fs_div": "CFS",
+                        "fs_nm": "연결재무제표",
+                        "sj_div": "IS",
+                        "sj_nm": "손익계산서",
+                        "thstrm_nm": "제57기",
+                        "thstrm_dt": "2025.01.01 ~ 2025.12.31",
+                        "thstrm_amount": "333,605,938,000,000",
+                        "frmtrm_nm": "제56기",
+                        "frmtrm_dt": "2024.01.01 ~ 2024.12.31",
+                        "frmtrm_amount": "300,870,903,000,000",
+                        "bfefrmtrm_nm": "제55기",
+                        "bfefrmtrm_dt": "2023.01.01 ~ 2023.12.31",
+                        "bfefrmtrm_amount": "258,935,494,000,000",
+                        "currency": "KRW",
+                    }
+                ],
+            },
+            request=request,
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def mock_async_client(*args: object, **kwargs: object) -> httpx.AsyncClient:
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_async_client)
+
+    service = OpenDartService(api_key="test-key")
+
+    accounts = await service.get_financial_accounts(
+        corp_code="00126380",
+        business_year="2025",
+        report_code="11011",
+    )
+
+    account = accounts[0]
+
+    assert account.before_previous_term_name == "제55기"
+    assert account.before_previous_term_date == "2023.01.01 ~ 2023.12.31"
+    assert account.before_previous_term_amount == 258935494000000
+
+
+@pytest.mark.anyio
+async def test_get_financial_accounts_missing_before_previous_term_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 분기/반기 보고서이거나 상장 이력이 짧은 회사는 bfefrmtrm_* 컬럼
+    # 자체가 응답에 없을 수 있다. 이 경우 에러가 아니라 None이어야 한다.
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "000",
+                "message": "정상",
+                "list": [
+                    {
+                        "rcept_no": "20260316001009",
+                        "bsns_year": "2025",
+                        "stock_code": "005930",
+                        "reprt_code": "11012",
+                        "account_nm": "매출액",
+                        "fs_div": "CFS",
+                        "fs_nm": "연결재무제표",
+                        "sj_div": "IS",
+                        "sj_nm": "손익계산서",
+                        "thstrm_nm": "제57기 반기",
+                        "thstrm_dt": "2025.01.01 ~ 2025.06.30",
+                        "thstrm_amount": "150,000,000,000,000",
+                        "frmtrm_nm": "제56기 반기",
+                        "frmtrm_dt": "2024.01.01 ~ 2024.06.30",
+                        "frmtrm_amount": "140,000,000,000,000",
+                        "currency": "KRW",
+                    }
+                ],
+            },
+            request=request,
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def mock_async_client(*args: object, **kwargs: object) -> httpx.AsyncClient:
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_async_client)
+
+    service = OpenDartService(api_key="test-key")
+
+    accounts = await service.get_financial_accounts(
+        corp_code="00126380",
+        business_year="2025",
+        report_code="11012",
+    )
+
+    account = accounts[0]
+
+    assert account.before_previous_term_name is None
+    assert account.before_previous_term_date is None
+    assert account.before_previous_term_amount is None
+
+
+@pytest.mark.anyio
 async def test_get_financial_accounts_api_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
