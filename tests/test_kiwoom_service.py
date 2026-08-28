@@ -1,12 +1,19 @@
 import asyncio
 import os
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
 from dotenv import load_dotenv
 
-from app.services.kiwoom import KiwoomAccessToken, KiwoomApiResponse, KiwoomService
+from app.services.kiwoom import (
+    THEME_CATALOG_CACHE_TTL,
+    KiwoomAccessToken,
+    KiwoomApiResponse,
+    KiwoomService,
+)
 
 
 def _access_token(
@@ -789,3 +796,368 @@ async def test_real_get_account_balance() -> None:
     assert balance.total_purchase_amount >= 0
     assert balance.total_evaluation_amount >= 0
     assert isinstance(balance.positions, list)
+
+
+# ============================== UX-01: Theme catalog/membership ==============================
+
+_KST = ZoneInfo("Asia/Seoul")
+
+
+def _theme_group_row(code: str, name: str, stk_num: str = "3") -> dict:
+    return {
+        "thema_grp_cd": code,
+        "thema_nm": name,
+        "stk_num": stk_num,
+        "flu_sig": "1",
+        "flu_rt": "+1.23",
+        "rising_stk_num": "1",
+        "fall_stk_num": "0",
+        "dt_prft_rt": "+5.0",
+        "main_stk": "삼성전자, SK하이닉스",
+    }
+
+
+def _theme_stock_row(code: str, name: str) -> dict:
+    return {
+        "stk_cd": code,
+        "stk_nm": name,
+        "cur_prc": "+100000",
+        "flu_sig": "1",
+        "pred_pre": "+1000",
+        "flu_rt": "+1.0",
+        "acc_trde_qty": "1000",
+        "sel_bid": "100100",
+        "sel_req": "10",
+        "buy_bid": "99900",
+        "buy_req": "10",
+        "dt_prft_rt_n": "+5.0",
+    }
+
+
+@pytest.mark.anyio
+async def test_get_theme_groups_parses_fields() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+
+    service.request = AsyncMock(
+        return_value=KiwoomApiResponse(
+            data={
+                "thema_grp": [_theme_group_row("550", "반도체_생산", "3")],
+                "return_code": 0,
+                "return_msg": "정상",
+            },
+            cont_yn="N",
+            next_key=None,
+        )
+    )
+
+    result = await service.get_theme_groups(access_token="test-token")
+
+    assert len(result) == 1
+    assert result[0].theme_code == "550"
+    assert result[0].theme_name == "반도체_생산"
+    assert result[0].stock_count == 3
+
+    service.request.assert_awaited_once_with(
+        access_token="test-token",
+        api_id="ka90001",
+        endpoint="/api/dostk/thme",
+        payload={
+            "qry_tp": "0",
+            "date_tp": "10",
+            "flu_pl_amt_tp": "1",
+            "stex_tp": "1",
+            "stk_cd": "",
+            "thema_nm": "",
+        },
+    )
+
+
+@pytest.mark.anyio
+async def test_get_theme_groups_with_continuation() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+
+    service.request = AsyncMock(
+        side_effect=[
+            KiwoomApiResponse(
+                data={
+                    "thema_grp": [_theme_group_row("550", "반도체_생산")],
+                    "return_code": 0,
+                    "return_msg": "정상",
+                },
+                cont_yn="Y",
+                next_key="next-key-1",
+            ),
+            KiwoomApiResponse(
+                data={
+                    "thema_grp": [_theme_group_row("551", "반도체_설계(fabless)")],
+                    "return_code": 0,
+                    "return_msg": "정상",
+                },
+                cont_yn="N",
+                next_key=None,
+            ),
+        ]
+    )
+
+    result = await service.get_theme_groups(access_token="test-token")
+
+    assert [group.theme_code for group in result] == ["550", "551"]
+    assert service.request.await_count == 2
+
+
+@pytest.mark.anyio
+async def test_get_theme_groups_cache_hit_does_not_refetch() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+
+    service.request = AsyncMock(
+        return_value=KiwoomApiResponse(
+            data={
+                "thema_grp": [_theme_group_row("550", "반도체_생산")],
+                "return_code": 0,
+                "return_msg": "정상",
+            },
+            cont_yn="N",
+            next_key=None,
+        )
+    )
+
+    first = await service.get_theme_groups(access_token="test-token")
+    second = await service.get_theme_groups(access_token="test-token")
+
+    assert first == second
+    service.request.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_get_theme_groups_cache_expires_after_ttl() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+
+    # 이미 THEME_CATALOG_CACHE_TTL보다 오래된 캐시를 미리 채워둔다 —
+    # "now"를 monkeypatch하지 않아도 확실히 만료로 판정된다(access token
+    # 만료 테스트와 동일한 관례).
+    service._theme_catalog_cache = []
+    service._theme_catalog_cached_at = datetime.now(_KST) - THEME_CATALOG_CACHE_TTL - timedelta(
+        seconds=1
+    )
+
+    service.request = AsyncMock(
+        return_value=KiwoomApiResponse(
+            data={
+                "thema_grp": [_theme_group_row("550", "반도체_생산")],
+                "return_code": 0,
+                "return_msg": "정상",
+            },
+            cont_yn="N",
+            next_key=None,
+        )
+    )
+
+    result = await service.get_theme_groups(access_token="test-token")
+
+    assert len(result) == 1
+    service.request.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_get_theme_groups_within_ttl_does_not_refetch() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+
+    service._theme_catalog_cache = [
+        service._parse_theme_groups([_theme_group_row("550", "반도체_생산")])[0]
+    ]
+    service._theme_catalog_cached_at = datetime.now(_KST) - (
+        THEME_CATALOG_CACHE_TTL - timedelta(minutes=1)
+    )
+
+    service.request = AsyncMock()
+
+    result = await service.get_theme_groups(access_token="test-token")
+
+    assert [group.theme_code for group in result] == ["550"]
+    service.request.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_get_theme_groups_force_refresh_bypasses_valid_cache() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+
+    service._theme_catalog_cache = [
+        service._parse_theme_groups([_theme_group_row("550", "반도체_생산")])[0]
+    ]
+    service._theme_catalog_cached_at = datetime.now(_KST)
+
+    service.request = AsyncMock(
+        return_value=KiwoomApiResponse(
+            data={
+                "thema_grp": [_theme_group_row("999", "새테마")],
+                "return_code": 0,
+                "return_msg": "정상",
+            },
+            cont_yn="N",
+            next_key=None,
+        )
+    )
+
+    result = await service.get_theme_groups(access_token="test-token", force_refresh=True)
+
+    assert [group.theme_code for group in result] == ["999"]
+    service.request.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_theme_catalog_cache_is_instance_level() -> None:
+    # 두 KiwoomService 인스턴스는 독립된 캐시를 가진다 — 전역/singleton
+    # 캐시가 아니다(access token 캐시와 동일한 설계 원칙).
+    service_a = KiwoomService(app_key="a", secret_key="a")
+    service_b = KiwoomService(app_key="b", secret_key="b")
+
+    service_a.request = AsyncMock(
+        return_value=KiwoomApiResponse(
+            data={
+                "thema_grp": [_theme_group_row("550", "반도체_생산")],
+                "return_code": 0,
+                "return_msg": "정상",
+            },
+            cont_yn="N",
+            next_key=None,
+        )
+    )
+    service_b.request = AsyncMock(
+        return_value=KiwoomApiResponse(
+            data={
+                "thema_grp": [_theme_group_row("140", "2차전지_완제품")],
+                "return_code": 0,
+                "return_msg": "정상",
+            },
+            cont_yn="N",
+            next_key=None,
+        )
+    )
+
+    result_a = await service_a.get_theme_groups(access_token="token-a")
+    result_b = await service_b.get_theme_groups(access_token="token-b")
+
+    assert [group.theme_code for group in result_a] == ["550"]
+    assert [group.theme_code for group in result_b] == ["140"]
+
+
+@pytest.mark.anyio
+async def test_get_theme_stocks_parses_fields() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+
+    service.request = AsyncMock(
+        return_value=KiwoomApiResponse(
+            data={
+                "thema_comp_stk": [_theme_stock_row("005930", "삼성전자")],
+                "flu_rt": "+1.0",
+                "dt_prft_rt": "+5.0",
+                "return_code": 0,
+                "return_msg": "정상",
+            },
+            cont_yn="N",
+            next_key=None,
+        )
+    )
+
+    result = await service.get_theme_stocks(access_token="test-token", theme_code="550")
+
+    assert len(result) == 1
+    assert result[0].stock_code == "005930"
+    assert result[0].stock_name == "삼성전자"
+
+    service.request.assert_awaited_once_with(
+        access_token="test-token",
+        api_id="ka90002",
+        endpoint="/api/dostk/thme",
+        payload={"thema_grp_cd": "550", "stex_tp": "1", "date_tp": "2"},
+    )
+
+
+@pytest.mark.anyio
+async def test_get_theme_stocks_with_continuation() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+
+    service.request = AsyncMock(
+        side_effect=[
+            KiwoomApiResponse(
+                data={
+                    "thema_comp_stk": [_theme_stock_row("005930", "삼성전자")],
+                    "return_code": 0,
+                    "return_msg": "정상",
+                },
+                cont_yn="Y",
+                next_key="next-key-1",
+            ),
+            KiwoomApiResponse(
+                data={
+                    "thema_comp_stk": [_theme_stock_row("000660", "SK하이닉스")],
+                    "return_code": 0,
+                    "return_msg": "정상",
+                },
+                cont_yn="N",
+                next_key=None,
+            ),
+        ]
+    )
+
+    result = await service.get_theme_stocks(access_token="test-token", theme_code="550")
+
+    assert [stock.stock_code for stock in result] == ["005930", "000660"]
+    assert service.request.await_count == 2
+
+
+@pytest.mark.anyio
+async def test_real_get_theme_groups() -> None:
+    load_dotenv()
+
+    service = KiwoomService(
+        app_key=os.environ["KIWOOM_APP_KEY"],
+        secret_key=os.environ["KIWOOM_SECRET_KEY"],
+    )
+
+    token = await service.issue_access_token()
+
+    result = await service.get_theme_groups(access_token=token.token)
+
+    print("\n=== Kiwoom Theme Groups (ka90001) ===")
+    print(f"count: {len(result)}")
+    if result:
+        first = result[0]
+        print(f"first: {first.theme_code} {first.theme_name} stock_count={first.stock_count}")
+
+    assert len(result) > 0
+    assert all(group.theme_code for group in result)
+    assert all(group.theme_name for group in result)
+
+    # 캐시가 실제로 재사용되는지도 함께 확인한다 — 두 번째 호출은 새
+    # HTTP 요청 없이 동일한 결과를 즉시 반환해야 한다.
+    cached_result = await service.get_theme_groups(access_token=token.token)
+    assert cached_result == result
+
+
+@pytest.mark.anyio
+async def test_real_get_theme_stocks() -> None:
+    load_dotenv()
+
+    service = KiwoomService(
+        app_key=os.environ["KIWOOM_APP_KEY"],
+        secret_key=os.environ["KIWOOM_SECRET_KEY"],
+    )
+
+    token = await service.issue_access_token()
+
+    groups = await service.get_theme_groups(access_token=token.token)
+    semiconductor_production = next(
+        group for group in groups if group.theme_name == "반도체_생산"
+    )
+
+    result = await service.get_theme_stocks(
+        access_token=token.token, theme_code=semiconductor_production.theme_code
+    )
+
+    print("\n=== Kiwoom Theme Stocks (ka90002) — 반도체_생산 ===")
+    for stock in result:
+        print(f"{stock.stock_code} {stock.stock_name}")
+
+    assert len(result) > 0
+    assert any(stock.stock_code == "005930" for stock in result)

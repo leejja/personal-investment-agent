@@ -3,6 +3,8 @@ from app.services.kiwoom import (
     KiwoomService,
     KiwoomStockInfo,
     KiwoomStockListItem,
+    KiwoomThemeGroup,
+    KiwoomThemeStock,
 )
 
 # ka10099 mrkt_tp 값. "0"=코스피, "10"=코스닥은 실제 API 호출로 검증된
@@ -54,4 +56,17 @@ class KiwoomTools:
         return await self.service.get_stock_list(
             access_token=token.token,
             market_code=_MRKT_TP_KOSDAQ,
+        )
+
+    async def get_theme_groups(self) -> list[KiwoomThemeGroup]:
+        token = await self.service.get_access_token()
+
+        return await self.service.get_theme_groups(access_token=token.token)
+
+    async def get_theme_stocks(self, theme_code: str) -> list[KiwoomThemeStock]:
+        token = await self.service.get_access_token()
+
+        return await self.service.get_theme_stocks(
+            access_token=token.token,
+            theme_code=theme_code,
         )

@@ -4,8 +4,8 @@
 
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
-> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1 + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** UX-01(세부 업종 taxonomy) / UX-02(InvestorProfile persistence) / Recommendation Engine (scoring/ranking)
+> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
+> **Next:** UX-02(InvestorProfile persistence) / Recommendation Engine (scoring/ranking)
 
 ---
 
@@ -990,7 +990,7 @@ StrategyResult
 
 ---
 
-## 5. Candidate Discovery — ✅ v1 구현 완료
+## 5. Candidate Discovery — ✅ v1 구현 완료 (Industry + Theme axis, UX-01)
 
 "어떤 종목을 Stock Research Agent의 분석 대상으로 올릴 것인가"만 담당한다. 종목 자체의 매력도(Stock Research Agent)나 사용자별 BUY/AVOID 판단(Portfolio Strategy Agent)에는 관여하지 않는다 — 아래 전체 범위의 Recommendation Engine(scoring/ranking)과는 다른, 더 좁은 v1 기능이다.
 
@@ -999,20 +999,52 @@ Agent가 아니라 Supervisor와 동일한 얇은 2단 구조로 구현했다 �
 ```text
 app/discovery/
 ├── filter_intent.py   # LLM이 질문 → DiscoveryFilter로 구조화 (closed set 검증 + 재시도)
-└── orchestrator.py     # universe 조회, 필터 적용, 후보 과다 시 정책, Candidate[] 조립
+└── orchestrator.py     # universe/theme catalog 조회, 필터 적용, 후보 과다 시 정책, Candidate[] 조립
 ```
 
-v1이 실제로 사용하는 데이터: Kiwoom `ka10099`(종목정보 리스트, 실제 API 호출로 검증). KOSPI/KOSDAQ 각각 단일 호출로 전체 종목(2026-08 기준 KOSPI 2,481종목)과 함께 종목코드/종목명/시장구분/업종명(`upName`)/규모구분(`upSizeName`)/상장주식수/최근가/감리구분/투자유의여부를 확보한다. ETF/ETN(`mrkt_tp` 8/60 등)은 애초에 조회 대상에 넣지 않아 구조적으로 제외된다.
+v1이 실제로 사용하는 데이터:
 
-v1의 핵심 정책:
+- Kiwoom `ka10099`(종목정보 리스트) — KOSPI/KOSDAQ 각각 단일 호출로 전체 종목(2026-08 기준 KOSPI 2,481종목)과 함께 종목코드/종목명/시장구분/업종명(`upName`)/규모구분(`upSizeName`)/상장주식수/최근가/감리구분/투자유의여부를 확보한다. ETF/ETN(`mrkt_tp` 8/60 등)은 애초에 조회 대상에 넣지 않아 구조적으로 제외된다.
+- Kiwoom `ka90001`(테마그룹별요청)/`ka90002`(테마구성종목요청) — 아래 "Industry vs Theme" 참고.
 
-- **LLM은 조건만 구조화하고 절대 종목을 고르지 않는다**: `DiscoveryFilter`(market/sector_terms/size_terms/exclude_owned)만 제안하고, 실제 종목 선택은 Python이 실제 universe 데이터로 수행한다.
-- **sector_terms/size_terms는 실제 관측된 값만 허용한다**: 매 요청마다 universe를 먼저 조회해 실제 존재하는 업종명/규모구분 집합을 만들고, 이 집합을 LLM 프롬프트에 제공해 그 안에서만 고르게 한 뒤 Python이 다시 한번 검증한다(재시도 → 최종 실패 시 `FilterIntentError`). 실제 확인 결과 `upName`은 세분화된 업종(예: "반도체")이 아니라 27개의 굵직한 KRX 대분류(전기/전자, 제약, 통신 등)라, "반도체 종목 찾아줘" 같은 요청은 매칭되는 값이 없어 정상적으로 실패 처리된다 — 근거 없이 유사한 값으로 대체하지 않는다.
-- **exclude_owned은 개인화 여부와 별개로, 사용자 문장 자체에서만 결정한다**: Portfolio Strategy Agent 경로를 탄다는 사실만으로 보유종목을 자동으로 제외하지 않는다. "내 포트폴리오에 없는", "미보유" 등 실제 제외 의도가 문장에 있을 때만 `exclude_owned=true`로 grounding한다(실제 E2E로 True/False 두 표현이 정확히 구분됨을 확인).
-- **후보 과다 시 subset을 고르지 않는다**: `MAX_STOCK_RESEARCH_FANOUT`(투자 threshold가 아니라 Stock Research fan-out의 실행/비용 안전 한도)을 초과하면 일부를 임의로 골라내는 대신 Stock Research를 0건 실행하고 조건을 더 좁혀달라고 요청한다. 사용자가 개수를 지정해도 순서 기준이 없으면 "어떤 N개"를 고를지 자체가 임의적이므로, 한도 이하로 들어오면 전체를 그대로 통과시키고 초과하면 통과시키지 않는 이분법만 사용한다 — momentum/거래량 기반 랭킹은 암묵적 투자 전략 편향을 시스템 기본값으로 주입하는 것이라 v1에서 배제했다.
-- **관리종목/투자유의/거래정지는 filter 조건으로 쓰지 않는다**: `auditInfo`/`orderWarning` 필드는 확인했지만 실제 flagged 값을 관측하지 못해, 해석하지 않고 raw fact로만 `Candidate`에 실어 보낸다.
+### Industry vs Theme — 두 개의 서로 다른 classification axis (UX-01)
 
-Supervisor 연결: 새 intent `candidate_discovery`(후보만 반환) 추가. `portfolio_strategy`는 기존 "특정 종목 우선 → 보유종목 전체" 2단 분기에 "discovery 조건 있으면 그 후보로" 분기를 하나 추가해 확장했다(새 intent 아님, 기존 실행 로직 재사용).
+원래 가설은 "`ka10101`(업종코드 리스트)이 `upName`보다 세분화돼 있을 것"이었으나, **실제 API 호출로 확인한 결과 `ka10101`은 `upName`과 사실상 동일한 굵직한 KRX 대분류(~27~34개)였다** — 삼성전자·SK하이닉스·LG에너지솔루션이 전부 "전기/전자" 하나에 뭉뚱그려진다(2026-08-28 UX-01 조사). 그래서 **Industry axis는 별도 API 연동 없이 기존 `ka10099.upName`을 그대로 재사용**하고, 대신 실제로 세분화된 정보를 제공하는 **Theme axis(`ka90001`/`ka90002`)를 완전히 별도의 새 axis로 추가**했다. 두 axis를 같은 필드에 섞지 않는다 — "전기/전자"(Industry, 84종목)와 "반도체_생산"(Theme, 3종목: 삼성전자/SK하이닉스/DB하이텍)은 granularity가 전혀 다르다.
+
+```text
+User
+ │
+ ▼
+LLM Intent Parsing (concept → 실제 카탈로그 값 선택, closed-set)
+ │
+ ▼
+DiscoveryFilter
+ ├─ market / size            (기존과 동일)
+ ├─ sector_terms             Industry axis — ka10099.upName 재사용
+ └─ theme_requests[]         Theme axis — ka90001/ka90002 grounding
+      └─ {concept, matched_themes[]}
+ │
+ ▼
+Market ∩ Size ∩ Industry ∩ (Theme A ∪ Theme B ∪ ...) ∩ Ownership
+ │
+ ▼
+Candidates
+```
+
+- **`theme_requests`는 "사용자 concept"과 "실제 grounding된 테마명"을 분리해서 담는다**: `ThemeRequest.concept`은 사용자가 언급한 원래 표현("반도체", "원전")을, `matched_themes`는 `ka90001` 실제 카탈로그에 존재하는 값만 담는다(존재하지 않는 이름을 LLM이 지어내면 재시도 → 최종 실패 시 `FilterIntentError`, `sector_terms`/`size_terms`와 동일한 grounding 원칙). LLM이 "원전 → 원자력_기자재/원자력_설계시공"처럼 사용자 표현과 카탈로그 공식 명칭 사이의 동의어 수준 normalization을 제안할 수 있지만, 최종적으로 Python이 실제 카탈로그에 다시 검증한다 — **LLM이 taxonomy의 최종 권한이 아니다.**
+- **같은 concept의 여러 테마는 UNION, 서로 다른 axis(market/size/industry/theme/ownership)는 INTERSECTION**이다. 예: "코스피 대형주 중 반도체 관련 종목"은 `KOSPI ∩ 대형주 ∩ (반도체_생산 ∪ 반도체_설계 ∪ ... 8개 세부 테마)` — 실제 E2E로 SK하이닉스/삼성전자/한미반도체 3종목이 정확히 이 교집합으로 나옴을 확인했다.
+- **지원하지 않는 concept은 조용히 무시하지 않고 명시적으로 실패시킨다**: "AI"처럼 카탈로그에 대응하는 테마가 전혀 없으면(`matched_themes=[]`) `DiscoveryError`로 실패한다. "AI 반도체 관련주"처럼 concept이 여러 개고 그중 하나만 지원되지 않아도, 지원되는 concept("반도체")만으로 조용히 좁혀서 반환하지 않는다 — 사용자가 요청한 것과 다른 답을 몰래 주지 않기 위함이다.
+- **LLM의 "의미상 유사" 판단이 실제로는 과도하게 관대할 수 있음을 실측으로 발견했다**: 초기 프롬프트로는 "AI" concept이 "클라우드 컴퓨팅"/"보안_인터넷"/"SI(시스템통합)" 등 AI가 응용될 뿐인 산업 테마에 잘못 매칭되는 것을 실제 LLM 응답으로 확인했다(테마명 자체는 실제 카탈로그 값이라 구조적 grounding은 통과하지만, 의미상 "AI 자체를 가리키는 테마"가 아니다). 이를 "확신이 서지 않으면 포함하지 말라"는 명시적 지침과 부정 예시로 프롬프트를 강화해 해결했다 — Python 쪽에 하드코딩된 alias table을 추가하는 방식은 쓰지 않았다("근거 없는 semantic synonym expansion을 Python에 hard-code하지 않는다"는 원칙 유지).
+- **Theme membership은 사전 구축하지 않고 lazy lookup한다**: 142개 테마 전체의 멤버십을 미리 `ka90002`로 조회하지 않고, 이번 요청에서 실제로 grounding된(=사용자가 요청하고 카탈로그에 실재하는) 테마에 대해서만 조회한다.
+- **Theme catalog(`ka90001`)는 `KiwoomService` instance에 24시간 TTL로 캐시한다**(`THEME_CATALOG_CACHE_TTL`). Access token 캐시와 다른 캐시이며, **"테마 분류가 며칠간 금융적으로 유효하다"는 뜻이 아니라 "Kiwoom 외부 메타데이터를 얼마나 자주 다시 조회할 것인가"라는 순수 API refresh 정책일 뿐이다.** UX-04의 Analysis Snapshot Store(API/UI request lifecycle 캐시)와도 목적이 다르다. **24시간이라는 값은 Kiwoom이 실제로 테마 카탈로그를 얼마나 자주 개편하는지 관측한 근거가 아니다** — "종목 편입/편출이 하루 안에 여러 번 바뀌지는 않을 것"이라는 보수적 추정으로 정한 현재의 operational 값이며, 실제 개편 주기가 이후 관측되면(더 자주 바뀌거나 훨씬 드물게 바뀌거나) 그에 맞춰 조정할 수 있는 잠정치다.
+- **`Candidate.sector`/`matched_filters: dict[str, str]`는 그대로 유지**했다(backward compatibility). Theme 매칭 evidence는 `matched_filters["theme"]`(실제 매칭된 테마명, 여러 개면 쉼표 구분)과 `matched_filters["theme_concept"]`(그 테마를 요청하게 만든 사용자 concept)로 추가했다 — 새 필드를 만들거나 타입을 느슨하게 넓히지 않았다.
+- **sector_terms(Industry) 정책은 UX-01 이전과 완전히 동일하다**: `ka10099`/`ka10101` 모두 세분화되지 않은 대분류이므로, "반도체" 같은 세부 개념은 여전히 sector_terms에서 매칭되지 않는다(대신 theme_requests가 처리한다). "대형 통신 종목 후보 찾아줘"(Industry axis) 결과는 UX-01 전후로 완전히 동일함을 실제 E2E로 재확인했다.
+- **후보 과다 시 subset을 고르지 않는 기존 정책은 그대로 유지**한다: `MAX_STOCK_RESEARCH_FANOUT`을 초과하면(Theme union이 넓은 경우도 포함, 예: "반도체"만 단독 요청하면 8개 세부 테마 union이 44종목이 되어 초과) 일부를 임의로 골라내지 않고 Stock Research를 0건 실행한다. Theme 도입을 이유로 momentum/거래량 기반 ranking을 추가하지 않았다.
+- **관리종목/투자유의/거래정지는 여전히 filter 조건으로 쓰지 않는다**: `auditInfo`/`orderWarning` 필드는 실제 flagged 값을 관측하지 못해 raw fact로만 전달한다.
+
+**알려진 taxonomy 한계(dev-log UX-05로 별도 기록)**: 실제 API로 확인한 결과 Kiwoom 테마 카탈로그(142개)에는 "AI"/"인공지능"/"데이터센터"/"HBM"/"자율주행" 같은 최근 핵심 투자 테마가 전혀 없고, "2차전지_완제품" 테마에는 LG에너지솔루션이 빠져 있다(SK이노베이션/LG화학/삼성SDI만 존재 — 스핀오프 이전 구조를 반영하는 것으로 보인다). 이런 taxonomy coverage gap은 UX-01에서 보정하지 않는다 — 근거 없이 Python이나 LLM이 빈 자리를 채우면 이 프로젝트가 지켜온 "grounding 없이 생성하지 않는다" 원칙이 깨진다.
+
+Supervisor 연결: 새 intent `candidate_discovery`(후보만 반환) 추가. `portfolio_strategy`는 기존 "특정 종목 우선 → 보유종목 전체" 2단 분기에 "discovery 조건 있으면 그 후보로" 분기를 하나 추가해 확장했다(새 intent 아님, 기존 실행 로직 재사용). 이 연결은 UX-01에서 변경하지 않았다.
 
 주요 출력:
 
@@ -1020,8 +1052,9 @@ Supervisor 연결: 새 intent `candidate_discovery`(후보만 반환) 추가. `p
 Candidate
 ├── symbol / name
 ├── market
-├── sector
-└── matched_filters   # {"sector": "통신", "size": "대형주", ...} — 점수/매력도 없음
+├── sector              # Industry axis(ka10099.upName) — 변경 없음
+└── matched_filters      # {"sector": "통신", "size": "대형주",
+                          #  "theme": "반도체_생산", "theme_concept": "반도체"} — 점수/매력도 없음
 ```
 
 ---
@@ -1797,9 +1830,9 @@ personal-investment-agent/
 │   │   ├── routing.py              # LLM intent 분류 (closed enum 검증 + 재시도)
 │   │   └── orchestrator.py         # intent별 실행, 부분 실패 처리, SupervisorResult 조립
 │   │
-│   ├── discovery/                  # Candidate Discovery — v1 구현 완료
-│   │   ├── filter_intent.py        # LLM → DiscoveryFilter (closed set 검증 + 재시도)
-│   │   └── orchestrator.py         # universe 조회, 필터 적용, 후보 과다 정책
+│   ├── discovery/                  # Candidate Discovery — v1 구현 완료 (Industry + Theme axis, UX-01)
+│   │   ├── filter_intent.py        # LLM → DiscoveryFilter (sector/size/theme_requests closed set 검증 + 재시도)
+│   │   └── orchestrator.py         # universe/theme catalog 조회, union/intersection 적용, 후보 과다 정책
 │   │
 │   ├── recommendation/             # Recommendation Engine (planned)
 │   │   └── engine.py               # Recommendation logic (planned)
@@ -1807,13 +1840,13 @@ personal-investment-agent/
 │   ├── mcp/
 │   │   ├── ecos_tools.py           # ECOS Domain Tools (기준금리/환율/KOSPI/KOSDAQ)
 │   │   ├── opendart_tools.py       # OpenDART Domain Tools (find_stock_code_by_name 포함)
-│   │   ├── kiwoom_tools.py         # Kiwoom Domain Tools (get_kospi/kosdaq_stock_list 포함)
+│   │   ├── kiwoom_tools.py         # Kiwoom Domain Tools (get_kospi/kosdaq_stock_list, get_theme_groups/get_theme_stocks 포함)
 │   │   └── server.py               # MCP Server / Tool exposure
 │   │
 │   ├── services/
 │   │   ├── ecos.py                 # ECOS Service
 │   │   ├── opendart.py             # OpenDART Service
-│   │   ├── kiwoom.py               # Kiwoom Service (get_stock_list/ka10099 포함)
+│   │   ├── kiwoom.py               # Kiwoom Service (get_stock_list/ka10099, get_theme_groups/get_theme_stocks(ka90001/ka90002, 24h TTL 캐시) 포함)
 │   │   ├── portfolio_adapter.py    # Kiwoom → PortfolioContext 변환
 │   │   └── llm.py                  # LLM Service (Stock Research / Market / Portfolio Strategy Agent 전용)
 │   │
@@ -2159,7 +2192,7 @@ Invalid Input
 
 ## Service / Domain Tool Tests
 
-ECOS, OpenDART, Kiwoom 각 Service/Domain Tool을 `httpx.MockTransport` 또는 `AsyncMock` 기반으로 검증한다(URL/parameter 구성, HTTP 오류 처리, 응답 정규화, Kiwoom continuation 처리 등). 일부는 실제 외부 API를 호출하는 real-path 테스트(`test_real_*`)도 함께 포함한다.
+ECOS, OpenDART, Kiwoom 각 Service/Domain Tool을 `httpx.MockTransport` 또는 `AsyncMock` 기반으로 검증한다(URL/parameter 구성, HTTP 오류 처리, 응답 정규화, Kiwoom continuation 처리 등). 일부는 실제 외부 API를 호출하는 real-path 테스트(`test_real_*`)도 함께 포함한다. `test_kiwoom_service.py`는 [UX-01]에서 `ka90001`/`ka90002`(테마 카탈로그/멤버십) 파싱·continuation과, `KiwoomService` instance-level 테마 카탈로그 캐시(hit/TTL 만료/force_refresh/인스턴스 독립성)도 access token 캐시와 동일한 "이미 만료된 값을 미리 채워 검증" 관례로 검증한다(clock monkeypatch 없이).
 
 ## LLMService Tests
 
@@ -2302,7 +2335,13 @@ test_discovery_filter_intent.py
 ├── market은 closed enum이라 알 수 없는 값이면 ValidationError로 재시도
 ├── sector_terms/size_terms가 실제 관측된 집합(known_sectors/known_sizes) 밖이면 검증 실패 → 재시도 → 최종 실패 시 FilterIntentError
 │  (일부만 유효해도 전체 실패 처리, 부분 valid만 남기지 않음)
-└── exclude_owned은 LLM이 문장에서 판단한 값을 그대로 신뢰(구조 검증 대상 아님, 의미 판단은 프롬프트 책임)
+├── exclude_owned은 LLM이 문장에서 판단한 값을 그대로 신뢰(구조 검증 대상 아님, 의미 판단은 프롬프트 책임)
+├── [UX-01] theme_requests: "반도체" 같은 concept이 실제 카탈로그의 여러 세부 테마로 grounding됨
+├── [UX-01] "원전" → "원자력_*" 같은 colloquial 표현의 정상화(normalization) 후 실제 카탈로그 값으로 grounding됨
+├── [UX-01] concept은 있으나 matched_themes가 빈 배열인 것은 정상(grounding 성공) — 실패로 취급하지 않음
+├── [UX-01] 카탈로그에 없는 테마명(hallucination)은 검증 실패 → 재시도 → 최종 실패 시 FilterIntentError
+├── [UX-01] "AI 반도체"처럼 concept 2개가 동시에 오면 독립적으로 각각 유지(하나를 조용히 누락시키지 않음)
+└── [UX-01] known_themes 인자를 생략해도(기존 호출부) 기존과 동일하게 동작
 
 test_discovery_orchestrator.py
 ├── KiwoomTools fake로 KOSPI/KOSDAQ universe 주입
@@ -2310,7 +2349,15 @@ test_discovery_orchestrator.py
 ├── market/sector/size 필터 적용, matched_filters에 매칭 근거 기록
 ├── exclude_owned=True/False에 따라 보유종목 제외 여부가 실제로 달라짐
 ├── 후보가 MAX_STOCK_RESEARCH_FANOUT 초과 시 DiscoveryError, 이하면 일부를 고르지 않고 전체 통과
-└── symbol/name이 비어있는 항목은 제외
+├── symbol/name이 비어있는 항목은 제외
+├── [UX-01] theme catalog가 존재해도 sector-only 요청은 기존과 동일하게 동작(회귀 없음), ka90002 미호출
+├── [UX-01] 같은 concept의 서로 다른 테마 멤버십은 UNION됨
+├── [UX-01] Market ∩ Size ∩ Theme 교집합이 실제로 적용됨
+├── [UX-01] 지원하지 않는 theme concept(matched_themes=[])은 DiscoveryError로 명시적 실패, ka90002 미호출
+├── [UX-01] concept 여러 개 중 하나만 unsupported여도 전체 실패(나머지 concept만으로 조용히 좁히지 않음)
+├── [UX-01] 실제로 grounding된 테마 코드에 대해서만 ka90002 호출(lazy lookup, 사전 전체 구축 없음)
+├── [UX-01] Candidate.matched_filters에 매칭된 실제 테마명/요청 concept이 evidence로 기록됨
+└── [UX-01] theme 제약이 활성이어도 universe에 매칭 종목이 없으면 빈 리스트(None과 구분)
 ```
 
 ## REST API Tests
@@ -2373,7 +2420,7 @@ test_discovery_orchestrator.py
 현재 전체 테스트 결과:
 
 ```text
-301 passed
+330 passed
 ```
 
 전체 lint 결과:
@@ -2404,7 +2451,9 @@ OpenDART 다년 재무 추세를 추가한 뒤, 실제 Swagger 사용에서 `por
 
 Presentation view를 실사용(Swagger)한 결과 `view=summary`/`view=detail`을 각각 별도 요청하면 Supervisor pipeline이 매번 독립적으로 재실행되어, 동일 질문인데도 LLM reasoning의 비결정성 때문에 market regime이나 portfolio recommendation 개수·action이 두 응답 사이에 달라지는 현상이 실제로 관측됐다(UX-04). 이를 해결하기 위해 **한 번 실행된 `SupervisorResult`에 `analysis_id`를 부여하고 이후 조회가 동일 snapshot을 공유하게** 하는 analysis snapshot lifecycle을 추가했다. `POST /analysis`가 실행 직후 결과를 `app/api/snapshot_store.py`의 `AnalysisSnapshotStore`(in-memory TTL store, 기본 30분)에 저장하고 `X-Analysis-ID` 응답 header로 id를 돌려주며, 신규 `GET /analysis/{analysis_id}?view=detail|summary`는 그 id로 저장된 동일 snapshot을 조회만 할 뿐 `Supervisor.run()`/LLM/Kiwoom/OpenDART/ECOS 어느 것도 다시 호출하지 않는다. `analysis_id`는 API/snapshot lifecycle metadata일 뿐 투자 분석 domain data가 아니라는 경계를 지키기 위해 `UserRequest`/`SupervisorResult`/`PresentationResult` 어디에도 필드로 추가하지 않았고, body는 header 추가와 무관하게 기존과 완전히 동일하게 유지해 backward compatibility를 지켰다. DB/Redis/background job은 이번에도 추가하지 않았다 — 관측된 문제가 "동일 snapshot을 summary/detail이 공유하지 못한다" 하나뿐이라 이를 푸는 최소 구조(in-memory dict + lazy TTL eviction)로 충분하다고 판단했고, `put()`/`get()`에 `await` 지점이 없어 `asyncio.Lock`도 예방적으로 추가하지 않았다. 실제 E2E로 동일 `analysis_id`에 대해 POST(수 분, 실제 실행)와 GET(수 ms, 재실행 없음)의 latency 차이, 그리고 detail/summary 간 recommendation 개수·필드가 완전히 일치함을 확인해 §13.5에서 관측됐던 불일치(6건 vs 10건)가 재현되지 않음을 검증했다(자세한 내용은 dev-log 참고).
 
-Recommendation Engine(scoring/ranking 기반 신규 투자 후보 평가)은 프로젝트 공식 범위에 포함되어 있으며, UX-01(세부 업종 taxonomy)·UX-02(InvestorProfile persistence)와 함께 다음 구현 대상이다.
+UX-04까지 마친 뒤 Candidate Discovery v1의 "반도체"/"2차전지" 같은 세부 업종 질문이 실패하는 UX-01(세부 업종 taxonomy)을 다뤘다. 애초 가설은 "Kiwoom `ka10101`(업종코드 리스트)이 `ka10099.upName`보다 세분화돼 있을 것"이었으나, 실제 API 호출로 확인한 결과 **`ka10101`은 `upName`과 사실상 동일한 굵직한 KRX 대분류(~27~34개)였다** — 삼성전자·SK하이닉스·LG에너지솔루션이 전부 "전기/전자" 하나에 뭉뚱그려짐을 실측으로 확인했다. 대신 Kiwoom의 테마 API(`ka90001` 테마그룹별요청/`ka90002` 테마구성종목요청)에 실제로 세분화된 정보(반도체 8개 세부 테마, 2차전지 2개, 로봇 1개, 원자력 2개 등 총 142개 테마)가 존재함을 확인해, **Industry axis는 기존 `upName`을 그대로 재사용하고 Theme axis(`ka90001`/`ka90002`)를 완전히 별도로 추가하는 "Semantic Industry + Grounded Theme"(C안) 구조**를 채택했다. `DiscoveryFilter`에 `theme_requests: list[ThemeRequest]`(concept + 실제 grounding된 테마명)를 신설해 Industry(`sector_terms`)와 절대 섞지 않았고, 같은 concept의 여러 테마는 UNION, 서로 다른 axis(market/size/industry/theme/ownership)는 INTERSECTION으로 결합했다. LLM은 "원전 → 원자력_기자재/원자력_설계시공"처럼 사용자 표현과 카탈로그 공식 명칭 사이의 동의어 수준 normalization을 제안할 수 있지만 Python이 실제 카탈로그로 다시 검증하며, 지원되지 않는 concept(예: "AI" — 카탈로그에 전혀 없음을 실측 확인)은 조용히 무시하지 않고 `DiscoveryError`로 명시적으로 실패시킨다. 실제 LLM 응답을 검증하는 과정에서 초기 프롬프트가 "AI"를 "클라우드 컴퓨팅"/"보안_인터넷" 같은 응용 산업 테마에 과도하게 매칭시키는 것을 발견해, 하드코딩된 alias table 대신 프롬프트 지침을 "확신이 서지 않으면 포함하지 말라"는 방향으로 강화해 해결했다. Theme catalog(`ka90001`)는 `KiwoomService` instance에 24시간 TTL로 캐시하고(access token 캐시와 별개, UX-04 Analysis Snapshot Store와도 목적이 다른 순수 외부 metadata refresh 정책), 실제 멤버십(`ka90002`)은 요청된 테마만 lazy 조회한다(142개 전체 사전 구축 없음). 기존 `Candidate.sector`/`matched_filters: dict[str, str]`는 변경하지 않고 그대로 유지해 backward compatibility를 지켰다. 실제 E2E로 "대형 통신 종목"(Industry axis) 결과가 UX-01 전후로 완전히 동일함을 재확인했고, "반도체"(Theme, 8개 세부 테마 union), "코스피 대형주 중 반도체"(Market ∩ Size ∩ Theme 교집합, SK하이닉스/삼성전자/한미반도체 3종목), "원전"(정상화 후 9종목), "AI"(unsupported, `DiscoveryError`)를 확인했다. "2차전지"는 실제로 17종목(완제품 3 + 소재 14)이 나와 fan-out 한도를 넘었는데, 이는 LG에너지솔루션이 Kiwoom 테마 카탈로그에 아예 존재하지 않는(스핀오프 이전 구조를 반영하는 것으로 보이는) coverage gap 때문임을 실측으로 확인했다 — 이런 gap은 코드로 보정하지 않고 UX-05(Classification Coverage Gap)로 별도 기록했다. 이번 조사 중 `ka90002`에서 실제 HTTP 429(rate limit)를 처음으로 관측했는데(짧은 시간에 여러 테마를 연속 조회할 때), 응답 헤더에는 여전히 rate-limit 정보가 노출되지 않아 정확한 한도는 확인하지 못했다(자세한 내용은 dev-log 참고).
+
+Recommendation Engine(scoring/ranking 기반 신규 투자 후보 평가)은 프로젝트 공식 범위에 포함되어 있으며, UX-02(InvestorProfile persistence)와 함께 다음 구현 대상이다.
 
 ```text
 Foundation                         completed
@@ -2485,7 +2534,19 @@ Analysis Snapshot Lifecycle (UX-04)  completed
     └── 실제 E2E (stock_research/portfolio_strategy, POST~분 vs GET~ms, snapshot 일치 확인) ✓
     │
     ▼
-Recommendation Engine               ← NEXT (scoring/ranking, UX-01/UX-02 이후)
+Candidate Discovery Theme Axis (UX-01) completed
+    ├── ka10101 실측 결과 upName보다 세분화되지 않음 확인 → Industry는 upName 재사용 ✓
+    ├── ka90001/ka90002 실제 연동 — 142개 테마 카탈로그 + lazy membership   ✓
+    ├── DiscoveryFilter.theme_requests(concept + 실제 grounding된 테마명) 신설 ✓
+    ├── 같은 concept 내 UNION, 서로 다른 axis 간 INTERSECTION              ✓
+    ├── Theme catalog KiwoomService instance 캐시(24h TTL, lock 없음)      ✓
+    ├── 지원하지 않는 concept → DiscoveryError(조용한 축소 없음)            ✓
+    ├── Candidate.sector/matched_filters 구조 불변(backward compatibility) ✓
+    ├── 신규 테스트 29건 + 기존 301건 회귀 없음(330 passed)                ✓
+    └── 실제 E2E(통신/반도체/코스피대형+반도체/원전/AI unsupported/2차전지) ✓
+    │
+    ▼
+Recommendation Engine               ← NEXT (scoring/ranking, UX-02 이후)
 ```
 
 ---
@@ -2600,6 +2661,8 @@ Recommendation Engine               ← NEXT (scoring/ranking, UX-01/UX-02 이�
 - [x] Candidate 모델 (score 없음, matched_filters로 추적)
 - [x] Supervisor `candidate_discovery` intent + `portfolio_strategy` discovery 분기 연결
 - [x] 실제 E2E Demo (성공/후보 과다/personalized discovery/exclude_owned true·false 전부)
+- [x] **UX-01(Semantic Industry + Grounded Theme)**: `ka90001`/`ka90002` 실연동, `DiscoveryFilter.theme_requests` 신설(concept + grounding된 실제 테마명), Industry는 `upName` 재사용(ka10101이 upName보다 세분화되지 않음을 실측 확인), Theme catalog `KiwoomService` 24h TTL 캐시, 지원하지 않는 concept은 `DiscoveryError`로 명시적 실패 — 자세한 내용은 위 "Candidate Discovery" 섹션과 dev-log 참고
+- [ ] UX-05(Classification Coverage Gap: AI/HBM/데이터센터 부재, LG에너지솔루션 등 theme 누락) — 별도 known issue로 기록, 코드 보정하지 않음(v1 범위 밖)
 
 ## Phase 8 — Portfolio Strategy Agent ✅ v1 완료
 

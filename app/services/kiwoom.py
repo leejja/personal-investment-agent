@@ -25,6 +25,35 @@ _KST = ZoneInfo("Asia/Seoul")
 # 이 정도 margin이 재발급 빈도에 미치는 영향은 무시할 만하다.
 TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
 
+# UX-01 Theme catalog(ka90001) instance-level 캐시의 TTL. 이 값은 "테마
+# 분류가 금융적으로 며칠간 유효하다"는 투자 판단이 아니라, "Kiwoom이
+# 제공하는 테마 메타데이터(테마 목록 자체)를 얼마나 자주 다시 조회할
+# 것인가"를 뜻하는 순수 API/metadata refresh 정책이다. 실측 결과
+# 테마 카탈로그는 KRX 대분류(ka10101)보다 훨씬 세분화돼 있지만 그만큼
+# 자주 개편되는 종류의 데이터는 아니라고 판단해(개별 종목 시세처럼
+# 실시간으로 바뀌는 값이 아님), 하루 단위로 넉넉히 잡았다. 종목 편입/
+# 편출 자체가 하루 안에 여러 번 바뀔 이유가 없다는 가정에 기반한
+# 값이며, 실제 개편 주기를 관측하지 못했으므로 근거가 강한 값은 아니다.
+# 즉 이 값은 확정된 사양이 아니라 현재의 잠정적인 operational refresh
+# 정책이다 — 실제 개편 주기가 이후 관측되면(예상보다 자주 또는 훨씬
+# 드물게 바뀜) 그에 맞춰 조정할 수 있다.
+THEME_CATALOG_CACHE_TTL = timedelta(hours=24)
+
+# ka90001(테마그룹별요청) 전체 카탈로그 조회용 고정 파라미터. qry_tp="0"
+# (전체검색)이면 date_tp/flu_pl_amt_tp/stex_tp 값 자체는 반환되는 테마
+# 목록에 영향을 주지 않음을 실측으로 확인했다(2026-08-28 UX-01 조사) —
+# 다만 API가 이 필드들을 필수로 요구하므로 유효한 값을 채워 넣는다.
+_THEME_GROUP_QUERY_ALL = "0"
+_THEME_GROUP_DATE_TP = "10"
+_THEME_GROUP_FLU_PL_AMT_TP = "1"
+_THEME_GROUP_STEX_TP = "1"
+
+# ka90002(테마구성종목요청) 조회용 고정 파라미터. stex_tp="1"(KRX)로
+# 통합하고, date_tp는 멤버십 자체와 무관한 수익률 계산 기준일이라
+# 실측에 사용한 기본값을 그대로 둔다.
+_THEME_STOCK_STEX_TP = "1"
+_THEME_STOCK_DATE_TP = "2"
+
 
 class KiwoomAccessToken(BaseModel):
     expires_dt: str
@@ -113,6 +142,24 @@ class KiwoomStockListItem(BaseModel):
     order_warning: str  # orderWarning
 
 
+class KiwoomThemeGroup(BaseModel):
+    """ka90001(테마그룹별요청) 응답 1건. 대표 종목 2개(main_stk)는 실제
+    응답에 포함돼 있지만 전체 멤버십이 아니라 사람이 읽는 요약 텍스트일
+    뿐이라(예: "LB세미콘, 네패스") 구조화해 보존하지 않는다 — 실제
+    멤버십은 항상 ka90002(get_theme_stocks)로 별도 조회한다."""
+
+    theme_code: str  # thema_grp_cd
+    theme_name: str  # thema_nm
+    stock_count: int  # stk_num
+
+
+class KiwoomThemeStock(BaseModel):
+    """ka90002(테마구성종목요청) 응답 1건 — 테마에 속한 종목 하나."""
+
+    stock_code: str  # stk_cd
+    stock_name: str  # stk_nm
+
+
 class KiwoomService:
     REAL_BASE_URL = "https://api.kiwoom.com"
     MOCK_BASE_URL = "https://mockapi.kiwoom.com"
@@ -135,6 +182,19 @@ class KiwoomService:
         # 하나를 만들어 계속 재사용하는 패턴이라 이걸로 충분하다.
         self._cached_token: KiwoomAccessToken | None = None
         self._token_lock = asyncio.Lock()
+
+        # UX-01 테마 카탈로그(ka90001) instance-level 캐시. access token
+        # 캐시와 의미가 다르다 — token cache는 인증 상태를, 이 캐시는
+        # Kiwoom이 제공하는 "테마 목록" 외부 메타데이터를 재사용하기
+        # 위한 것이다. Analysis Snapshot Store(app/api/snapshot_store.py,
+        # UX-04)와도 목적이 다르다: 이쪽은 API/UI request lifecycle이
+        # 아니라 Kiwoom 외부 데이터의 refresh 주기를 다룬다. 동시성
+        # 보호(lock)는 두지 않았다 — token 캐시와 달리 동시 cache-miss가
+        # 나도 최악의 경우 ka90001을 몇 차례 중복 호출하는 정도이고,
+        # 실제로 관측된 문제가 아니라 예방적으로 lock을 추가하지 않는다
+        # (dev-log 참고).
+        self._theme_catalog_cache: list[KiwoomThemeGroup] | None = None
+        self._theme_catalog_cached_at: datetime | None = None
 
     async def get_access_token(
         self,
@@ -437,6 +497,147 @@ class KiwoomService:
             )
 
         return items
+
+    async def get_theme_groups(
+        self,
+        access_token: str,
+        *,
+        force_refresh: bool = False,
+    ) -> list[KiwoomThemeGroup]:
+        """ka90001 테마그룹별요청(qry_tp=전체검색)으로 전체 테마 카탈로그를
+        조회한다. THEME_CATALOG_CACHE_TTL 동안 instance-level로 캐시한다 —
+        UX-01 Candidate Discovery가 매 요청마다 142개 테마 전체를 다시
+        조회하지 않도록 하기 위함이다(모듈 상단 주석 참고)."""
+        if not force_refresh and self._is_theme_catalog_cache_valid():
+            assert self._theme_catalog_cache is not None
+            return self._theme_catalog_cache
+
+        groups = await self._fetch_theme_groups(access_token)
+
+        self._theme_catalog_cache = groups
+        self._theme_catalog_cached_at = datetime.now(_KST)
+        return groups
+
+    def _is_theme_catalog_cache_valid(self) -> bool:
+        if self._theme_catalog_cache is None or self._theme_catalog_cached_at is None:
+            return False
+
+        return datetime.now(_KST) - self._theme_catalog_cached_at < THEME_CATALOG_CACHE_TTL
+
+    async def _fetch_theme_groups(self, access_token: str) -> list[KiwoomThemeGroup]:
+        payload = {
+            "qry_tp": _THEME_GROUP_QUERY_ALL,
+            "date_tp": _THEME_GROUP_DATE_TP,
+            "flu_pl_amt_tp": _THEME_GROUP_FLU_PL_AMT_TP,
+            "stex_tp": _THEME_GROUP_STEX_TP,
+            "stk_cd": "",
+            "thema_nm": "",
+        }
+
+        response = await self.request(
+            access_token=access_token,
+            api_id="ka90001",
+            endpoint="/api/dostk/thme",
+            payload=payload,
+        )
+
+        groups = self._parse_theme_groups(response.data.get("thema_grp", []))
+
+        while response.cont_yn == "Y" and response.next_key:
+            response = await self.request(
+                access_token=access_token,
+                api_id="ka90001",
+                endpoint="/api/dostk/thme",
+                payload=payload,
+                cont_yn="Y",
+                next_key=response.next_key,
+            )
+            groups.extend(self._parse_theme_groups(response.data.get("thema_grp", [])))
+
+        return groups
+
+    @classmethod
+    def _parse_theme_groups(
+        cls,
+        rows: object,
+    ) -> list[KiwoomThemeGroup]:
+        if not isinstance(rows, list):
+            raise TypeError("Unexpected Kiwoom theme group response")
+
+        groups: list[KiwoomThemeGroup] = []
+
+        for row in rows:
+            if not isinstance(row, dict):
+                raise TypeError("Unexpected Kiwoom theme group item")
+
+            groups.append(
+                KiwoomThemeGroup(
+                    theme_code=str(row.get("thema_grp_cd", "")),
+                    theme_name=str(row.get("thema_nm", "")),
+                    stock_count=cls._parse_int(row.get("stk_num", "0")),
+                )
+            )
+
+        return groups
+
+    async def get_theme_stocks(
+        self,
+        access_token: str,
+        theme_code: str,
+    ) -> list[KiwoomThemeStock]:
+        # ka90002 테마구성종목요청. Theme catalog와 달리 멤버십 자체는
+        # 캐시하지 않는다(UX-01 v1은 요청된 테마만 그때그때 lazy하게
+        # 조회한다 — 142개 테마 전체 멤버십을 미리 구축하지 않는다).
+        payload = {
+            "thema_grp_cd": theme_code,
+            "stex_tp": _THEME_STOCK_STEX_TP,
+            "date_tp": _THEME_STOCK_DATE_TP,
+        }
+
+        response = await self.request(
+            access_token=access_token,
+            api_id="ka90002",
+            endpoint="/api/dostk/thme",
+            payload=payload,
+        )
+
+        stocks = self._parse_theme_stocks(response.data.get("thema_comp_stk", []))
+
+        while response.cont_yn == "Y" and response.next_key:
+            response = await self.request(
+                access_token=access_token,
+                api_id="ka90002",
+                endpoint="/api/dostk/thme",
+                payload=payload,
+                cont_yn="Y",
+                next_key=response.next_key,
+            )
+            stocks.extend(self._parse_theme_stocks(response.data.get("thema_comp_stk", [])))
+
+        return stocks
+
+    @classmethod
+    def _parse_theme_stocks(
+        cls,
+        rows: object,
+    ) -> list[KiwoomThemeStock]:
+        if not isinstance(rows, list):
+            raise TypeError("Unexpected Kiwoom theme stock response")
+
+        stocks: list[KiwoomThemeStock] = []
+
+        for row in rows:
+            if not isinstance(row, dict):
+                raise TypeError("Unexpected Kiwoom theme stock item")
+
+            stocks.append(
+                KiwoomThemeStock(
+                    stock_code=str(row.get("stk_cd", "")),
+                    stock_name=str(row.get("stk_nm", "")),
+                )
+            )
+
+        return stocks
 
     def _parse_account_positions(
         self,

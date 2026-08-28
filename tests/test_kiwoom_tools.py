@@ -10,6 +10,8 @@ from app.services.kiwoom import (
     KiwoomService,
     KiwoomStockInfo,
     KiwoomStockListItem,
+    KiwoomThemeGroup,
+    KiwoomThemeStock,
 )
 
 
@@ -203,4 +205,50 @@ async def test_get_kosdaq_stock_list() -> None:
     assert [item.symbol for item in result] == ["123456"]
     service.get_stock_list.assert_awaited_once_with(
         access_token="test-access-token", market_code="10"
+    )
+
+
+@pytest.mark.anyio
+async def test_get_theme_groups() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+
+    service.issue_access_token = AsyncMock(
+        return_value=KiwoomAccessToken(
+            expires_dt="20260823180000", token_type="bearer", token="test-access-token"
+        )
+    )
+    service.get_theme_groups = AsyncMock(
+        return_value=[
+            KiwoomThemeGroup(theme_code="550", theme_name="반도체_생산", stock_count=3)
+        ]
+    )
+
+    tools = KiwoomTools(service=service)
+
+    result = await tools.get_theme_groups()
+
+    assert [group.theme_code for group in result] == ["550"]
+    service.get_theme_groups.assert_awaited_once_with(access_token="test-access-token")
+
+
+@pytest.mark.anyio
+async def test_get_theme_stocks() -> None:
+    service = KiwoomService(app_key="test-app-key", secret_key="test-secret-key")
+
+    service.issue_access_token = AsyncMock(
+        return_value=KiwoomAccessToken(
+            expires_dt="20260823180000", token_type="bearer", token="test-access-token"
+        )
+    )
+    service.get_theme_stocks = AsyncMock(
+        return_value=[KiwoomThemeStock(stock_code="005930", stock_name="삼성전자")]
+    )
+
+    tools = KiwoomTools(service=service)
+
+    result = await tools.get_theme_stocks("550")
+
+    assert [stock.stock_code for stock in result] == ["005930"]
+    service.get_theme_stocks.assert_awaited_once_with(
+        access_token="test-access-token", theme_code="550"
     )

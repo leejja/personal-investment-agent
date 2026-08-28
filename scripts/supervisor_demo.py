@@ -26,6 +26,17 @@ _SCENARIOS = {
     "personalized-discovery": UserRequest(
         question="내 포트폴리오에 없는 반도체 후보 찾아줘"
     ),
+    # UX-01(Semantic Industry + Grounded Theme) 실제 E2E 시나리오.
+    "discovery-industry": UserRequest(question="대형 통신 종목 후보 찾아줘"),
+    "discovery-theme-semiconductor": UserRequest(
+        question="반도체 관련 종목 후보 찾아줘"
+    ),
+    "discovery-theme-semiconductor-kospi-large": UserRequest(
+        question="코스피 대형주 중 반도체 관련 종목 찾아줘"
+    ),
+    "discovery-theme-nuclear": UserRequest(question="원전 관련주 찾아줘"),
+    "discovery-theme-ai-unsupported": UserRequest(question="AI 관련주 찾아줘"),
+    "discovery-theme-battery": UserRequest(question="2차전지 관련주 찾아줘"),
 }
 
 # InvestorProfile은 아직 데이터 소스가 없다(Portfolio Strategy Agent 데모와
