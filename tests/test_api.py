@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.agents.portfolio.reasoning import ReasoningError as PortfolioReasoningError
 from app.api.main import app
+from app.api.presentation import build_presentation
 from app.api.routes import get_supervisor
 from app.discovery.orchestrator import DiscoveryError
 from app.models.common import AnalysisConfidence, RiskLevel, UserRequest
@@ -410,3 +411,186 @@ def test_analysis_invalid_view_returns_422_without_calling_supervisor(
 
     assert response.status_code == 422
     assert fake.calls == []
+
+
+# ======================= UX-04: analysis snapshot lifecycle =======================
+#
+# 아래 테스트들은 app.dependency_overrides[get_supervisor]만 fake로 바꾼다.
+# AnalysisSnapshotStore는 실제 lifespan이 만든 진짜 인스턴스를 그대로
+# 쓴다(생성 자체가 외부 API를 호출하지 않는 순수 in-memory 구조라 override가
+# 필요 없다) — 그래서 POST에서 발급된 analysis_id로 실제 GET 조회가
+# 가능하고, "GET이 Supervisor.run()을 다시 부르지 않는다"는 핵심 invariant를
+# fake.calls 카운트로 직접 검증할 수 있다.
+
+
+def test_analysis_post_response_includes_analysis_id_header(
+    override_supervisor,
+) -> None:
+    fake = _FakeSupervisor(
+        result=SupervisorResult(
+            intent=Intent.MARKET_ONLY, market_analysis=_market_analysis()
+        )
+    )
+    override_supervisor(fake)
+
+    with TestClient(app) as client:
+        response = client.post("/analysis", json={"question": "요즘 시장 상황 어때?"})
+
+    assert response.status_code == 200
+    assert response.headers["x-analysis-id"]
+
+
+def test_analysis_different_posts_produce_different_analysis_ids(
+    override_supervisor,
+) -> None:
+    fake = _FakeSupervisor(
+        result=SupervisorResult(
+            intent=Intent.MARKET_ONLY, market_analysis=_market_analysis()
+        )
+    )
+    override_supervisor(fake)
+
+    with TestClient(app) as client:
+        response1 = client.post("/analysis", json={"question": "질문 1"})
+        response2 = client.post("/analysis", json={"question": "질문 2"})
+
+    assert response1.headers["x-analysis-id"] != response2.headers["x-analysis-id"]
+
+
+def test_analysis_post_response_body_unchanged_by_analysis_id_header(
+    override_supervisor,
+) -> None:
+    # X-Analysis-ID header 추가가 기존 response body shape에 영향을 주지
+    # 않는지 재확인한다(test_analysis_view_detail_default_matches_existing_
+    # response_shape과 동일 취지, header 추가 회귀 방지).
+    fake = _FakeSupervisor(
+        result=SupervisorResult(
+            intent=Intent.MARKET_ONLY, market_analysis=_market_analysis()
+        )
+    )
+    override_supervisor(fake)
+
+    with TestClient(app) as client:
+        response = client.post("/analysis", json={"question": "요즘 시장 상황 어때?"})
+
+    body = response.json()
+    assert "analysis_id" not in body
+    assert body["intent"] == "market_only"
+
+
+def test_get_analysis_detail_after_post_returns_same_supervisor_result(
+    override_supervisor,
+) -> None:
+    stored_result = SupervisorResult(
+        intent=Intent.STOCK_RESEARCH,
+        resolved_symbols=["005930"],
+        stock_analyses=[_stock_analysis()],
+    )
+    fake = _FakeSupervisor(result=stored_result)
+    override_supervisor(fake)
+
+    with TestClient(app) as client:
+        post_response = client.post(
+            "/analysis?view=summary", json={"question": "삼성전자 어때?"}
+        )
+        analysis_id = post_response.headers["x-analysis-id"]
+
+        get_response = client.get(f"/analysis/{analysis_id}?view=detail")
+
+    assert get_response.status_code == 200
+    assert get_response.json() == stored_result.model_dump(mode="json")
+
+
+def test_get_analysis_summary_matches_build_presentation_of_same_snapshot(
+    override_supervisor,
+) -> None:
+    stored_result = SupervisorResult(
+        intent=Intent.PORTFOLIO_STRATEGY,
+        resolved_symbols=["005930"],
+        market_analysis=_market_analysis(),
+        stock_analyses=[_stock_analysis()],
+        strategy_result=_strategy_result(),
+    )
+    fake = _FakeSupervisor(result=stored_result)
+    override_supervisor(fake)
+
+    with TestClient(app) as client:
+        post_response = client.post(
+            "/analysis",
+            json={
+                "question": "내 포트폴리오 분석해줘",
+                "investor_profile": {"risk_tolerance": "medium"},
+            },
+        )
+        analysis_id = post_response.headers["x-analysis-id"]
+
+        get_summary_response = client.get(f"/analysis/{analysis_id}?view=summary")
+
+    assert get_summary_response.status_code == 200
+    expected = build_presentation(stored_result)
+    assert get_summary_response.json() == expected.model_dump(mode="json")
+
+
+def test_get_analysis_unknown_id_returns_404(override_supervisor) -> None:
+    fake = _FakeSupervisor(result=SupervisorResult(intent=Intent.MARKET_ONLY))
+    override_supervisor(fake)
+
+    with TestClient(app) as client:
+        response = client.get("/analysis/존재하지-않는-id")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Analysis snapshot not found or expired."}
+
+
+def test_get_analysis_invalid_view_returns_422(override_supervisor) -> None:
+    stored_result = SupervisorResult(
+        intent=Intent.MARKET_ONLY, market_analysis=_market_analysis()
+    )
+    fake = _FakeSupervisor(result=stored_result)
+    override_supervisor(fake)
+
+    with TestClient(app) as client:
+        post_response = client.post("/analysis", json={"question": "질문"})
+        analysis_id = post_response.headers["x-analysis-id"]
+
+        response = client.get(f"/analysis/{analysis_id}?view=both")
+
+    assert response.status_code == 422
+
+
+def test_get_analysis_does_not_call_supervisor_run_detail_and_summary(
+    override_supervisor,
+) -> None:
+    # UX-04의 핵심 invariant: POST 이후 동일 analysis_id로 GET
+    # detail/summary를 몇 번 조회하든 Supervisor.run()은 POST 시점의 1회
+    # 그대로 유지되어야 한다 — GET은 Supervisor/Agent/LLM/Kiwoom/OpenDART/
+    # ECOS 등 어떤 외부 실행도 다시 트리거하지 않는다.
+    stored_result = SupervisorResult(
+        intent=Intent.PORTFOLIO_STRATEGY,
+        resolved_symbols=["005930"],
+        market_analysis=_market_analysis(),
+        stock_analyses=[_stock_analysis()],
+        strategy_result=_strategy_result(),
+    )
+    fake = _FakeSupervisor(result=stored_result)
+    override_supervisor(fake)
+
+    with TestClient(app) as client:
+        post_response = client.post(
+            "/analysis",
+            json={
+                "question": "내 포트폴리오 분석해줘",
+                "investor_profile": {"risk_tolerance": "medium"},
+            },
+        )
+        assert len(fake.calls) == 1
+        analysis_id = post_response.headers["x-analysis-id"]
+
+        client.get(f"/analysis/{analysis_id}?view=detail")
+        assert len(fake.calls) == 1
+
+        client.get(f"/analysis/{analysis_id}?view=summary")
+        assert len(fake.calls) == 1
+
+        client.get(f"/analysis/{analysis_id}?view=detail")
+        assert len(fake.calls) == 1

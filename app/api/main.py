@@ -12,6 +12,7 @@ from app.agents.portfolio.reasoning import ReasoningError as PortfolioReasoningE
 from app.agents.stock_research.orchestrator import StockResearchOrchestrator
 from app.agents.stock_research.reasoning import ReasoningError as StockReasoningError
 from app.api.routes import router
+from app.api.snapshot_store import AnalysisSnapshotStore
 from app.config import settings
 from app.discovery.filter_intent import FilterIntentError
 from app.discovery.orchestrator import DiscoveryError, DiscoveryOrchestrator
@@ -79,6 +80,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         kiwoom_tools=kiwoom_tools,
         opendart_tools=opendart_tools,
     )
+
+    # UX-04: analysis_id로 SupervisorResult snapshot을 조회하기 위한
+    # in-memory store. Supervisor와 동일하게 프로세스 생애주기 동안 1회만
+    # 생성해 요청 간에 공유한다 — 자세한 lifecycle/한계는
+    # app/api/snapshot_store.py 참고.
+    app.state.snapshot_store = AnalysisSnapshotStore()
 
     yield
 

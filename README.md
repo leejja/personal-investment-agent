@@ -4,8 +4,8 @@
 
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
-> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1 + REST API v1 (FastAPI, `POST /analysis?view=detail|summary`) completed  
-> **Next:** Recommendation Engine (scoring/ranking)
+> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1 + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
+> **Next:** UX-01(세부 업종 taxonomy) / UX-02(InvestorProfile persistence) / Recommendation Engine (scoring/ranking)
 
 ---
 
@@ -1334,13 +1334,19 @@ Supervisor
 ```text
 app/api/
 ├── main.py           # FastAPI 앱, lifespan(의존성 그래프 1회 생성), 예외 핸들러
-├── routes.py         # AnalysisRequest DTO, GET /health, POST /analysis(?view=)
-└── presentation.py   # SupervisorResult → PresentationResult 순수 조립 함수
+├── routes.py         # AnalysisRequest DTO, GET /health, POST /analysis(?view=), GET /analysis/{analysis_id}(?view=)
+├── presentation.py   # SupervisorResult → PresentationResult 순수 조립 함수
+└── snapshot_store.py # analysis_id → SupervisorResult in-memory TTL store (UX-04)
 ```
 
 ## Endpoint
 
-v1은 **`POST /analysis` 단일 endpoint**로 Supervisor의 모든 intent(`market_only`/`stock_research`/`candidate_discovery`/`portfolio_strategy`)를 처리한다. Market/Stock/Portfolio/Discovery별로 endpoint를 나누지 않는다 — Supervisor 자체가 이미 "어떤 종류의 요청인가"를 안전하게 판단하는 역할을 하므로, endpoint를 나누면 client와 Supervisor가 이 판단을 각자 따로 내리게 되어 서로 어긋날 위험이 생긴다.
+v1은 분석 생성과 조회를 분리한 **두 endpoint**로 Supervisor의 모든 intent(`market_only`/`stock_research`/`candidate_discovery`/`portfolio_strategy`)를 처리한다. Market/Stock/Portfolio/Discovery별로 endpoint를 나누지 않는다 — Supervisor 자체가 이미 "어떤 종류의 요청인가"를 안전하게 판단하는 역할을 하므로, endpoint를 나누면 client와 Supervisor가 이 판단을 각자 따로 내리게 되어 서로 어긋날 위험이 생긴다.
+
+```text
+POST /analysis                          = 새로운 분석 생성 (Supervisor/Agent/LLM/외부 API 실행)
+GET  /analysis/{analysis_id}            = 이미 생성된 분석 snapshot 조회 (재실행 없음)
+```
 
 ```text
 HTTP Request
@@ -1425,6 +1431,43 @@ PresentationResult
 ```
 
 `portfolio_strategy`의 `PresentationResult.stocks`는 의도적으로 항상 빈 리스트다 — 종목별 상세는 `portfolio.recommendations`(간결한 `RecommendationSummary`)로만 노출하고, raw `StockAnalysis`/`Evidence`/`financial_history`는 `view=detail`에서만 확인하도록 경계를 나눴다. 이렇게 하지 않으면 원래 문제(응답 과다)가 요약 응답에서도 재현된다.
+
+## Analysis Snapshot Lifecycle — `analysis_id` / `X-Analysis-ID` (UX-04)
+
+`view=summary`/`view=detail`을 각각 별도 `POST /analysis`로 요청하면 Supervisor/Agent/LLM pipeline이 매번 독립적으로 재실행된다. LLM reasoning은 비결정적이므로, 같은 질문인데도 두 호출 사이에 market regime이나 portfolio recommendation 개수·action이 달라지는 현상이 실제 E2E에서 관측됐다(상세 관측치는 dev-log `2026-08-28.md` §13.5 참고). UX-04는 **한 번 실행된 `SupervisorResult`에 하나의 `analysis_id`를 부여하고, 이후 summary/detail 조회가 항상 동일 snapshot을 공유하게** 해 이 문제를 해결한다.
+
+```text
+POST /analysis
+    │
+    ▼
+Supervisor.run()  →  SupervisorResult
+    │                      │
+    │                      ├──► AnalysisSnapshotStore.put()  →  analysis_id
+    │                      └──► (view에 따라) body 그대로 / build_presentation()
+    ▼
+Response: body(기존과 동일한 shape) + header X-Analysis-ID: <analysis_id>
+
+
+GET /analysis/{analysis_id}?view=detail|summary
+    │
+    ▼
+AnalysisSnapshotStore.get(analysis_id)  →  같은 SupervisorResult (Supervisor.run() 재호출 없음)
+    │
+    ▼
+(view에 따라) body 그대로 / build_presentation()
+```
+
+핵심 invariant는 `one analysis_id = one SupervisorResult`다. 이를 구조적으로 지키기 위한 설계 결정:
+
+- **`analysis_id`는 Core model에 들어가지 않는다** — `UserRequest`/`SupervisorResult`/`PresentationResult` 어디에도 필드로 추가하지 않았다. `analysis_id`는 투자 분석 domain data가 아니라 API/snapshot lifecycle metadata이고, Supervisor는 snapshot 개념 자체를 모른다. 대신 `POST /analysis` 응답의 `X-Analysis-ID` HTTP header로만 전달한다 — body wrapper를 새로 만들면 기존 client의 backward compatibility가 깨지므로 header를 택했다. `view` 생략(기본값 `detail`) 시 body는 여전히 기존 `SupervisorResult`와 100% 동일하다.
+- **`GET /analysis/{analysis_id}`는 조회 전용이다 — refresh/재분석이 아니다.** `Supervisor.run()`/LLM 호출/Kiwoom·OpenDART·ECOS 호출을 절대 하지 않는다. `view=summary`도 저장된 동일 `SupervisorResult`에 이미 순수 함수인 `build_presentation()`(위 Presentation view 참고)을 적용할 뿐이라, summary/detail 사이의 일관성이 구조적으로 보장된다.
+- **`AnalysisSnapshotStore`(`app/api/snapshot_store.py`)는 in-memory TTL store다.** DB/Redis/background job은 추가하지 않았다 — 지금 실제로 관측된 문제는 "동일 snapshot을 summary/detail이 공유하지 못한다" 하나뿐이므로, 이를 푸는 최소 구조만 만들었다. `put()`이 `uuid4()` 기반 `analysis_id`를 발급하고, `get()`은 만료 여부를 함께 판정한다. 별도 background cleanup task 없이 `put()`/`get()` 호출 과정에서 만료 항목을 함께 제거하는 lazy cleanup만 둔다.
+- **TTL 기본값은 30분이며, 투자 판단의 금융적 유효기간이 아니다.** "30분 후 분석이 틀렸다"는 뜻이 아니라 "30분 이후에는 동일 `analysis_id` 재조회가 보장되지 않는다"는 API navigation/session lifecycle 상의 의미일 뿐이다. `MAX_STOCK_RESEARCH_FANOUT`(discovery)과 동일한 관례로 모듈 상수(`DEFAULT_ANALYSIS_SNAPSHOT_TTL`)로 두었고, config.py나 환경변수로 노출하지 않았다(아직 관측되지 않은 확장 가능성만으로 미리 설정 가능하게 만들지 않는다는 원칙).
+- **없거나 만료된 `analysis_id`는 404를 반환한다**(`{"detail": "Analysis snapshot not found or expired."}`). Store가 "과거에 존재했던 id"와 "애초에 존재하지 않았던 id"를 구분해 보관하지 않으므로 410 Gone은 쓰지 않는다 — 이를 정확히 지원하려면 tombstone/history가 필요한데 v1 범위 밖이다.
+- **Lock을 예방적으로 추가하지 않았다.** `put()`/`get()`은 `await` 지점이 없는 순수 동기 dict 연산이라 이벤트 루프 안에서 원자적으로 실행된다 — race가 발생할 지점 자체가 없어 `asyncio.Lock`을 넣지 않았다. 이 판단은 현재 `--workers 1` 단일 프로세스 전제에서만 유효하다.
+- **Process restart/`--reload`/multi-worker에서는 snapshot이 소멸하거나 조회되지 않는다.** in-memory이므로 프로세스가 재시작되면 모든 snapshot이 사라진다(bug가 아니라 v1의 명시적 제약이며, 분석 history/persistence 기능이 아니다). `--workers 1` 전제도 그대로 유지한다 — 멀티 워커는 워커마다 별도 프로세스라 worker A가 만든 snapshot을 worker B가 조회할 수 없다(Kiwoom access token 캐시와 동일한 성격의 제약). 향후 실제 multi-worker 배포가 필요해지면 `AnalysisSnapshotStore`를 공유 store로 교체할 수 있도록 책임 경계(`get_snapshot_store()` dependency)만 유지했고, 이를 이유로 지금 Redis 등 interface hierarchy를 미리 만들지 않았다.
+
+실제 E2E로 확인한 결과는 dev-log `2026-08-28.md` §16 참고 — POST(수 분 소요, 실제 Supervisor 실행)와 동일 `analysis_id`로의 GET(수 ms, 재실행 없음)의 latency 차이, 그리고 detail/summary 사이의 recommendation 개수·필드 완전 일치를 실측했다.
 
 ## 처리 시간 / 아직 넣지 않은 것
 
@@ -1732,7 +1775,9 @@ personal-investment-agent/
 ├── app/
 │   ├── api/                         # REST API v1 — 구현 완료
 │   │   ├── main.py                 # FastAPI 앱, lifespan, 예외 핸들러
-│   │   └── routes.py                # AnalysisRequest DTO, GET /health, POST /analysis
+│   │   ├── routes.py                # AnalysisRequest DTO, GET /health, POST /analysis, GET /analysis/{analysis_id}
+│   │   ├── presentation.py          # SupervisorResult → PresentationResult 순수 조립 함수
+│   │   └── snapshot_store.py        # analysis_id → SupervisorResult in-memory TTL store (UX-04)
 │   │
 │   ├── agents/                     # AI Agent Layer
 │   │   ├── market/                 # Market Agent — v1 구현 완료
@@ -1806,6 +1851,7 @@ personal-investment-agent/
 │   ├── test_discovery_filter_intent.py
 │   ├── test_discovery_orchestrator.py
 │   ├── test_api.py
+│   ├── test_snapshot_store.py
 │   └── test_mcp_server.py
 │
 ├── scripts/
@@ -2047,11 +2093,18 @@ curl -X POST "http://127.0.0.1:8000/analysis?view=summary" \
     "question": "내 포트폴리오 분석해줘",
     "investor_profile": {"risk_tolerance": "medium"}
   }'
+
+# analysis_id로 동일 snapshot 재조회 (Supervisor 재실행 없음, 응답 header의
+# X-Analysis-ID 값을 사용 — 아래는 예시 id)
+curl -i http://127.0.0.1:8000/analysis/3f5d41c6-40c7-4b7d-8c36-716aa25d8703?view=detail
+curl -i http://127.0.0.1:8000/analysis/3f5d41c6-40c7-4b7d-8c36-716aa25d8703?view=summary
 ```
 
 `question`은 자연어 그대로 넣으면 되고, 어떤 intent로 처리할지는 Supervisor가 내부에서 알아서 분류한다(endpoint를 따로 고를 필요 없음). `portfolio_strategy`처럼 보유종목 전체를 분석하는 요청은 실제로 몇 분 걸릴 수 있다 — v1은 synchronous라 client가 넉넉한 timeout을 두는 것을 전제로 한다(자세한 내용은 위 REST API 섹션의 "처리 시간" 참고).
 
 `?view=summary`를 붙이면 같은 요청을 동일하게 한 번만 처리하되, 응답을 사람이 읽기 쉬운 `PresentationResult`(위 REST API 섹션의 "Presentation view" 참고)로 받는다. `view`를 생략하면(또는 `view=detail`) 기존과 완전히 동일한 상세 응답을 받는다.
+
+모든 `POST /analysis` 응답은 `X-Analysis-ID` header를 포함한다. 이 id로 `GET /analysis/{analysis_id}`를 호출하면 Supervisor를 다시 실행하지 않고 같은 `SupervisorResult` snapshot을 detail/summary 어느 쪽으로도 재조회할 수 있다(기본 TTL 30분, 자세한 내용은 위 REST API 섹션의 "Analysis Snapshot Lifecycle" 참고). `GET`은 조회 전용이며 새로운 분석이 필요하면 다시 `POST`해야 한다.
 
 ---
 
@@ -2081,6 +2134,7 @@ tests/
 ├── test_discovery_filter_intent.py
 ├── test_discovery_orchestrator.py
 ├── test_api.py
+├── test_snapshot_store.py
 └── test_mcp_server.py
 ```
 
@@ -2275,7 +2329,13 @@ test_discovery_orchestrator.py
 ├── view=summary: MARKET_ONLY/STOCK_RESEARCH/CANDIDATE_DISCOVERY/PORTFOLIO_STRATEGY 4종 모두 정상 응답
 ├── view=summary 응답에 financial_history/evidence/target_weight/target_price 없음
 ├── PORTFOLIO_STRATEGY view=summary에서 stocks=[](종목별 raw StockAnalysis 미노출, recommendations로만 표현)
-└── view=both(v1 미지원) 등 잘못된 값 → 422, Supervisor 호출 없음
+├── view=both(v1 미지원) 등 잘못된 값 → 422, Supervisor 호출 없음
+├── POST /analysis 응답에 X-Analysis-ID header 존재, body shape은 header 추가와 무관하게 기존과 동일
+├── 서로 다른 POST는 서로 다른 analysis_id 발급
+├── POST에서 받은 analysis_id로 GET /analysis/{id}?view=detail → 저장된 SupervisorResult와 완전히 동일
+├── 동일 analysis_id로 GET ?view=summary → 같은 snapshot에 build_presentation()을 적용한 결과와 동일
+├── 존재하지 않는 analysis_id → 404(고정 메시지), GET에 잘못된 view=both → 422
+└── **핵심 invariant**: POST 이후 동일 analysis_id로 GET detail/summary를 몇 번 조회해도 fake Supervisor의 호출 횟수가 POST 시점 1회에서 늘어나지 않음(GET이 Supervisor.run()을 재호출하지 않음을 call count로 직접 검증)
 ```
 
 `tests/test_presentation.py` — `build_presentation()` 자체를 실제 외부 API/LLM 없이 순수 unit test로 검증한다(HTTP 레이어 없이 함수 직접 호출).
@@ -2293,6 +2353,19 @@ test_discovery_orchestrator.py
 └── skipped가 모든 intent에서 그대로 pass-through
 ```
 
+`tests/test_snapshot_store.py` — `AnalysisSnapshotStore`를 HTTP 레이어 없이 직접 검증한다. TTL 경과는 `sleep()` 대신 clock을 생성자에 주입해(`clock: Callable[[], datetime]`) 결정론적으로 시뮬레이션한다.
+
+```text
+├── put() → analysis_id(uuid) 발급
+├── put() 직후 get(id) → 동일 SupervisorResult 인스턴스
+├── 서로 다른 put() → 서로 다른 id, 각각 올바른 결과로 조회됨
+├── 존재하지 않는 id → None
+├── TTL 이전(만료 1초 전) → 정상 조회
+├── TTL 경과 후(만료 1초 후, 정확히 경계값 포함) → None
+├── 만료된 snapshot은 get() 호출 시 내부 dict에서 lazy eviction됨
+└── 만료된 snapshot은 다음 put() 호출 시에도 lazy eviction됨(무한 누적 방지)
+```
+
 ## MCP End-to-End Test
 
 `tests/test_mcp_server.py`에서 실제 MCP Client로 9개 Tool 전체를 실제 외부 API까지 end-to-end로 검증한다.
@@ -2300,7 +2373,7 @@ test_discovery_orchestrator.py
 현재 전체 테스트 결과:
 
 ```text
-283 passed
+301 passed
 ```
 
 전체 lint 결과:
@@ -2329,7 +2402,9 @@ REST API v1까지 갖춘 뒤, Stock Research Agent의 `investment_thesis`가 최
 
 OpenDART 다년 재무 추세를 추가한 뒤, 실제 Swagger 사용에서 `portfolio_strategy` 응답이 보유 종목 수만큼의 `StockAnalysis`를 모두 포함해 사람이 읽기 어려울 정도로 길다는 문제가 확인됐다. `SupervisorResult`는 향후 Web/Flutter의 상세 조회와 machine-readable contract로 계속 가치가 있어 바꾸고 싶지 않았기 때문에, 이를 전혀 건드리지 않고 그 위에 읽기 전용 파생 뷰 `PresentationResult`를 얹었다. `app/api/presentation.py`의 `build_presentation()`은 LLM이나 외부 API를 인자로 받지 않는 순수 함수이며, `MarketAnalysis.summary`/`StockAnalysis.investment_thesis`/`StrategyResult.summary`/`PositionRecommendation.rationale` 같은 기존 grounded 필드를 그대로 옮기거나 개수만 세는 것으로 제한했다 — 새 자유생성 LLM synthesis는 이 프로젝트가 지켜온 "grounding 없이 생성하지 않는다" 원칙을 우회하는 새 hallucination 표면이 되므로 v1에서 명시적으로 배제했다. `RecommendationSummary`에는 `target_weight`/`target_price` 같은 필드를 아예 선언하지 않아 null 강제보다 한 단계 더 강한 안전장치로 새 투자 판단 생성을 구조적으로 차단했다. API는 `POST /analysis?view=detail|summary`로 노출했고, `view` 생략 시 기존 `SupervisorResult` 응답과 완전히 동일해 기존 client 호환성을 100% 유지했다(both는 v1에서 의도적으로 제외 — payload를 줄이는 게 목적인데 요약+상세를 함께 반환하면 문제가 그대로 남기 때문). 실제 E2E로 확인한 결과 `stock_research`(삼성전자)는 9,208바이트(detail) → 3,094바이트(summary), `portfolio_strategy`(보유 20여종목)는 211,862바이트(detail) → 5,123바이트(summary)로 줄었다 — 특히 portfolio는 약 97.6% 감소해 원래 문제를 직접 해결했음을 확인했다(자세한 내용은 dev-log 참고).
 
-Recommendation Engine(scoring/ranking 기반 신규 투자 후보 평가)은 프로젝트 공식 범위에 포함되어 있으며 다음 구현 대상이다.
+Presentation view를 실사용(Swagger)한 결과 `view=summary`/`view=detail`을 각각 별도 요청하면 Supervisor pipeline이 매번 독립적으로 재실행되어, 동일 질문인데도 LLM reasoning의 비결정성 때문에 market regime이나 portfolio recommendation 개수·action이 두 응답 사이에 달라지는 현상이 실제로 관측됐다(UX-04). 이를 해결하기 위해 **한 번 실행된 `SupervisorResult`에 `analysis_id`를 부여하고 이후 조회가 동일 snapshot을 공유하게** 하는 analysis snapshot lifecycle을 추가했다. `POST /analysis`가 실행 직후 결과를 `app/api/snapshot_store.py`의 `AnalysisSnapshotStore`(in-memory TTL store, 기본 30분)에 저장하고 `X-Analysis-ID` 응답 header로 id를 돌려주며, 신규 `GET /analysis/{analysis_id}?view=detail|summary`는 그 id로 저장된 동일 snapshot을 조회만 할 뿐 `Supervisor.run()`/LLM/Kiwoom/OpenDART/ECOS 어느 것도 다시 호출하지 않는다. `analysis_id`는 API/snapshot lifecycle metadata일 뿐 투자 분석 domain data가 아니라는 경계를 지키기 위해 `UserRequest`/`SupervisorResult`/`PresentationResult` 어디에도 필드로 추가하지 않았고, body는 header 추가와 무관하게 기존과 완전히 동일하게 유지해 backward compatibility를 지켰다. DB/Redis/background job은 이번에도 추가하지 않았다 — 관측된 문제가 "동일 snapshot을 summary/detail이 공유하지 못한다" 하나뿐이라 이를 푸는 최소 구조(in-memory dict + lazy TTL eviction)로 충분하다고 판단했고, `put()`/`get()`에 `await` 지점이 없어 `asyncio.Lock`도 예방적으로 추가하지 않았다. 실제 E2E로 동일 `analysis_id`에 대해 POST(수 분, 실제 실행)와 GET(수 ms, 재실행 없음)의 latency 차이, 그리고 detail/summary 간 recommendation 개수·필드가 완전히 일치함을 확인해 §13.5에서 관측됐던 불일치(6건 vs 10건)가 재현되지 않음을 검증했다(자세한 내용은 dev-log 참고).
+
+Recommendation Engine(scoring/ranking 기반 신규 투자 후보 평가)은 프로젝트 공식 범위에 포함되어 있으며, UX-01(세부 업종 taxonomy)·UX-02(InvestorProfile persistence)와 함께 다음 구현 대상이다.
 
 ```text
 Foundation                         completed
@@ -2396,10 +2471,21 @@ REST API v1                          completed
     ├── lifespan 의존성 그래프 1회 생성 (token 캐싱 유지)          ✓
     ├── Core exception → HTTP status 매핑 + 원문 비노출            ✓
     ├── GET /health (외부 API 미호출)                              ✓
+    ├── POST /analysis?view=detail|summary (Presentation view)     ✓
     └── 실제 E2E (health/MARKET_ONLY/STOCK_RESEARCH)               ✓
     │
     ▼
-Recommendation Engine               ← NEXT (scoring/ranking)
+Analysis Snapshot Lifecycle (UX-04)  completed
+    ├── AnalysisSnapshotStore — in-memory TTL store (lock 없음)    ✓
+    ├── POST /analysis → X-Analysis-ID header 발급, body 불변      ✓
+    ├── GET /analysis/{analysis_id}?view=detail|summary 신규       ✓
+    ├── GET은 Supervisor.run()/LLM/외부 API 재호출 없음(call count로 검증) ✓
+    ├── 없거나 만료된 id → 404(고정 메시지, 410 미사용)            ✓
+    ├── analysis_id는 Core model(UserRequest/SupervisorResult/PresentationResult)에 미포함 ✓
+    └── 실제 E2E (stock_research/portfolio_strategy, POST~분 vs GET~ms, snapshot 일치 확인) ✓
+    │
+    ▼
+Recommendation Engine               ← NEXT (scoring/ranking, UX-01/UX-02 이후)
 ```
 
 ---
@@ -2558,7 +2644,21 @@ Recommendation Engine               ← NEXT (scoring/ranking)
 - [x] 실제 E2E (`GET /health`, `POST /analysis` MARKET_ONLY/STOCK_RESEARCH)
 - [x] `POST /analysis?view=detail|summary` — `app/api/presentation.py`(순수 함수) + `PresentationResult`, 기존 `SupervisorResult`는 완전 불변
 - [ ] DB / login·auth / history / Redis·Celery / background job / WebSocket / multi-worker (v1 범위 밖, 의도적으로 보류)
-- [ ] `view=both`, summary caching (v2+ — Flutter 사용에서 재요청 latency 문제가 관측되면 재검토)
+- [ ] `view=both` (v2+ — Phase 9b로 summary caching 자체는 해결됨, both는 여전히 별도 검토 대상)
+
+## Phase 9b — Analysis Snapshot Lifecycle (UX-04) ✅ 완료
+
+> `view=summary`/`view=detail`을 각각 별도 요청하면 Supervisor pipeline이 매번 독립 재실행되어, LLM reasoning의 비결정성 때문에 동일 질문의 두 응답이 서로 다른 분석을 가리킬 수 있는 문제(§13.5 관측)를 해결한다. 목표는 한 번 실행된 `SupervisorResult`에 `analysis_id`를 부여해 이후 조회가 동일 snapshot을 공유하게 하는 것.
+
+- [x] `app/api/snapshot_store.py` — `AnalysisSnapshotStore`(in-memory TTL store, 기본 30분, `uuid4()` 기반 id)
+- [x] `put()`/`get()` 모두 lazy TTL eviction, `asyncio.Lock` 없음(await 지점 없는 순수 dict 연산이라 race 발생 지점 자체가 없음)
+- [x] `POST /analysis` 응답에 `X-Analysis-ID` header 추가, body shape은 기존과 완전히 동일하게 유지
+- [x] `GET /analysis/{analysis_id}?view=detail|summary` 신규 — snapshot 조회 전용, `Supervisor.run()`/LLM/Kiwoom/OpenDART/ECOS 재호출 없음
+- [x] 없거나 만료된 id → 404(고정 메시지 `"Analysis snapshot not found or expired."`, 410 미사용)
+- [x] `analysis_id`를 `UserRequest`/`SupervisorResult`/`PresentationResult` 등 Core model에 추가하지 않음(API/lifecycle metadata로만 유지)
+- [x] 신규 테스트 18건(`test_snapshot_store.py` 10 + `test_api.py` +8) — GET이 Supervisor.run() 호출 횟수를 늘리지 않음을 call count로 직접 검증
+- [x] 실제 E2E (`stock_research`/`portfolio_strategy`) — POST(수 분, 실제 실행) vs GET(수 ms, 재실행 없음) latency 차이 확인, detail/summary 간 recommendation 개수·필드 완전 일치로 §13.5 불일치(6건 vs 10건) 재현 안 됨을 확인
+- [ ] DB/Redis 기반 영속 store, multi-worker 공유 store, tombstone 기반 410 (v1 범위 밖, 의도적으로 보류)
 
 ## Phase 10 — Expansion
 
