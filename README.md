@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** UX-02(InvestorProfile persistence) / Recommendation Engine (scoring/ranking, RE-01 기반 위에서 구현 예정)
+> **Next:** RE-02 Final Decisions(scoring architecture 6개 설계 질문 확정) → RE-04(Final Recommendation Architecture) → Recommendation Engine v1 scoring/구현 → UX-02(InvestorProfile persistence) — RE-01~RE-03.3 순수 조사 전부 완료(KIS Developers 실제 인증 성공 + Forward Feature Verification Matrix 확정: Broker Investment Opinion/Target Price 계열만 v1 후보로 채택, `estimate-perform` 기반 Forward Revenue/OpProfit/NetIncome/EPS/PER/PBR/ROE 및 `rcmd_name` 기반 Consensus Investment Opinion은 신뢰도 문제로 제외)
 
 ---
 
@@ -1697,6 +1697,7 @@ Stock Research Agent v1과 Market Agent v1 모두 이 MCP Client 경로를 사�
 | OpenDART API | 기업 공시 / 재무 데이터 | **Service + Tool + MCP Integrated** |
 | Kiwoom REST API | 계좌 / 주가 / 거래 / 수급 데이터 | **Service + Tool + MCP Integrated** |
 | OpenAI API | Stock Research Agent / Market Agent LLM reasoning | **Service Integrated (LLMService, Agent 전용, MCP 미노출)** |
+| KIS Developers API (한국투자증권) | Broker Investment Opinion / Target Price(`invest-opinion`/`invest-opbysec`) — v1 후보로 실측 검증 완료. `estimate-perform`(Forward Revenue/OpProfit/NetIncome/EPS/PER/PBR/ROE 추정치)은 실제 호출·값 확인은 했으나 row semantics 미문서화 + 종목별 reliability 불일치로 v1 제외 | **라이브 검증 완료, production 미통합** — OAuth 인증 성공, 3개 TR 전부 실측(RE-03.2/RE-03.3), Forward Feature Verification Matrix 확정 |
 
 향후 필요에 따라 추가할 수 있다.
 
@@ -1706,6 +1707,12 @@ Stock Research Agent v1과 Market Agent v1 모두 이 MCP Client 경로를 사�
 - 해외 시장 데이터
 - 추가 경제 지표
 - 기업 IR 자료
+
+**RE-03(Forward-Looking Data Source Investigation)에서 조사했으나 채택하지 않은 소스** (근거는 dev-log §20 참고, 코드 미반영):
+
+- KRX MDC(`data.krx.co.kr`) 비공식 내부 엔드포인트 — historical PER/PBR/EPS/BPS 시계열이 실제로 존재함을 확인했으나(pykrx 오픈소스로 구조 확인), 세션 쿠키/Referer 스푸핑이 필요한 비공식 채널이라 "기술적으로 가능하나 프로덕션 권장 = NO"로 분류(Tier C). 정식 등록형 `openapi.krx.co.kr`이 동일 데이터셋을 제공하는지는 미확인(open question).
+- NAVER Finance 직접 접근 — 비공식 접근 + FnGuide 2차 데이터 재배포 리스크로 Reject.
+- FnGuide DataGuide — 데이터 자체는 유효하나 유료 B2B 연간 계약(개인/무료 tier 없음)이라 Tier B(비용상 부적합).
 
 ---
 
@@ -2475,7 +2482,13 @@ Presentation view를 실사용(Swagger)한 결과 `view=summary`/`view=detail`�
 
 UX-04까지 마친 뒤 Candidate Discovery v1의 "반도체"/"2차전지" 같은 세부 업종 질문이 실패하는 UX-01(세부 업종 taxonomy)을 다뤘다. 애초 가설은 "Kiwoom `ka10101`(업종코드 리스트)이 `ka10099.upName`보다 세분화돼 있을 것"이었으나, 실제 API 호출로 확인한 결과 **`ka10101`은 `upName`과 사실상 동일한 굵직한 KRX 대분류(~27~34개)였다** — 삼성전자·SK하이닉스·LG에너지솔루션이 전부 "전기/전자" 하나에 뭉뚱그려짐을 실측으로 확인했다. 대신 Kiwoom의 테마 API(`ka90001` 테마그룹별요청/`ka90002` 테마구성종목요청)에 실제로 세분화된 정보(반도체 8개 세부 테마, 2차전지 2개, 로봇 1개, 원자력 2개 등 총 142개 테마)가 존재함을 확인해, **Industry axis는 기존 `upName`을 그대로 재사용하고 Theme axis(`ka90001`/`ka90002`)를 완전히 별도로 추가하는 "Semantic Industry + Grounded Theme"(C안) 구조**를 채택했다. `DiscoveryFilter`에 `theme_requests: list[ThemeRequest]`(concept + 실제 grounding된 테마명)를 신설해 Industry(`sector_terms`)와 절대 섞지 않았고, 같은 concept의 여러 테마는 UNION, 서로 다른 axis(market/size/industry/theme/ownership)는 INTERSECTION으로 결합했다. LLM은 "원전 → 원자력_기자재/원자력_설계시공"처럼 사용자 표현과 카탈로그 공식 명칭 사이의 동의어 수준 normalization을 제안할 수 있지만 Python이 실제 카탈로그로 다시 검증하며, 지원되지 않는 concept(예: "AI" — 카탈로그에 전혀 없음을 실측 확인)은 조용히 무시하지 않고 `DiscoveryError`로 명시적으로 실패시킨다. 실제 LLM 응답을 검증하는 과정에서 초기 프롬프트가 "AI"를 "클라우드 컴퓨팅"/"보안_인터넷" 같은 응용 산업 테마에 과도하게 매칭시키는 것을 발견해, 하드코딩된 alias table 대신 프롬프트 지침을 "확신이 서지 않으면 포함하지 말라"는 방향으로 강화해 해결했다. Theme catalog(`ka90001`)는 `KiwoomService` instance에 24시간 TTL로 캐시하고(access token 캐시와 별개, UX-04 Analysis Snapshot Store와도 목적이 다른 순수 외부 metadata refresh 정책), 실제 멤버십(`ka90002`)은 요청된 테마만 lazy 조회한다(142개 전체 사전 구축 없음). 기존 `Candidate.sector`/`matched_filters: dict[str, str]`는 변경하지 않고 그대로 유지해 backward compatibility를 지켰다. 실제 E2E로 "대형 통신 종목"(Industry axis) 결과가 UX-01 전후로 완전히 동일함을 재확인했고, "반도체"(Theme, 8개 세부 테마 union), "코스피 대형주 중 반도체"(Market ∩ Size ∩ Theme 교집합, SK하이닉스/삼성전자/한미반도체 3종목), "원전"(정상화 후 9종목), "AI"(unsupported, `DiscoveryError`)를 확인했다. "2차전지"는 실제로 17종목(완제품 3 + 소재 14)이 나와 fan-out 한도를 넘었는데, 이는 LG에너지솔루션이 Kiwoom 테마 카탈로그에 아예 존재하지 않는(스핀오프 이전 구조를 반영하는 것으로 보이는) coverage gap 때문임을 실측으로 확인했다 — 이런 gap은 코드로 보정하지 않고 UX-05(Classification Coverage Gap)로 별도 기록했다. 이번 조사 중 `ka90002`에서 실제 HTTP 429(rate limit)를 처음으로 관측했는데(짧은 시간에 여러 테마를 연속 조회할 때), 응답 헤더에는 여전히 rate-limit 정보가 노출되지 않아 정확한 한도는 확인하지 못했다(자세한 내용은 dev-log 참고).
 
-Recommendation Engine(scoring/ranking 기반 신규 투자 후보 평가)은 프로젝트 공식 범위에 포함되어 있으며, UX-02(InvestorProfile persistence)와 함께 다음 구현 대상이다.
+RE-01(구조화된 재무 feature) commit·push 이후 Recommendation Engine v1의 scoring 설계를 위해 네 차례의 순수 조사(RE-02/RE-03/RE-03.1/RE-03.2, 전부 production code 미변경, `git status` clean으로 종료)를 거쳤다. RE-02는 `financial_features` + `financials.per/pbr/roe` + price/confidence 필드만으로 Financial Quality/Growth-Trend/Valuation/Price Position/Risk 5개 scoring 컴포넌트의 실현 가능성을 검토했다 — Kiwoom ROE와 OpenDART 파생 net_income의 부호가 실제로 불일치하는 사례(RE-01 조사 중 LG에너지솔루션에서 발견)가 있어 ROE를 기본적으로 신뢰 가능하다고 가정하지 않았고, absolute/relative/hybrid 채택 여부 등 6개 최종 결정 질문은 아직 사용자 확정 전이다. RE-03은 이 Fundamental/Historical layer 옆에 둘 "Forward Opportunity Layer"(Forward EPS/Revenue/OpProfit/NetIncome, Earnings Revision, Consensus Target Price, Historical Valuation, Grounded Catalyst)의 실제 데이터 소스를 조사했다. Kiwoom/OpenDART 모두 forward-looking 데이터가 없음을 재확인했고(OpenDART는 다만 `report_nm` 필드가 실제로는 매우 구체적인 기업행위성 공시명임을 라이브 API 호출로 확인해 — "세분화가 부족하다"던 최초 간접 조사 결과를 실측으로 정정했다 — Grounded Catalyst는 제한적으로 YES), KIS Developers(한국투자증권)의 공식 GitHub/Postman 컬렉션에서 forward 추정실적/투자의견 관련 TR 3개(`estimate-perform`/`invest-opinion`/`invest-opbysec`)가 실존함을 확인했다. 다만 request 파라미터만 확정됐을 뿐 response schema는 공식 문서(포털은 JS SPA라 접근 불가)로도 확인할 수 없었다(RE-03.1). 이후 KIS App Key/Secret이 `.env`에 설정된 뒤 실제 인증을 시도했으나(RE-03.2) `POST /oauth2/tokenP`가 `403 EGW00103(유효하지 않은 AppKey입니다)`로 일관되게 실패해 — 재현성 확인 2회, 모의투자 도메인 진단 1회 모두 동일 — 3개 TR 중 어느 것도 아직 실제로 호출하지 못했다. **Forward Opportunity Layer의 데이터 계약은 여전히 전부 미확정이며, 유효한 KIS credential 확보가 다음 단계(RE-04)의 유일한 blocker다.** Recommendation Engine(scoring/ranking 기반 신규 투자 후보 평가)은 프로젝트 공식 범위에 포함되어 있으며, UX-02(InvestorProfile persistence)와 함께 다음 구현 대상이다.
+
+다음 세션에서 이 blocker가 풀렸다(RE-03.2 재개) — 원인은 KIS App Key 자체가 무효했던 게 아니라 `.env`의 `KIS_APP_KEY`에 **Kiwoom App Key가 잘못 들어가 있었던 것**으로 확인됐다. 사용자가 실제 KIS Developers 계좌·앱 키/시크릿을 새로 발급받아 `.env`를 교체한 뒤 동일한 인증 흐름을 재실행한 결과 `POST /oauth2/tokenP`가 정상적으로 access token을 발급했고, `estimate-perform`/`invest-opinion`/`invest-opbysec` 3개 TR 모두 실제 호출·response schema·값 검증까지 완료했다. 이 과정에서 KIS token 발급이 분당 1회로 제한되고(`EGW00133`) TR 호출 자체에도 초당 제한(`EGW00201`)이 있음을 실측으로 확인했다 — 향후 실제 통합 시 Kiwoom과 마찬가지로 caching/pacing이 필요하다.
+
+이어진 RE-03.3(Forward Data Semantics & Reliability Verification)에서는 공식 GitHub/Postman 자료에 `estimate-perform`의 response 필드(`output1~4`, `data1~data5`) 설명이 전혀 없음을 재확인한 뒤, 업종을 분산한 10개 종목(005930/000660/005380 필수 포함 + 금융/인터넷/바이오/화학/통신/산업재/유틸리티)으로 직접 cross-validation을 수행했다. `output2` row1은 OpenDART 실측 대조(005930)로 매출액임을 확인했지만, 2026E/2027E 추정치가 **삼성전자·SK하이닉스 2개 종목에서만 비현실적으로(전년 대비 최대 +112%~+258%) 재현**되고 나머지 8개 종목(현대차/KB금융/NAVER/셀트리온/LG화학/SK텔레콤/HD한국조선해양/한국전력)은 과거 추세와 자연스럽게 이어지는 값을 보이는 불일치가 관찰됐다 — **원인은 확인하지 못했고 추측하지 않았다.** `output2`/`output3`의 나머지 row(영업이익/순이익/EPS/PER/PBR/ROE로 추정되는 후보들)는 공식 문서가 전혀 없어 매핑을 확정하지 않고 UNKNOWN으로 남겼다. 반면 `invest-opinion`/`invest-opbysec`의 브로커별 투자의견·목표주가는 10종목 전부에서 안정적으로 검증됐다 — 다만 응답이 최대 100건으로 상한되며(6년 넘게 조회 기간을 넓혀도 동일), `tr_cont` 헤더가 `M`으로 오는 경우가 한 번도 없어 100건 초과 시 실제 연속조회가 작동하는지는 확인하지 못했다(UNKNOWN). `estimate-perform.output1.rcmd_name`(투자의견 후보 필드)도 10종목 중 9종목은 최근 20건 브로커 의견의 다수와 일치했지만 1종목(한국전력)은 명백히 불일치해 semantics를 확정하지 못했다.
+
+**결론: Forward Opportunity Layer v1 후보는 Broker Investment Opinion/Target Price 계열(및 그 파생 — Consensus Target Price, Implied Upside, Broker Opinion Revision)로 좁혀졌다.** `estimate-perform` 기반 Forward Revenue/Operating Profit/Net Income/EPS/PER/PBR/ROE와 `rcmd_name` 기반 Consensus Investment Opinion은 row semantics 미확정 및 reliability 불일치로 v1에서 제외한다. "Estimate Revision"이라는 모호한 이름 대신, 실제로 검증된 범위가 개별 브로커 리포트의 의견 변경(`invt_opnn` vs `rgbf_invt_opnn`) 추적임을 분명히 하기 위해 **Broker Opinion Revision**으로 명명한다 — EPS/영업이익 consensus estimate의 revision이 검증됐다는 뜻이 아니다. 상세는 dev-log §20.3/§21 참고.
 
 ```text
 Foundation                         completed
@@ -2568,7 +2581,16 @@ Candidate Discovery Theme Axis (UX-01) completed
     └── 실제 E2E(통신/반도체/코스피대형+반도체/원전/AI unsupported/2차전지) ✓
     │
     ▼
-Recommendation Engine               ← NEXT (scoring/ranking, UX-02 이후)
+Recommendation Engine Investigation  completed (조사만, 구현 아님)
+    ├── RE-01 구조화된 재무 feature(financial_features)                 ✓ (Phase 6에 이미 반영)
+    ├── RE-02 Scoring Architecture 조사 — 6개 최종 결정 질문 미확정      ✓ (조사)
+    ├── RE-03 Forward-Looking Data Source 조사                          ✓ (조사)
+    ├── RE-03.1 KIS 공식 스키마 조사(response schema 미문서화 확인)      ✓ (조사)
+    ├── RE-03.2 KIS 라이브 인증 + 3개 TR 실측(재시도 후 성공)            ✓ (조사)
+    └── RE-03.3 Forward Feature Verification Matrix 확정                 ✓ (조사)
+    │
+    ▼
+RE-02 Final Decisions               ← NEXT (scoring architecture 6개 설계 질문 확정)
 ```
 
 ---
@@ -2652,7 +2674,15 @@ Recommendation Engine               ← NEXT (scoring/ranking, UX-02 이후)
 
 ## Phase 7 — Recommendation Engine (scoring/ranking)
 
-> Stock Universe 확보와 조건 기반 후보 탐색은 Phase 7a(Candidate Discovery)로 먼저 구현했고, 종목별 구조화된 재무 feature는 Phase 6의 RE-01로 먼저 마련했다. 이 Phase는 그 위에 얹는 scoring/ranking 기반 전체 Recommendation Engine이다 — 아직 미착수.
+> Stock Universe 확보와 조건 기반 후보 탐색은 Phase 7a(Candidate Discovery)로 먼저 구현했고, 종목별 구조화된 재무 feature는 Phase 6의 RE-01로 먼저 마련했다. 이 Phase는 그 위에 얹는 scoring/ranking 기반 전체 Recommendation Engine이다 — 아직 미착수. 구현 착수 전 순수 조사(RE-02/RE-03/RE-03.1/RE-03.2/RE-03.3, production code 미변경)를 완료했다:
+>
+> - **RE-02 (Scoring Architecture Investigation)**: Financial Quality/Growth-Trend/Valuation/Price Position/Risk 5개 컴포넌트의 데이터 실현 가능성 검토. absolute/relative/hybrid 채택 등 6개 최종 결정은 아직 미확정 — **다음 세션의 최우선 과제(RE-02 Final Decisions)**.
+> - **RE-03 (Forward-Looking Data Source Investigation)**: Fundamental layer 옆에 둘 Forward Opportunity Layer(Forward EPS 등)의 실제 데이터 소스 조사. Kiwoom/OpenDART에는 forward 데이터 없음(Grounded Catalyst만 OpenDART `report_nm`으로 제한적 확보). KIS Developers에 관련 TR 3개(`estimate-perform`/`invest-opinion`/`invest-opbysec`) 실존 확인.
+> - **RE-03.1 (KIS 공식 스키마 조사)**: request 파라미터는 공식 Postman/MCP config로 확정. response schema는 공식 문서로 확인 불가(라이브 호출 필요).
+> - **RE-03.2 (KIS 라이브 검증)**: 최초 시도는 `403 EGW00103`으로 실패(원인: `.env`의 `KIS_APP_KEY`에 Kiwoom App Key가 잘못 들어감). 실제 KIS App Key/Secret으로 교체 후 재시도해 인증 성공, `estimate-perform`/`invest-opinion`/`invest-opbysec` 3개 TR 전부 실제 호출·schema·값 검증 완료.
+> - **RE-03.3 (Forward Data Semantics & Reliability Verification)**: 업종 분산 10종목 cross-validation + 공식자료 재조사. **v1 채택**: Broker Investment Opinion, Broker Target Price(+ 파생: Consensus Target Price, Implied Upside, Broker Opinion Revision). **v1 제외**: `estimate-perform` 기반 Forward Revenue/OpProfit/NetIncome/EPS/PER/PBR/ROE(row semantics 미문서화, 삼성전자·SK하이닉스에서만 재현된 이상치로 종목별 reliability 불일치, 원인 미확인·추측 안 함), `rcmd_name` 기반 Consensus Investment Opinion(semantics 미확정).
+>
+> 상세는 `docs/dev-log/2026-08-28.md` §19~§21 참고.
 
 - [ ] Recommendation data models (RecommendedStock/RecommendationResult)
 - [ ] Fundamental Score

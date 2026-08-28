@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     kiwoom_secret_key: str = ""
     ecos_api_key: str = ""
     opendart_api_key: str = ""
+    kis_app_key: str = ""
+    kis_secret_key: str = ""
+    kis_env: str = ""
 
     model_config = SettingsConfigDict(
             env_file=".env",
