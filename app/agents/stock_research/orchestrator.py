@@ -67,6 +67,9 @@ class StockResearchOrchestrator:
             price=analysis_result.price,
             financials=analysis_result.financials,
             financial_history=analysis_result.financial_history,
+            # RE-01: analysis.py가 이미 계산한 deterministic feature를
+            # 그대로 연결한다(재계산 없음).
+            financial_features=analysis_result.financial_features,
             investment_thesis=reasoning_result.investment_thesis,
             catalysts=reasoning_result.catalysts,
             risks=reasoning_result.risks,

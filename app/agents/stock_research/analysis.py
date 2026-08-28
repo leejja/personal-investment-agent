@@ -1,8 +1,20 @@
+from collections.abc import Callable
+
 from pydantic import BaseModel, Field
 
 from app.mcp.opendart_tools import KeyFinancials
 from app.models.common import AnalysisConfidence, RiskLevel
-from app.models.stock import FinancialSnapshot, StockPriceSnapshot
+from app.models.stock import (
+    AnnualFinancialFeatures,
+    FinancialFeatures,
+    FinancialMetric,
+    FinancialSnapshot,
+    FinancialTransition,
+    FinancialTrendDirection,
+    FinancialTrendEntry,
+    FinancialYoYChange,
+    StockPriceSnapshot,
+)
 from app.services.kiwoom import KiwoomStockInfo
 
 
@@ -20,6 +32,14 @@ class DeterministicAnalysisResult(BaseModel):
     facts: list[DeterministicFact]
     max_confidence: AnalysisConfidence
     risk_level: RiskLevel
+    # RE-01: financial_history와 별개의 gate를 쓴다 — 최소 1개 연도(당기)만
+    # 있어도 annual은 채워진다(margin/debt_ratio는 단일 연도로 계산
+    # 가능한 기존 공식이라 financial_history의 "2개 연도 이상" 요건과
+    # 묶일 이유가 없다). yoy/trends는 각각 기존 semantics 그대로 2개/
+    # 3개 연도 이상을 요구한다. analyze()는 항상 실제 값을 채워 반환한다
+    # — 기본값은 이 internal result를 직접 생성하는 기존 테스트 fixture가
+    # (reasoning.py 테스트 등) 이 필드를 몰라도 깨지지 않게 하기 위함이다.
+    financial_features: FinancialFeatures = Field(default_factory=FinancialFeatures)
 
 
 def analyze(
@@ -51,8 +71,28 @@ def analyze(
         if fact is not None
     ] + _raw_value_facts(stock_info, key_financials)
 
+    # annual은 financial_history와 독립적인 gate를 쓴다: financial_history
+    # 인자가 아예 주어지지 않은 호출(예: 일부 단위 테스트)도 최소
+    # key_financials(당기) 하나만으로 annual 1건은 만들 수 있다 — 이미
+    # 존재하는 단일연도 deterministic formula(margin/debt_ratio)를
+    # 구조화하는 것뿐이라 새로운 판단이 아니다.
+    annual_source = history if history else [key_financials]
+    annual_features_newest_first = _build_annual_features(annual_source)
+
+    yoy_features: list[FinancialYoYChange] = []
+    trend_features: list[FinancialTrendEntry] = []
+
     if has_trend:
-        facts += _trend_facts(history)
+        trend_facts, yoy_features, trend_features = _trend_facts(
+            history, annual_features_newest_first
+        )
+        facts += trend_facts
+
+    financial_features = FinancialFeatures(
+        annual=list(reversed(annual_features_newest_first)),
+        yoy=yoy_features,
+        trends=trend_features,
+    )
 
     return DeterministicAnalysisResult(
         price=price,
@@ -61,6 +101,7 @@ def analyze(
         facts=facts,
         max_confidence=max_confidence,
         risk_level=_risk_level(),
+        financial_features=financial_features,
     )
 
 
@@ -231,153 +272,246 @@ def _net_margin(key_financials: KeyFinancials) -> float | None:
     return net_income / revenue * 100
 
 
-def _yoy_change_fact(
-    label: str,
-    latest_year: str,
+# ============================== RE-01: single source of truth ==============================
+#
+# 아래 _classify_yoy/_classify_direction은 순수 계산만 하고(텍스트 생성
+# 없음), _format_yoy_description/_format_direction_description은 그
+# 계산 결과로부터 기존과 동일한 문자열만 만든다(포맷 자체는 한 글자도
+# 바꾸지 않았다). _trend_facts()가 이 계산 결과를 Evidence
+# 텍스트(DeterministicFact)와 구조화 값(FinancialYoYChange/
+# FinancialTrendEntry) 양쪽에 그대로 사용해, 같은 계산이 두 번 실행되지
+# 않는다.
+
+
+def _classify_yoy(
     latest: float | None,
-    past_year: str,
     past: float | None,
-) -> DeterministicFact | None:
-    # 손익 항목은 부호가 바뀌거나(흑자↔적자) 기준값이 0/음수일 수 있어
-    # 단순 백분율 계산이 왜곡되거나 정의되지 않는다. 케이스별로 안전하게
-    # 표현한다.
+) -> tuple[float | None, FinancialTransition | None] | None:
+    """단일 지표의 YoY 변화를 분류한다. None을 반환하면 fact/entry를 만들지
+    않는다(latest/past 결측 또는 past==0 — 0 대비 변동률은 정의할 수
+    없어 조용히 생략한다는 기존 semantics를 그대로 따른다). 그 외에는
+    (growth_pct, transition) 튜플을 반환하며 둘 중 정확히 하나만
+    non-None이다. 분기 조건은 기존 _yoy_change_fact와 동일하다."""
     if latest is None or past is None:
         return None
 
     if past == 0:
-        # 0 대비 변동률은 정의할 수 없으므로 조용히 생략한다.
         return None
 
     if (latest >= 0) != (past >= 0):
         if past < 0 <= latest:
-            description = (
-                f"{label}는 {past_year}년 적자에서 {latest_year}년 흑자로 전환"
-            )
-        else:
-            description = (
-                f"{label}는 {past_year}년 흑자에서 {latest_year}년 적자로 전환"
-            )
-        return DeterministicFact(description=description, source="OpenDART")
+            return None, FinancialTransition.LOSS_TO_PROFIT
+        return None, FinancialTransition.PROFIT_TO_LOSS
 
     if latest < 0 and past < 0:
         if abs(latest) > abs(past):
-            direction = "확대"
-        elif abs(latest) < abs(past):
-            direction = "축소"
-        else:
-            direction = "유지"
-        description = (
-            f"{label}는 {past_year}년 대비 {latest_year}년 적자 규모가 {direction}"
-        )
-        return DeterministicFact(description=description, source="OpenDART")
+            return None, FinancialTransition.LOSS_WIDENING
+        if abs(latest) < abs(past):
+            return None, FinancialTransition.LOSS_NARROWING
+        return None, FinancialTransition.LOSS_UNCHANGED
 
     change_pct = (latest - past) / past * 100
-    sign = "+" if change_pct >= 0 else ""
-    description = (
-        f"{label}는 {past_year}년 대비 {latest_year}년 {sign}{change_pct:.1f}% 변동"
-    )
-    return DeterministicFact(description=description, source="OpenDART")
+    return change_pct, None
 
 
-def _consecutive_direction_fact(
+def _format_yoy_description(
     label: str,
+    latest_year: str,
+    past_year: str,
+    growth_pct: float | None,
+    transition: FinancialTransition | None,
+) -> str:
+    if transition == FinancialTransition.LOSS_TO_PROFIT:
+        return f"{label}는 {past_year}년 적자에서 {latest_year}년 흑자로 전환"
+    if transition == FinancialTransition.PROFIT_TO_LOSS:
+        return f"{label}는 {past_year}년 흑자에서 {latest_year}년 적자로 전환"
+    if transition == FinancialTransition.LOSS_WIDENING:
+        return f"{label}는 {past_year}년 대비 {latest_year}년 적자 규모가 확대"
+    if transition == FinancialTransition.LOSS_NARROWING:
+        return f"{label}는 {past_year}년 대비 {latest_year}년 적자 규모가 축소"
+    if transition == FinancialTransition.LOSS_UNCHANGED:
+        return f"{label}는 {past_year}년 대비 {latest_year}년 적자 규모가 유지"
+
+    assert growth_pct is not None
+    sign = "+" if growth_pct >= 0 else ""
+    return f"{label}는 {past_year}년 대비 {latest_year}년 {sign}{growth_pct:.1f}% 변동"
+
+
+def _classify_direction(
     values_newest_first: list[float | None],
-) -> DeterministicFact | None:
-    # 결측 없이 3개 연도가 모두 있을 때만 "연속 상승/하락"을 말한다 —
-    # 일부 연도가 비어 있으면 방향성을 단정할 근거가 부족하다.
+) -> FinancialTrendDirection | None:
+    # 결측 없이 3개 연도가 모두 있을 때만 방향을 판단한다 — 일부 연도가
+    # 비어 있으면 방향성을 단정할 근거가 부족하다(기존 semantics 그대로).
     if len(values_newest_first) < 3 or any(
         value is None for value in values_newest_first
     ):
         return None
 
-    values = [value for value in values_newest_first if value is not None]
-    chronological = list(reversed(values))
+    chronological = list(reversed(values_newest_first))
 
     if all(
         chronological[i] < chronological[i + 1]
         for i in range(len(chronological) - 1)
     ):
-        direction = "상승"
-    elif all(
+        return FinancialTrendDirection.INCREASING
+
+    if all(
         chronological[i] > chronological[i + 1]
         for i in range(len(chronological) - 1)
     ):
-        direction = "하락"
-    else:
-        return None
+        return FinancialTrendDirection.DECREASING
 
-    return DeterministicFact(
-        description=f"{label}는 최근 {len(chronological)}개 연도 연속 {direction}",
-        source="OpenDART",
-    )
+    # 비단조(예: 100→80→110)면 방향을 만들지 않는다 — "MIXED" 같은 새
+    # 판단을 추가하지 않는다.
+    return None
 
 
-def _trend_facts(history: list[KeyFinancials]) -> list[DeterministicFact]:
-    # history는 최신 → 과거 순(history[0]이 당기).
-    facts: list[DeterministicFact] = []
+def _format_direction_description(
+    label: str,
+    count: int,
+    direction: FinancialTrendDirection,
+) -> str:
+    word = "상승" if direction == FinancialTrendDirection.INCREASING else "하락"
+    return f"{label}는 최근 {count}개 연도 연속 {word}"
 
-    metric_getters = [
-        ("매출액", lambda kf: _to_float(kf.revenue)),
-        ("영업이익", lambda kf: _to_float(kf.operating_profit)),
-        ("순이익", lambda kf: _to_float(kf.net_income)),
+
+def _build_annual_features(
+    key_financials_newest_first: list[KeyFinancials],
+) -> list[AnnualFinancialFeatures]:
+    # 입력 순서를 그대로 보존한다(호출부에서 필요한 순서로 뒤집는다).
+    # margin/debt_ratio 계산은 기존 함수를 그대로 재사용한다 — 새 공식
+    # 없음. 값이 전부 None이어도 해당 연도의 entry 자체는 만든다
+    # (missing != 항목 생략, "이 연도는 시도했으나 데이터가 없다"를
+    # 명시적으로 표현한다).
+    return [
+        AnnualFinancialFeatures(
+            business_year=kf.business_year,
+            operating_margin=_operating_margin(kf),
+            net_margin=_net_margin(kf),
+            debt_ratio=_debt_ratio(kf),
+        )
+        for kf in key_financials_newest_first
     ]
 
-    for label, getter in metric_getters:
+
+def _trend_facts(
+    history: list[KeyFinancials],
+    annual_features_newest_first: list[AnnualFinancialFeatures],
+) -> tuple[list[DeterministicFact], list[FinancialYoYChange], list[FinancialTrendEntry]]:
+    # history/annual_features_newest_first는 둘 다 최신 → 과거 순이며
+    # 길이/순서가 서로 정확히 대응한다(호출부에서 동일한 history로부터
+    # 만들었기 때문). 연도별 margin/debt_ratio는 여기서 다시 계산하지
+    # 않고 annual_features_newest_first에 이미 계산된 값을 그대로 쓴다.
+    facts: list[DeterministicFact] = []
+    yoy_features: list[FinancialYoYChange] = []
+
+    metric_getters: list[
+        tuple[str, FinancialMetric, Callable[[KeyFinancials], float | None]]
+    ] = [
+        ("매출액", FinancialMetric.REVENUE, lambda kf: _to_float(kf.revenue)),
+        (
+            "영업이익",
+            FinancialMetric.OPERATING_PROFIT,
+            lambda kf: _to_float(kf.operating_profit),
+        ),
+        ("순이익", FinancialMetric.NET_INCOME, lambda kf: _to_float(kf.net_income)),
+    ]
+
+    for label, metric, getter in metric_getters:
         for i in range(len(history) - 1):
             latest_kf, past_kf = history[i], history[i + 1]
-            fact = _yoy_change_fact(
-                label,
-                latest_kf.business_year,
-                getter(latest_kf),
-                past_kf.business_year,
-                getter(past_kf),
-            )
-            if fact is not None:
-                facts.append(fact)
+            classified = _classify_yoy(getter(latest_kf), getter(past_kf))
+            if classified is None:
+                continue
 
-    for key_financials in history:
-        year = key_financials.business_year
-
-        operating_margin = _operating_margin(key_financials)
-        if operating_margin is not None:
+            growth_pct, transition = classified
             facts.append(
                 DeterministicFact(
-                    description=f"{year}년 영업이익률은 약 {operating_margin:.1f}%",
+                    description=_format_yoy_description(
+                        label,
+                        latest_kf.business_year,
+                        past_kf.business_year,
+                        growth_pct,
+                        transition,
+                    ),
+                    source="OpenDART",
+                )
+            )
+            yoy_features.append(
+                FinancialYoYChange(
+                    metric=metric,
+                    latest_year=latest_kf.business_year,
+                    previous_year=past_kf.business_year,
+                    growth_pct=growth_pct,
+                    transition=transition,
+                )
+            )
+
+    for annual in annual_features_newest_first:
+        year = annual.business_year
+
+        if annual.operating_margin is not None:
+            facts.append(
+                DeterministicFact(
+                    description=f"{year}년 영업이익률은 약 {annual.operating_margin:.1f}%",
                     source="OpenDART",
                 )
             )
 
-        net_margin = _net_margin(key_financials)
-        if net_margin is not None:
+        if annual.net_margin is not None:
             facts.append(
                 DeterministicFact(
-                    description=f"{year}년 순이익률은 약 {net_margin:.1f}%",
+                    description=f"{year}년 순이익률은 약 {annual.net_margin:.1f}%",
                     source="OpenDART",
                 )
             )
 
-        year_debt_ratio = _debt_ratio(key_financials)
-        if year_debt_ratio is not None:
+        if annual.debt_ratio is not None:
             facts.append(
                 DeterministicFact(
-                    description=f"{year}년 부채비율은 약 {year_debt_ratio:.1f}%",
+                    description=f"{year}년 부채비율은 약 {annual.debt_ratio:.1f}%",
                     source="OpenDART",
                 )
             )
 
-    direction_series: list[tuple[str, list[float | None]]] = [
-        ("영업이익률", [_operating_margin(kf) for kf in history]),
-        ("순이익률", [_net_margin(kf) for kf in history]),
-        ("매출액", [_to_float(kf.revenue) for kf in history]),
-        ("영업이익", [_to_float(kf.operating_profit) for kf in history]),
-        ("순이익", [_to_float(kf.net_income) for kf in history]),
+    direction_series: list[tuple[str, FinancialMetric, list[float | None]]] = [
+        (
+            "영업이익률",
+            FinancialMetric.OPERATING_MARGIN,
+            [annual.operating_margin for annual in annual_features_newest_first],
+        ),
+        (
+            "순이익률",
+            FinancialMetric.NET_MARGIN,
+            [annual.net_margin for annual in annual_features_newest_first],
+        ),
+        ("매출액", FinancialMetric.REVENUE, [_to_float(kf.revenue) for kf in history]),
+        (
+            "영업이익",
+            FinancialMetric.OPERATING_PROFIT,
+            [_to_float(kf.operating_profit) for kf in history],
+        ),
+        (
+            "순이익",
+            FinancialMetric.NET_INCOME,
+            [_to_float(kf.net_income) for kf in history],
+        ),
     ]
-    for label, series in direction_series:
-        fact = _consecutive_direction_fact(label, series)
-        if fact is not None:
-            facts.append(fact)
+    trend_features: list[FinancialTrendEntry] = []
+    for label, metric, series in direction_series:
+        direction = _classify_direction(series)
+        if direction is None:
+            continue
 
-    return facts
+        facts.append(
+            DeterministicFact(
+                description=_format_direction_description(label, len(series), direction),
+                source="OpenDART",
+            )
+        )
+        trend_features.append(FinancialTrendEntry(metric=metric, direction=direction))
+
+    return facts, yoy_features, trend_features
 
 
 def _to_float(value: int | None) -> float | None:

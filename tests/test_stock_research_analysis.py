@@ -1,6 +1,7 @@
 from app.agents.stock_research.analysis import analyze
 from app.mcp.opendart_tools import KeyFinancials
 from app.models.common import AnalysisConfidence, RiskLevel
+from app.models.stock import FinancialMetric, FinancialTransition, FinancialTrendDirection
 from app.services.kiwoom import KiwoomStockInfo
 
 
@@ -449,6 +450,274 @@ def test_trend_facts_skip_direction_fact_when_not_monotonic() -> None:
 
     descriptions = [fact.description for fact in result.facts]
     assert not any("매출액는 최근" in d and "연속" in d for d in descriptions)
+
+
+# ============================== RE-01: FinancialFeatures ==============================
+
+
+# --- annual ---
+
+
+def test_annual_features_generated_from_single_year_without_history() -> None:
+    # financial_history 인자를 아예 안 줘도(당기 key_financials만 있어도)
+    # annual은 1건 생성된다 — financial_history(public field)의 "2개
+    # 연도 이상" 게이트와 독립적이다.
+    result = analyze(
+        _stock_info(),
+        _key_financials(
+            business_year="2025",
+            revenue=300,
+            operating_profit=30,
+            net_income=15,
+            total_liabilities=100,
+            total_equity=200,
+        ),
+    )
+
+    assert result.financial_history == []
+    assert len(result.financial_features.annual) == 1
+    annual = result.financial_features.annual[0]
+    assert annual.business_year == "2025"
+    assert annual.operating_margin == 10.0
+    assert annual.net_margin == 5.0
+    assert annual.debt_ratio == 50.0
+
+
+def test_annual_features_none_semantics_when_inputs_missing() -> None:
+    result = analyze(
+        _stock_info(),
+        _key_financials(
+            revenue=None,
+            operating_profit=None,
+            net_income=None,
+            total_liabilities=None,
+            total_equity=None,
+        ),
+    )
+
+    assert len(result.financial_features.annual) == 1
+    annual = result.financial_features.annual[0]
+    # entry 자체는 존재하되(missing != 생략) 값은 전부 None.
+    assert annual.operating_margin is None
+    assert annual.net_margin is None
+    assert annual.debt_ratio is None
+
+
+def test_annual_features_match_financial_history_order_and_length() -> None:
+    current = _key_financials(business_year="2025", revenue=330)
+    previous = _key_financials(business_year="2024", revenue=300)
+    before_previous = _key_financials(business_year="2023", revenue=270)
+
+    result = analyze(_stock_info(), current, [current, previous, before_previous])
+
+    assert [a.business_year for a in result.financial_features.annual] == [
+        s.business_year for s in result.financial_history
+    ]
+    assert [a.business_year for a in result.financial_features.annual] == [
+        "2023",
+        "2024",
+        "2025",
+    ]
+
+
+def test_annual_features_with_two_years_populated_even_though_financial_history_needs_two() -> (
+    None
+):
+    current = _key_financials(business_year="2025", revenue=330)
+    previous = _key_financials(business_year="2024", revenue=300)
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    # financial_history는 2개 연도부터 채워지므로(기존 semantics) 이
+    # 케이스에서는 이미 채워짐 — annual과 동일 길이/순서인지도 함께 확인.
+    assert len(result.financial_history) == 2
+    assert len(result.financial_features.annual) == 2
+
+
+# --- yoy ---
+
+
+def test_yoy_normal_positive_growth() -> None:
+    current = _key_financials(business_year="2025", revenue=330)
+    previous = _key_financials(business_year="2024", revenue=300)
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    revenue_yoy = next(
+        y for y in result.financial_features.yoy if y.metric == FinancialMetric.REVENUE
+    )
+    assert revenue_yoy.latest_year == "2025"
+    assert revenue_yoy.previous_year == "2024"
+    assert revenue_yoy.growth_pct == 10.0
+    assert revenue_yoy.transition is None
+
+
+def test_yoy_loss_to_profit_transition() -> None:
+    current = _key_financials(business_year="2025", net_income=50)
+    previous = _key_financials(business_year="2024", net_income=-30)
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    net_income_yoy = next(
+        y for y in result.financial_features.yoy if y.metric == FinancialMetric.NET_INCOME
+    )
+    assert net_income_yoy.transition == FinancialTransition.LOSS_TO_PROFIT
+    assert net_income_yoy.growth_pct is None
+
+
+def test_yoy_profit_to_loss_transition() -> None:
+    current = _key_financials(business_year="2025", net_income=-20)
+    previous = _key_financials(business_year="2024", net_income=40)
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    net_income_yoy = next(
+        y for y in result.financial_features.yoy if y.metric == FinancialMetric.NET_INCOME
+    )
+    assert net_income_yoy.transition == FinancialTransition.PROFIT_TO_LOSS
+    assert net_income_yoy.growth_pct is None
+
+
+def test_yoy_loss_widening() -> None:
+    current = _key_financials(business_year="2025", net_income=-60)
+    previous = _key_financials(business_year="2024", net_income=-30)
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    net_income_yoy = next(
+        y for y in result.financial_features.yoy if y.metric == FinancialMetric.NET_INCOME
+    )
+    assert net_income_yoy.transition == FinancialTransition.LOSS_WIDENING
+    assert net_income_yoy.growth_pct is None
+
+
+def test_yoy_loss_narrowing() -> None:
+    current = _key_financials(business_year="2025", net_income=-10)
+    previous = _key_financials(business_year="2024", net_income=-30)
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    net_income_yoy = next(
+        y for y in result.financial_features.yoy if y.metric == FinancialMetric.NET_INCOME
+    )
+    assert net_income_yoy.transition == FinancialTransition.LOSS_NARROWING
+    assert net_income_yoy.growth_pct is None
+
+
+def test_yoy_loss_unchanged() -> None:
+    # 기존 코드에 존재하지만(abs(latest) == abs(past)) 지금까지 단위
+    # 테스트로 검증되지 않았던 분기 — RE-01에서 명시적으로 검증한다.
+    current = _key_financials(business_year="2025", net_income=-30)
+    previous = _key_financials(business_year="2024", net_income=-30)
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    descriptions = [fact.description for fact in result.facts]
+    assert "순이익는 2024년 대비 2025년 적자 규모가 유지" in descriptions
+
+    net_income_yoy = next(
+        y for y in result.financial_features.yoy if y.metric == FinancialMetric.NET_INCOME
+    )
+    assert net_income_yoy.transition == FinancialTransition.LOSS_UNCHANGED
+    assert net_income_yoy.growth_pct is None
+
+
+def test_yoy_entry_omitted_when_previous_is_zero() -> None:
+    current = _key_financials(business_year="2025", net_income=10)
+    previous = _key_financials(business_year="2024", net_income=0)
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    assert not any(
+        y.metric == FinancialMetric.NET_INCOME for y in result.financial_features.yoy
+    )
+
+
+def test_yoy_entry_omitted_when_value_missing() -> None:
+    current = _key_financials(business_year="2025", net_income=None)
+    previous = _key_financials(business_year="2024", net_income=40)
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    assert not any(
+        y.metric == FinancialMetric.NET_INCOME for y in result.financial_features.yoy
+    )
+
+
+def test_yoy_growth_pct_and_transition_are_mutually_exclusive() -> None:
+    current = _key_financials(
+        business_year="2025", revenue=330, operating_profit=44, net_income=50
+    )
+    previous = _key_financials(
+        business_year="2024", revenue=300, operating_profit=40, net_income=-30
+    )
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    for yoy in result.financial_features.yoy:
+        assert (yoy.growth_pct is None) != (yoy.transition is None)
+
+
+# --- trends ---
+
+
+def test_trend_monotonic_increasing() -> None:
+    current = _key_financials(business_year="2025", revenue=330)
+    previous = _key_financials(business_year="2024", revenue=300)
+    before_previous = _key_financials(business_year="2023", revenue=270)
+
+    result = analyze(_stock_info(), current, [current, previous, before_previous])
+
+    revenue_trend = next(
+        t for t in result.financial_features.trends if t.metric == FinancialMetric.REVENUE
+    )
+    assert revenue_trend.direction == FinancialTrendDirection.INCREASING
+
+
+def test_trend_monotonic_decreasing() -> None:
+    current = _key_financials(business_year="2025", revenue=270)
+    previous = _key_financials(business_year="2024", revenue=300)
+    before_previous = _key_financials(business_year="2023", revenue=330)
+
+    result = analyze(_stock_info(), current, [current, previous, before_previous])
+
+    revenue_trend = next(
+        t for t in result.financial_features.trends if t.metric == FinancialMetric.REVENUE
+    )
+    assert revenue_trend.direction == FinancialTrendDirection.DECREASING
+
+
+def test_trend_entry_omitted_when_non_monotonic() -> None:
+    current = _key_financials(business_year="2025", revenue=300)
+    previous = _key_financials(business_year="2024", revenue=330)
+    before_previous = _key_financials(business_year="2023", revenue=270)
+
+    result = analyze(_stock_info(), current, [current, previous, before_previous])
+
+    assert not any(
+        t.metric == FinancialMetric.REVENUE for t in result.financial_features.trends
+    )
+
+
+def test_trend_entry_omitted_when_fewer_than_three_years() -> None:
+    current = _key_financials(business_year="2025", revenue=330)
+    previous = _key_financials(business_year="2024", revenue=300)
+
+    result = analyze(_stock_info(), current, [current, previous])
+
+    assert result.financial_features.trends == []
+
+
+def test_trend_entry_omitted_when_a_year_is_missing() -> None:
+    current = _key_financials(business_year="2025", revenue=330)
+    previous = _key_financials(business_year="2024", revenue=None)
+    before_previous = _key_financials(business_year="2023", revenue=270)
+
+    result = analyze(_stock_info(), current, [current, previous, before_previous])
+
+    assert not any(
+        t.metric == FinancialMetric.REVENUE for t in result.financial_features.trends
+    )
 
 
 def test_raw_value_facts_contain_no_evaluative_language() -> None:

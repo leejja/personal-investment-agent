@@ -4,8 +4,8 @@
 
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
-> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** UX-02(InvestorProfile persistence) / Recommendation Engine (scoring/ranking)
+> **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
+> **Next:** UX-02(InvestorProfile persistence) / Recommendation Engine (scoring/ranking, RE-01 기반 위에서 구현 예정)
 
 ---
 
@@ -906,6 +906,15 @@ v1의 핵심 정책:
 - reasoning 프롬프트는 다년 추세가 있으면 `investment_thesis`가 이를 적극 활용하도록 지시하되, 과거 추세만으로 미래 실적·주가를 단정하지 않도록 명시한다.
 - `risks` 정책은 절대적 금지가 아니라 완화된 형태로 규정한다: 비교 기준(업종 평균 등) 없는 단일 시점 수치(PER/PBR/ROE/거래량/부채비율 등)만으로 고평가/저평가·위험/안전을 단정하지 않되, 다년 추세나 흑자/적자 전환 같은 fact는 더 강한 risk 근거로 사용할 수 있다. 핵심은 deterministic fact와 risk 판단을 혼동하지 않는 것이다.
 
+**구조화된 재무 feature(`financial_features`, RE-01)** — Recommendation Engine을 위한 기반:
+
+- 위 다년 추세 계산(영업이익률/순이익률/부채비율, YoY 변동/흑자·적자 전환, 3개년 연속 상승·하락)은 이전까지 `Evidence.description` **텍스트로만** 존재해, 향후 Recommendation Engine이 숫자를 쓰려면 텍스트를 파싱하거나 같은 계산을 다시 구현해야 하는 문제가 있었다. `StockAnalysis.financial_features`는 **같은 계산 결과**를 machine-readable 구조(`AnnualFinancialFeatures`/`FinancialYoYChange`/`FinancialTrendEntry`)로 추가 노출한다 — 새로운 계산식이나 새로운 투자 판단이 아니라 기존 deterministic 계산의 구조화일 뿐이다.
+- **Single source of truth**: `_operating_margin`/`_net_margin`/`_debt_ratio`/YoY 분류/3개년 방향 판단은 한 곳에서만 계산되고, 그 결과가 (a) 기존과 byte-identical한 `Evidence` 텍스트와 (b) `financial_features` 구조값 양쪽에 그대로 쓰인다 — 같은 값을 두 번 계산하지 않는다. 실제 E2E(005930/373220/080220)로 `financial_features.annual[]`의 모든 margin/debt_ratio 수치가 대응하는 `Evidence.description` 문자열과 정확히 일치함을 확인했다.
+- **`annual`은 `financial_history`와 독립적인 gate를 쓴다**: `financial_history`(공개 필드)는 여전히 2개 연도 이상일 때만 채워지는 기존 semantics를 그대로 유지하지만, `financial_features.annual`은 **최소 1개 연도(당기)만 있어도** 채워진다 — margin/debt_ratio는 원래 단일 연도로 계산 가능한 기존 공식이라 2개년 추세 요건과 묶일 이유가 없었다. `yoy`/`trends`는 기존과 동일하게 각각 2개년/3개년 이상을 요구한다.
+- `FinancialTransition`(LOSS_TO_PROFIT/PROFIT_TO_LOSS/LOSS_WIDENING/LOSS_NARROWING/LOSS_UNCHANGED)과 `FinancialTrendDirection`(INCREASING/DECREASING)은 기존 코드가 실제로 구분하던 케이스만 담는다 — "MIXED"/"FLAT" 같은 새 판단은 추가하지 않았다. `LOSS_UNCHANGED`는 기존 코드에 있었지만 지금까지 테스트되지 않았던 분기라 이번에 단위 테스트를 추가했다.
+- **PER/PBR/ROE와 EPS/BPS는 RE-01 범위 밖**이다 — PER/PBR/ROE는 기존 `financials`(Kiwoom 현재 시점 스냅샷)에 그대로 두고 옮기거나 복제하지 않았고, EPS/BPS는 Kiwoom에 존재하지만 이번에도 추가하지 않았다.
+- **API/UX 호환성**: `POST /analysis`(view=detail)의 `stock_analyses[].financial_features`에 additive로 노출되고, 기존 필드는 전혀 바뀌지 않는다. `view=summary`(UX-03)에는 기존 화이트리스트 구조가 자동으로 이 필드를 제외해 별도 코드 변경이 필요 없었다(실제 E2E로 확인). LLM reasoning 프롬프트에는 `financial_features`를 추가하지 않았다 — 이번 변경은 Recommendation Engine을 위한 기반일 뿐, Recommendation Engine 자체는 아직 구현하지 않았다.
+
 주요 출력:
 
 ```text
@@ -913,8 +922,9 @@ StockAnalysis
 ├── symbol
 ├── name
 ├── price
-├── financials           # 최신 연도 스냅샷(PER/PBR/ROE 포함)
-├── financial_history[]  # 오래된 연도 → 최신 연도, 사업보고서 기준 최대 3개년(PER/PBR/ROE는 항상 null)
+├── financials              # 최신 연도 스냅샷(PER/PBR/ROE 포함)
+├── financial_history[]     # 오래된 연도 → 최신 연도, 사업보고서 기준 최대 3개년(PER/PBR/ROE는 항상 null)
+├── financial_features       # RE-01: annual[]/yoy[]/trends[] — Evidence와 동일 계산의 구조화 버전
 ├── investment_thesis
 ├── catalysts[]
 ├── risks[]
@@ -2235,7 +2245,13 @@ test_stock_research_analysis.py
 ├── financial_history 스냅샷은 PER/PBR/ROE를 절대 생성하지 않음
 ├── YoY: 정상 흑자 구간 백분율, 전년 0이면 생략, 흑자↔적자 전환은 "전환" 문구, 둘 다 적자면 "규모 확대/축소" 문구(백분율 왜곡 없음)
 ├── 연도별 영업이익률/순이익률/부채비율 fact
-└── "최근 3개 연도 연속 상승/하락"은 3개년이 모두 있고 단조로울 때만 생성
+├── "최근 3개 연도 연속 상승/하락"은 3개년이 모두 있고 단조로울 때만 생성
+├── [RE-01] financial_features.annual: financial_history 없이 당기 1건만으로도 생성됨(독립 gate)
+├── [RE-01] annual 항목은 값이 전부 None이어도 business_year와 함께 생성됨(missing != 항목 생략)
+├── [RE-01] annual이 financial_history와 동일한 오래된→최신 순서/길이
+├── [RE-01] yoy: 정상 growth_pct, loss_to_profit/profit_to_loss/loss_widening/loss_narrowing/loss_unchanged 5종 transition
+├── [RE-01] yoy: previous==0 또는 값 결측이면 entry 자체가 생성되지 않음, growth_pct/transition 상호배타
+└── [RE-01] trends: 단조 상승/하락만 entry 생성, 비단조·3개년 미만·결측 포함 시 entry 없음
 
 test_stock_research_reasoning.py
 ├── LLM 응답 구조화 검증 + 최소 재시도 (mock, 실제 OpenAI 미호출)
@@ -2254,7 +2270,9 @@ test_stock_research_orchestrator.py
 ├── evidence는 deterministic facts + 실제 tool 호출 출처로만 구성(get_key_financials_history)
 ├── financial_history가 StockAnalysis에 오래된 순으로 그대로 반영됨
 ├── history가 1건(당기만)이면 StockAnalysis.financial_history는 빈 리스트
-└── ReasoningError 발생 시 fallback 없이 예외 전파
+├── ReasoningError 발생 시 fallback 없이 예외 전파
+├── [RE-01] financial_features가 StockAnalysis에 재계산 없이 그대로 연결됨(annual/yoy/trends)
+└── [RE-01] financial_history가 비어도(history 1건) financial_features.annual은 1건 채워짐
 
 test_opendart_service.py (추가분)
 ├── bfefrmtrm_* 필드가 있으면 before_previous_term_* 로 정상 파싱
@@ -2382,7 +2400,11 @@ test_discovery_orchestrator.py
 ├── POST에서 받은 analysis_id로 GET /analysis/{id}?view=detail → 저장된 SupervisorResult와 완전히 동일
 ├── 동일 analysis_id로 GET ?view=summary → 같은 snapshot에 build_presentation()을 적용한 결과와 동일
 ├── 존재하지 않는 analysis_id → 404(고정 메시지), GET에 잘못된 view=both → 422
-└── **핵심 invariant**: POST 이후 동일 analysis_id로 GET detail/summary를 몇 번 조회해도 fake Supervisor의 호출 횟수가 POST 시점 1회에서 늘어나지 않음(GET이 Supervisor.run()을 재호출하지 않음을 call count로 직접 검증)
+├── **핵심 invariant**: POST 이후 동일 analysis_id로 GET detail/summary를 몇 번 조회해도 fake Supervisor의 호출 횟수가 POST 시점 1회에서 늘어나지 않음(GET이 Supervisor.run()을 재호출하지 않음을 call count로 직접 검증)
+├── [RE-01] view=detail의 stock_analyses[].financial_features가 additive로 노출됨, 기존 필드 불변
+├── [RE-01] financial_features 없이 만든 StockAnalysis는 필드가 null로 직렬화됨(구버전 호출부 호환)
+├── [RE-01] view=summary에는 financial_features가 노출되지 않음(기존 화이트리스트 구조가 자동으로 제외)
+└── [RE-01] UX-04 snapshot(GET)에서도 financial_features가 재계산 없이 POST 시점과 동일하게 유지됨
 ```
 
 `tests/test_presentation.py` — `build_presentation()` 자체를 실제 외부 API/LLM 없이 순수 unit test로 검증한다(HTTP 레이어 없이 함수 직접 호출).
@@ -2420,7 +2442,7 @@ test_discovery_orchestrator.py
 현재 전체 테스트 결과:
 
 ```text
-330 passed
+361 passed
 ```
 
 전체 lint 결과:
@@ -2626,10 +2648,11 @@ Recommendation Engine               ← NEXT (scoring/ranking, UX-02 이후)
 - [x] StockAnalysis generation
 - [x] 실제 E2E demo (`scripts/stock_research_demo.py`)
 - [x] OpenDART 다년(최근 3개 사업연도) 재무 추세 (`financial_history`) — 기존 단일 API 호출 재사용, 추가 호출 없음
+- [x] **RE-01: 구조화된 재무 feature(`financial_features`)** — 기존 다년 추세 계산(margin/debt_ratio/YoY/3개년 방향)을 Evidence 텍스트와 동일한 계산에서 machine-readable 구조로 추가 노출. Recommendation Engine의 기반이며, Recommendation Engine 자체는 아직 미구현.
 
 ## Phase 7 — Recommendation Engine (scoring/ranking)
 
-> Stock Universe 확보와 조건 기반 후보 탐색은 Phase 7a(Candidate Discovery)로 먼저 구현했다. 이 Phase는 그 위에 얹는 scoring/ranking 기반 전체 Recommendation Engine이다 — 아직 미착수.
+> Stock Universe 확보와 조건 기반 후보 탐색은 Phase 7a(Candidate Discovery)로 먼저 구현했고, 종목별 구조화된 재무 feature는 Phase 6의 RE-01로 먼저 마련했다. 이 Phase는 그 위에 얹는 scoring/ranking 기반 전체 Recommendation Engine이다 — 아직 미착수.
 
 - [ ] Recommendation data models (RecommendedStock/RecommendationResult)
 - [ ] Fundamental Score

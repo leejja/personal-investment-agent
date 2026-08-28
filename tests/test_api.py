@@ -10,7 +10,12 @@ from app.discovery.orchestrator import DiscoveryError
 from app.models.common import AnalysisConfidence, RiskLevel, UserRequest
 from app.models.discovery import Candidate, MarketFilter
 from app.models.market import MarketAnalysis, MarketRegime
-from app.models.stock import StockAnalysis, StockPriceSnapshot
+from app.models.stock import (
+    AnnualFinancialFeatures,
+    FinancialFeatures,
+    StockAnalysis,
+    StockPriceSnapshot,
+)
 from app.models.strategy import InvestmentAction, PositionRecommendation, StrategyResult
 from app.models.supervisor import Intent, SupervisorResult
 from app.supervisor.orchestrator import SupervisorError
@@ -594,3 +599,125 @@ def test_get_analysis_does_not_call_supervisor_run_detail_and_summary(
 
         client.get(f"/analysis/{analysis_id}?view=detail")
         assert len(fake.calls) == 1
+
+
+# ============================== RE-01: financial_features API compatibility ==============================
+
+
+def _stock_analysis_with_financial_features(
+    symbol: str = "005930", name: str = "삼성전자"
+) -> StockAnalysis:
+    return StockAnalysis(
+        symbol=symbol,
+        name=name,
+        price=StockPriceSnapshot(symbol=symbol, name=name, price=100000),
+        investment_thesis="테스트 investment thesis",
+        risk_level=RiskLevel.MEDIUM,
+        confidence=AnalysisConfidence.MEDIUM,
+        financial_features=FinancialFeatures(
+            annual=[
+                AnnualFinancialFeatures(
+                    business_year="2025",
+                    operating_margin=13.1,
+                    net_margin=13.6,
+                    debt_ratio=29.9,
+                )
+            ]
+        ),
+    )
+
+
+def test_analysis_view_detail_includes_financial_features_additively(
+    override_supervisor,
+) -> None:
+    fake = _FakeSupervisor(
+        result=SupervisorResult(
+            intent=Intent.STOCK_RESEARCH,
+            resolved_symbols=["005930"],
+            stock_analyses=[_stock_analysis_with_financial_features()],
+        )
+    )
+    override_supervisor(fake)
+
+    with TestClient(app) as client:
+        response = client.post("/analysis", json={"question": "삼성전자 어때?"})
+
+    assert response.status_code == 200
+    stock = response.json()["stock_analyses"][0]
+    assert stock["financial_features"]["annual"][0]["operating_margin"] == 13.1
+    assert stock["financial_features"]["annual"][0]["net_margin"] == 13.6
+    assert stock["financial_features"]["annual"][0]["debt_ratio"] == 29.9
+    # 기존 필드는 여전히 그대로 존재한다(additive임을 확인).
+    assert stock["investment_thesis"] == "테스트 investment thesis"
+
+
+def test_analysis_view_detail_default_still_omits_financial_features_field_when_none(
+    override_supervisor,
+) -> None:
+    # 기존처럼 financial_features 없이 만든 StockAnalysis는 null로
+    # 직렬화된다(필드 자체는 존재하되 값이 None) — 기존 client가 이
+    # 필드를 몰라도 무해하다.
+    fake = _FakeSupervisor(
+        result=SupervisorResult(
+            intent=Intent.STOCK_RESEARCH,
+            resolved_symbols=["005930"],
+            stock_analyses=[_stock_analysis()],
+        )
+    )
+    override_supervisor(fake)
+
+    with TestClient(app) as client:
+        response = client.post("/analysis", json={"question": "삼성전자 어때?"})
+
+    stock = response.json()["stock_analyses"][0]
+    assert stock["financial_features"] is None
+
+
+def test_analysis_view_summary_excludes_financial_features(override_supervisor) -> None:
+    fake = _FakeSupervisor(
+        result=SupervisorResult(
+            intent=Intent.STOCK_RESEARCH,
+            resolved_symbols=["005930"],
+            stock_analyses=[_stock_analysis_with_financial_features()],
+        )
+    )
+    override_supervisor(fake)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/analysis?view=summary", json={"question": "삼성전자 어때?"}
+        )
+
+    assert response.status_code == 200
+    stock = response.json()["stocks"][0]
+    assert "financial_features" not in stock
+
+
+def test_get_analysis_snapshot_preserves_financial_features_without_recompute(
+    override_supervisor,
+) -> None:
+    # UX-04 snapshot lifecycle regression: POST에서 저장된 financial_features가
+    # GET detail/summary에서도 재계산 없이 동일하게 유지되는지 확인한다.
+    stored_result = SupervisorResult(
+        intent=Intent.STOCK_RESEARCH,
+        resolved_symbols=["005930"],
+        stock_analyses=[_stock_analysis_with_financial_features()],
+    )
+    fake = _FakeSupervisor(result=stored_result)
+    override_supervisor(fake)
+
+    with TestClient(app) as client:
+        post_response = client.post("/analysis", json={"question": "삼성전자 어때?"})
+        analysis_id = post_response.headers["x-analysis-id"]
+
+        get_detail_response = client.get(f"/analysis/{analysis_id}?view=detail")
+        get_summary_response = client.get(f"/analysis/{analysis_id}?view=summary")
+
+    assert len(fake.calls) == 1  # GET이 Supervisor를 재실행하지 않았는지 확인
+
+    detail_features = get_detail_response.json()["stock_analyses"][0]["financial_features"]
+    assert detail_features == post_response.json()["stock_analyses"][0]["financial_features"]
+    assert detail_features["annual"][0]["operating_margin"] == 13.1
+
+    summary_stock = get_summary_response.json()["stocks"][0]
+    assert "financial_features" not in summary_stock

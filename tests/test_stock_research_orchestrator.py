@@ -272,6 +272,53 @@ async def test_run_with_single_year_history_leaves_financial_history_empty() -> 
     assert result.financial_history == []
 
 
+# ============================== RE-01: financial_features wiring ==============================
+
+
+@pytest.mark.anyio
+async def test_run_wires_financial_features_into_stock_analysis() -> None:
+    current = _key_financials(
+        business_year="2025", revenue=330, operating_profit=44, net_income=45
+    )
+    previous = _key_financials(
+        business_year="2024", revenue=300, operating_profit=40, net_income=40
+    )
+    before_previous = _key_financials(
+        business_year="2023", revenue=270, operating_profit=36, net_income=35
+    )
+
+    orchestrator = _build_orchestrator(
+        key_financials=current,
+        financial_history=[current, previous, before_previous],
+    )
+
+    result = await orchestrator.run(stock_code="005930", business_year="2025")
+
+    assert result.financial_features is not None
+    assert [a.business_year for a in result.financial_features.annual] == [
+        "2023",
+        "2024",
+        "2025",
+    ]
+    assert len(result.financial_features.yoy) > 0
+    assert len(result.financial_features.trends) > 0
+
+
+@pytest.mark.anyio
+async def test_run_wires_financial_features_annual_even_with_single_year() -> None:
+    # financial_history(공개 필드)는 2개 연도 미만이면 비지만,
+    # financial_features.annual은 당기 1건만으로도 채워져야 한다.
+    orchestrator = _build_orchestrator()
+
+    result = await orchestrator.run(
+        stock_code="005930", business_year="2025", report_code="11012"
+    )
+
+    assert result.financial_history == []
+    assert result.financial_features is not None
+    assert len(result.financial_features.annual) == 1
+
+
 @pytest.mark.anyio
 async def test_run_propagates_reasoning_error_without_fallback() -> None:
     orchestrator = _build_orchestrator(
