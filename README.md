@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** 첫 `FeatureEvaluator` 구현(예: Fundamental Profitability family, `analysis.py`의 기존 deterministic 출력을 재사용하는 `NormalizedResearchData` builder 포함) + 최소 Feature Registry 도입 시점 판단(두 번째 evaluator 또는 첫 Coverage evaluator 등장 시) → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED**(`app/models/recommendation.py`) + **RE-05 Evaluation Boundary/Input Contract FROZEN**(`app/models/research_context.py` — canonical source는 vendor/deterministic normalization이지 `StockAnalysis`가 아님, `StockAnalysis`는 sibling 산출물, evaluator/aggregator/scorer/numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§33)
+> **Next:** 두 번째 Fundamental `FeatureEvaluator` 구현(예: Operating Margin/Net Margin) → 두 evaluator가 등장하는 시점에 최소 Feature Registry 도입 여부 재확인(§33.4 trigger) → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN**(`app/models/research_context.py`) + **RE-05 First Deterministic Feature Evaluation Vertical Slice 완료**(`app/evaluation/` 신규 — `NormalizedResearchData` builder + 첫 ROE `FeatureEvaluator`, 실제 실행 경로로 검증, numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§34)
 
 ---
 
@@ -2695,8 +2695,21 @@ RE-05 Evaluation Boundary & Input Contract(§32~§33)   FROZEN
     └── 신규 테스트 17건, 전체 403 passed, ruff clean ✓ (dev-log §32~§33)
     │
     ▼
-첫 FeatureEvaluator 구현(NormalizedResearchData builder 포함) — Feature
-Registry 도입은 트리거 조건 도달 시   ← NEXT (dev-log 2026-08-29 §33.8 참고)
+RE-05 First Deterministic Feature Evaluation Vertical Slice(§34)   완료
+    ├── app/evaluation/research_data_builder.py 신규 — DeterministicAnalysisResult
+    │   (analysis.py, LLM 이전 단계)에서 NormalizedResearchData 조립, 재계산
+    │   없이 financial_facts만 그대로 참조 ✓
+    ├── app/evaluation/fundamental_evaluators.py 신규 — 첫 FeatureEvaluator
+    │   실제 구현(RoeFeatureEvaluator: Fundamental/profitability/ROE) ✓
+    ├── normalized_value는 실제 실행 결과로도 항상 None(Numeric Calibration
+    │   OPEN), availability=AVAILABLE과는 독립적으로 확인 ✓
+    ├── vendor model 비노출·StockAnalysis 비의존·recommendation/portfolio
+    │   필드 없음을 실제 실행 경로에서 재검증 ✓
+    └── 신규 테스트 17건, 전체 420 passed, ruff clean ✓ (dev-log §34)
+    │
+    ▼
+두 번째 Fundamental FeatureEvaluator 구현 → Feature Registry 도입 여부
+재확인(트리거 도달 시)   ← NEXT (dev-log 2026-08-29 §34.9 참고)
 ```
 
 ---
@@ -2802,8 +2815,8 @@ Registry 도입은 트리거 조건 도달 시   ← NEXT (dev-log 2026-08-29 §
 > 상세는 `docs/dev-log/2026-08-28.md` §19~§21(RE-02~RE-03.3 — RE-03.4는 이 파일에 없음, 위 RE-03.4 요약이 현재 유일한 기록), `docs/dev-log/2026-08-29.md`(RE-04 base + Amendment 1 Step 1~5는 §1~§21, Amendment 1 Step 6~14 Final Freeze + RE-05 Handoff는 §23) 참고.
 
 - [x] Recommendation data models(`app/models/recommendation.py` — `FeatureEvaluationResult`/`ComponentAssessment`/`RiskAssessment`/`CoreAttractivenessAssessment`/`StockOpportunityAssessment` 등 27개 model/enum, evaluator/aggregator/scorer 없음, 상세는 dev-log §30)
-- [ ] Data Acquisition / Deterministic Feature Layer(evaluator — 아직 미착수)
-- [ ] Core Attractiveness — Fundamental Quality
+- [ ] Data Acquisition / Deterministic Feature Layer(evaluator — `app/evaluation/`에서 첫 vertical slice 시작, ROE 1개 feature만 구현, 나머지 Fundamental feature와 Valuation/Forward/Flow/Market Confirmation은 미착수)
+- [ ] Core Attractiveness — Fundamental Quality(ROE `FeatureEvaluator` 1개 완료, ComponentAssessment 조립은 미착수)
 - [ ] Core Attractiveness — Valuation Attractiveness
 - [ ] Core Attractiveness — Forward Opportunity
 - [ ] Core Attractiveness — Investor Flow
