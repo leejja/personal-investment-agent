@@ -18,22 +18,23 @@ applicability 확인, source/provenance 전달, `as_of` 유지, raw value/unit
 - vendor API 호출(`NormalizedResearchData`만 소비, Kiwoom/OpenDART를
   직접 import하지 않는다).
 
-Feature Registry는 이번에도 만들지 않는다(§32.7/§33.4 trigger 유지) --
-이 evaluator의 metadata(`feature_id`/`component`/`feature_family`)는
-**이 클래스 자체에 class attribute로만 존재**한다. scope_status
-(`V1_REQUIRED`)/requirement_role은 코드로 다시 선언하지 않고
-`docs/dev-log/2026-08-29.md` §29.2 V1 Feature Set 표를 그대로 참조한다
-(중복 진실 공급원을 만들지 않기 위함, §32.7 판단과 일관).
+§35(Minimal Feature Registry)부터 이 evaluator의 metadata는 더 이상 이
+클래스가 독립적으로 소유하지 않는다 -- `app.evaluation.feature_registry`의
+`FeatureDefinition`을 canonical source로 참조한다(`feature_id`/
+`component`/`feature_family`/`default_requirement_role`이 전부 registry
+에서 온다 -- `requirement_role`은 §36에서 `default_requirement_role`로
+개명됐다). 이 evaluator는 그 definition에 대한 **calculation/execution
+책임만** 진다(§35.9의 ownership 경계) -- 값 자체를 두 번째로 선언하지
+않는다.
 """
 
+from app.evaluation.feature_registry import get_feature_definition
 from app.models.recommendation import (
     AvailabilityStatus,
-    Component,
     EvaluationBasis,
     FeatureEvaluationResult,
     FeatureValue,
     Provenance,
-    RequirementRole,
 )
 from app.models.research_context import EvaluationContext, NormalizedResearchData
 
@@ -58,9 +59,10 @@ class RoeFeatureEvaluator:
     이 사실을 `warnings`에 남긴다(수치 판단은 아니다).
     """
 
-    feature_id = "fundamental.profitability.roe"
-    component = Component.FUNDAMENTAL
-    feature_family = "profitability"
+    definition = get_feature_definition("fundamental.profitability.roe")
+    feature_id = definition.feature_id
+    component = definition.component
+    feature_family = definition.feature_family
 
     def evaluate(
         self,
@@ -82,7 +84,7 @@ class RoeFeatureEvaluator:
                 feature_family=self.feature_family,
                 raw=None,
                 availability=AvailabilityStatus.UNAVAILABLE,
-                requirement_role=RequirementRole.REQUIRED,
+                requirement_role=self.definition.default_requirement_role,
                 evaluation_basis=[EvaluationBasis.ABSOLUTE],
                 normalized_value=None,
                 provenance=provenance,
@@ -95,7 +97,7 @@ class RoeFeatureEvaluator:
             feature_family=self.feature_family,
             raw=FeatureValue(value=roe, unit="percent"),
             availability=AvailabilityStatus.AVAILABLE,
-            requirement_role=RequirementRole.REQUIRED,
+            requirement_role=self.definition.default_requirement_role,
             evaluation_basis=[EvaluationBasis.ABSOLUTE],
             # normalized score/threshold는 RE-05 Numeric Calibration이 OPEN인
             # 동안 정의하지 않는다 -- None으로 남긴다(UNKNOWN/UNAVAILABLE과

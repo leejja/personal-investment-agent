@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** 두 번째 Fundamental `FeatureEvaluator` 구현(예: Operating Margin/Net Margin) → 두 evaluator가 등장하는 시점에 최소 Feature Registry 도입 여부 재확인(§33.4 trigger) → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN**(`app/models/research_context.py`) + **RE-05 First Deterministic Feature Evaluation Vertical Slice 완료**(`app/evaluation/` 신규 — `NormalizedResearchData` builder + 첫 ROE `FeatureEvaluator`, 실제 실행 경로로 검증, numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§34)
+> **Next:** 두 번째 Fundamental `FeatureEvaluator` 구현(예: Operating Margin/Net Margin, registry entry 포함) + `financial_facts.current` None 허용 여부 재검토 → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 First Deterministic Feature Evaluation Vertical Slice 완료**(`app/evaluation/`) + **RE-05 Minimal Feature Registry FROZEN**(`app/evaluation/feature_registry.py` — scope status(4-value)와 verification precondition(orthogonal tuple)을 분리해 §29 frozen prose와 일치시킴, ROE evaluator가 registry를 참조, numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§36)
 
 ---
 
@@ -2708,8 +2708,27 @@ RE-05 First Deterministic Feature Evaluation Vertical Slice(§34)   완료
     └── 신규 테스트 17건, 전체 420 passed, ruff clean ✓ (dev-log §34)
     │
     ▼
-두 번째 Fundamental FeatureEvaluator 구현 → Feature Registry 도입 여부
-재확인(트리거 도달 시)   ← NEXT (dev-log 2026-08-29 §34.9 참고)
+RE-05 Minimal Feature Registry(§35~§36)   FROZEN
+    ├── app/evaluation/feature_registry.py 신규 — FeatureDefinition(frozen
+    │   Pydantic model) + get_feature_definition()/list_feature_definitions()
+    │   조회 함수 2개뿐, class/plugin registry 아님 ✓
+    ├── FeatureScopeStatus(V1_REQUIRED 등, design-time) vs AvailabilityStatus
+    │   (runtime) 값 겹침 없음을 확인, RequirementRole과도 의도적으로 분리
+    │   유지(merge 안 함) ✓
+    ├── §36 correction: VERIFICATION_REQUIRED가 scope status와 mutually
+    │   exclusive한 5번째 값이 아니라 orthogonal한
+    │   verification_requirements(tuple)임을 §29 frozen prose 재확인으로
+    │   바로잡음 — V1_OPTIONAL + verification precondition 동시 표현 가능 ✓
+    ├── requirement_role → default_requirement_role로 개명(registry
+    │   default값 ≠ runtime NOT_APPLICABLE 관계 명시) ✓
+    ├── RoeFeatureEvaluator를 registry 참조로 전환 — evaluator behavior/
+    │   output 변경 없음(기존 17개 테스트 무수정 통과로 재확인) ✓
+    └── 신규 테스트 24건, 전체 444 passed, ruff clean ✓ (dev-log §35~§36)
+    │
+    ▼
+두 번째 Fundamental FeatureEvaluator 구현(registry entry 포함) +
+financial_facts.current None 허용 여부 재검토   ← NEXT
+    (dev-log 2026-08-29 §36.12 참고)
 ```
 
 ---
