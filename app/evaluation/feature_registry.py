@@ -1,15 +1,28 @@
-"""RE-05 Minimal Feature Registry -- Feature identity의 canonical single
-source of truth.
+"""RE-05 Feature Registry -- Feature identity의 canonical single source
+of truth.
 
-`docs/dev-log/2026-08-29.md` §35(초기 설계)/§36(final contract audit --
-scope status orthogonality correction, `requirement_role` rename)가 이
+`docs/dev-log/2026-08-29.md` §35(초기 설계)/§36(scope status orthogonality
+correction, `requirement_role` rename)/§38(completeness & coverage
+readiness audit -- semantic role을 **FULL V1 CATALOG**로 명시적으로
+확정, `evaluator_id`/`evaluator_version`을 optional로 correction)가 이
 설계의 audit/결정 근거를 담는다.
+
+**semantic role(§38 확정)**: 이 registry는 "evaluator가 구현된 feature만
+담는 execution registry"가 아니라 **FROZEN V1 Feature Set(§29) 전체의
+canonical catalog**다 -- evaluator 유무와 무관하게 v1 scope에 속하는
+모든 feature identity를 담는 것이 목표다(그래야 Coverage가 "evaluator가
+없다"와 "feature 자체가 없다"를 혼동하지 않는다, §38.2 FALSE
+COMPLETENESS). **completeness는 현재 PARTIAL이다** -- §29가 FROZEN한
+전체 인벤토리(약 40개 이상) 중 2개(ROE/Operating Margin)만 실제로
+등록돼 있다. 전체 population은 이번 세션의 범위가 아니다(§38.6 inventory
+audit, 다음 단계로 분리).
 
 이 모듈이 관리하는 것: feature identity, component/family ownership,
 V1 scope contract, verification/precondition 여부(scope와 orthogonal,
 §36), default coverage requirement role, semantic direction,
 applicability 여부(review 필요성), required factual input, evaluator
-identity/version.
+identity/version(선택적 -- §38 correction, feature가 evaluator 없이도
+등록 가능).
 
 이 모듈이 **하지 않는 것**(RE-05 Numeric Calibration = OPEN 원칙 그대로):
 - threshold, weight, lookback, window
@@ -113,7 +126,25 @@ class FeatureDefinition(BaseModel):
     `kiwoom.foo` 같은 것)을 쓰지 않는다 -- `NormalizedResearchData`의
     normalized-domain semantic path(dot-separated 문자열)만 쓴다. 별도
     DSL이나 typed path object를 만들지 않았다 -- 이 규모(feature 1~2개)
-    에서는 plain string으로 충분하다고 판단했다(§7/§10)."""
+    에서는 plain string으로 충분하다고 판단했다(§7/§10).
+
+    §38 correction: `evaluator_id`/`evaluator_version`이 `str | None`
+    (기본값 `None`)으로 바뀌었다 -- 원래는 required `str`였다. 이 registry
+    는 "Feature identity의 canonical single source of truth"(§35 모듈
+    docstring)를 자처하는데, FROZEN V1 Feature Set(§29)에는 아직 evaluator
+    가 구현되지 않은 feature가 다수 존재한다(예: Net Margin, Debt Ratio,
+    Trailing PER 등 — 전부 V1_REQUIRED이지만 evaluator 없음, §38.6). 이
+    필드가 required였다면 "이 feature가 v1 scope에 존재한다"는 사실 자체를
+    evaluator 구현 전까지 registry에 담을 방법이 없었다 -- Coverage가
+    registry만 보고 "이 feature는 아예 존재하지 않는다"고 오판할 위험
+    (§38.2 FALSE COMPLETENESS)이 있었다. `evaluator_id is None`은 정확히
+    "feature identity는 정의됐지만 실행 구현이 아직 없다"(`NOT_IMPLEMENTED`)
+    를 뜻한다 -- 별도 `implementation_status` enum 필드는 추가하지 않았다
+    (`evaluator_id is None`이 이미 그 정보를 정확히 담고 있어 중복
+    필드가 되기 때문, §38.12). **`NOT_IMPLEMENTED`(evaluator_id=None)와
+    runtime `AvailabilityStatus.UNAVAILABLE`은 다른 축이다** -- 전자는
+    "이 feature를 계산할 코드가 없다"(software capability), 후자는
+    "코드는 있는데 이번 평가에서 값을 못 구했다"(data/runtime state)."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -133,8 +164,9 @@ class FeatureDefinition(BaseModel):
     # NormalizedResearchData 내부의 semantic path만 쓴다(vendor field 이름 금지).
     required_inputs: tuple[str, ...] = Field(default_factory=tuple)
 
-    evaluator_id: str
-    evaluator_version: str
+    # None = 아직 evaluator가 구현되지 않은 feature(§38 correction).
+    evaluator_id: str | None = None
+    evaluator_version: str | None = None
 
 
 # ============================== Registry ==============================
@@ -238,3 +270,11 @@ def list_feature_definitions() -> tuple[FeatureDefinition, ...]:
     수 있는 최소 조회 API, §13). 정렬/필터링 같은 추가 기능은 이번에
     만들지 않는다."""
     return tuple(_DEFINITIONS.values())
+
+
+def is_implemented(definition: FeatureDefinition) -> bool:
+    """§38.12: 별도 `implementation_status` enum을 추가하지 않고
+    `evaluator_id is None`을 그대로 판단 기준으로 쓴다 -- 이 함수는 그
+    판단을 한 곳에 모아두는 얇은 편의 함수일 뿐, 새로운 상태나 semantics를
+    추가하지 않는다."""
+    return definition.evaluator_id is not None

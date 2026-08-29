@@ -486,3 +486,145 @@ def test_no_numeric_policy_metadata_leaked_into_second_entry():
     for name in field_names:
         for term in forbidden:
             assert term not in name.lower()
+
+
+# ============================== §38 Completeness & Coverage Readiness Audit ==============================
+
+
+def _hypothetical_net_margin_definition() -> FeatureDefinition:
+    """production registry(_DEFINITIONS)에 추가하지 않는 가상
+    FeatureDefinition -- §29.2가 이미 FROZEN한 "Net Margin = V1_REQUIRED"
+    사실을 재현해, evaluator 없이도 feature identity를 등록할 수 있는지
+    (§38 correction)만 검증한다. 두 번째/세 번째 evaluator를 구현하는
+    것이 아니다."""
+    return FeatureDefinition(
+        feature_id="fundamental.profitability.net_margin",
+        component=Component.FUNDAMENTAL,
+        feature_family="profitability",
+        scope_status=FeatureScopeStatus.V1_REQUIRED,
+        verification_requirements=(),
+        default_requirement_role=RequirementRole.REQUIRED,
+        applicability=FeatureApplicability.REVIEW_REQUIRED,
+        required_inputs=("financial_facts.features.annual[latest].net_margin",),
+        # evaluator_id/evaluator_version 생략 -- 기본값 None(§38 correction).
+    )
+
+
+def _hypothetical_roic_definition() -> FeatureDefinition:
+    """§29.2가 실제로 FROZEN한 "ROIC = V1_BLOCKED" 상태를 재현한다 --
+    raw ingredient 자체가 불안정해(회사간 계정명 편차) v1에서 명시적으로
+    막힌 feature도 identity는 보존 가능해야 한다."""
+    return FeatureDefinition(
+        feature_id="fundamental.capital_efficiency.roic",
+        component=Component.FUNDAMENTAL,
+        feature_family="capital_efficiency",
+        scope_status=FeatureScopeStatus.V1_BLOCKED,
+        verification_requirements=(
+            "invested capital denominator account naming unstable across companies (§29.2)",
+        ),
+        default_requirement_role=RequirementRole.OPTIONAL,
+        applicability=FeatureApplicability.REVIEW_REQUIRED,
+        required_inputs=(),
+        # evaluator_id 생략 -- V1_BLOCKED라 애초에 evaluator를 만들 수 없다.
+    )
+
+
+def test_feature_identity_representable_without_evaluator():
+    """§38.4: feature exists but evaluator absent 상태를 표현할 수 있다 --
+    evaluator_id/version을 생략해도 FeatureDefinition이 유효하게
+    생성된다."""
+    definition = _hypothetical_net_margin_definition()
+    assert definition.evaluator_id is None
+    assert definition.evaluator_version is None
+    assert definition.feature_id == "fundamental.profitability.net_margin"
+
+
+def test_is_implemented_helper_reflects_evaluator_presence():
+    from app.evaluation.feature_registry import get_feature_definition, is_implemented
+
+    roe = get_feature_definition("fundamental.profitability.roe")
+    net_margin = _hypothetical_net_margin_definition()
+
+    assert is_implemented(roe) is True
+    assert is_implemented(net_margin) is False
+
+
+def test_not_implemented_is_distinct_axis_from_runtime_unavailable():
+    """§38.5/§5: NOT_IMPLEMENTED(evaluator_id=None, software capability
+    상태)와 runtime AvailabilityStatus.UNAVAILABLE(data/evaluation 상태)
+    은 서로 다른 축이다 -- 값 공간 자체가 겹치지 않는다(하나는
+    evaluator_id: str|None, 하나는 AvailabilityStatus enum)."""
+    net_margin = _hypothetical_net_margin_definition()
+    assert net_margin.evaluator_id is None  # NOT_IMPLEMENTED
+    # AvailabilityStatus는 FeatureEvaluationResult(runtime)에만 존재하고
+    # FeatureDefinition(design-time)에는 아예 그런 필드가 없다.
+    assert "availability" not in set(FeatureDefinition.model_fields.keys())
+
+
+def test_v1_required_feature_without_evaluator_is_representable():
+    """§38.6: V1_REQUIRED이지만 아직 evaluator가 없는 feature(Net Margin)
+    를 표현할 수 있다 -- Feature Registry FALSE COMPLETENESS 문제(§38.2)
+    를 해소하는 핵심 능력이다."""
+    definition = _hypothetical_net_margin_definition()
+    assert definition.scope_status == FeatureScopeStatus.V1_REQUIRED
+    assert definition.evaluator_id is None
+
+
+def test_v1_blocked_feature_is_representable():
+    """§38.7: V1_BLOCKED feature(ROIC)도 identity를 보존할 수 있다 --
+    evaluator가 원천적으로 없을 feature까지 포함해 catalog가 표현
+    가능해야 한다."""
+    definition = _hypothetical_roic_definition()
+    assert definition.scope_status == FeatureScopeStatus.V1_BLOCKED
+    assert definition.evaluator_id is None
+    assert definition.verification_requirements != ()
+
+
+def test_v1_optional_plus_verification_requirement_still_representable_after_correction():
+    """§36에서 확정한 orthogonality가 §38의 optional-evaluator correction
+    이후에도 깨지지 않는다(회귀 확인) -- V1_OPTIONAL이면서 evaluator도
+    없고 verification precondition도 있는 3중 조합까지 표현 가능."""
+    definition = FeatureDefinition(
+        feature_id="market_confirmation.momentum.absolute_momentum",
+        component=Component.MARKET_CONFIRMATION,
+        feature_family="momentum",
+        scope_status=FeatureScopeStatus.V1_OPTIONAL,
+        verification_requirements=(
+            "adjusted-price corporate-action safety unresolved (§29.5/§28.8)",
+        ),
+        default_requirement_role=RequirementRole.OPTIONAL,
+        applicability=FeatureApplicability.UNIVERSAL,
+        required_inputs=("price_history",),
+        # evaluator_id 생략.
+    )
+    assert definition.scope_status == FeatureScopeStatus.V1_OPTIONAL
+    assert definition.verification_requirements != ()
+    assert definition.evaluator_id is None
+
+
+def test_implemented_evaluators_still_bound_correctly_after_correction():
+    """§38 correction(Optional화) 이후에도 실제 구현된 두 evaluator는
+    여전히 evaluator_id/version을 갖고 있다 -- 회귀 없음."""
+    from app.evaluation.feature_registry import get_feature_definition
+
+    roe = get_feature_definition("fundamental.profitability.roe")
+    om = get_feature_definition("fundamental.profitability.operating_margin")
+
+    assert roe.evaluator_id == "RoeFeatureEvaluator"
+    assert roe.evaluator_version == "v1"
+    assert om.evaluator_id == "OperatingMarginFeatureEvaluator"
+    assert om.evaluator_version == "v1"
+
+
+def test_no_coverage_percentage_or_denominator_computed():
+    """§10: 이번 audit에서 coverage percentage/available_count/
+    total_count/threshold를 구현하지 않았다 -- registry 모듈 소스에 그런
+    계산 코드가 없다."""
+    import inspect
+
+    import app.evaluation.feature_registry as registry_module
+
+    source = inspect.getsource(registry_module)
+    forbidden = ("percentage", "available_count", "total_count", "coverage_ratio", "/ len(")
+    for term in forbidden:
+        assert term not in source

@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** RE-05 `CoverageEvaluator` 착수 검토(추천, 미착수 — feature 2개로 처음 실질적 재료 확보) 또는 세 번째 Fundamental `FeatureEvaluator`(예: Debt Ratio) — 사용자 결정 대기 → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Minimal Feature Registry FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin, `financial_facts.current`/`features` = LEGITIMATELY OPTIONAL로 결정, Evaluator Contract FROZEN, numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§37)
+> **Next:** RE-05 Complete V1 Feature Catalog(추천 — `READY_TO_REGISTER`로 분류된 Net Margin/Debt Ratio/Trailing PER/PBR/250d High-Low/KOSPI-KOSDAQ Benchmark 등부터 registry entry 등록, `NEEDS_SEMANTIC_RESOLUTION` 항목은 별도 분리) — Coverage Readiness prerequisite A 충족이 목적, `CoverageEvaluator` 자체는 그 다음 → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin) + **RE-05 Feature Registry semantic role = FULL V1 CATALOG 확정, completeness = PARTIAL(2/9+ V1_REQUIRED 등록), Coverage Readiness = NOT READY**(`evaluator_id`/`evaluator_version` optional化로 미구현 feature도 registry에 등록 가능하도록 correction, numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§38)
 
 ---
 
@@ -2742,8 +2742,28 @@ RE-05 Second Fundamental FeatureEvaluator + Invariant Audit(§37)   완료
     └── 신규 테스트 27건, 전체 471 passed, ruff clean ✓ (dev-log §37)
     │
     ▼
-CoverageEvaluator 착수 검토(추천) 또는 세 번째 Fundamental
-FeatureEvaluator — 사용자 결정 대기   ← NEXT (dev-log 2026-08-29 §37.22 참고)
+RE-05 Feature Registry Completeness & Coverage Readiness Audit(§38)   완료
+    ├── Registry semantic role = FULL V1 CATALOG로 확정(evaluator 유무와
+    │   무관하게 v1 scope 전체 feature identity를 담는 것이 목표) ✓
+    ├── FALSE COMPLETENESS 문제 확인 — registry 2건만 보면 Coverage가
+    │   미구현 feature를 "존재하지 않음"으로 오인할 위험 실증 ✓
+    ├── evaluator_id/evaluator_version을 str|None으로 correction —
+    │   evaluator 없이도 feature identity 등록 가능(is_implemented()
+    │   helper 추가, 별도 implementation_status enum은 불필요 판단) ✓
+    ├── §29.2 FROZEN V1 인벤토리 전수 재확인(Fundamental/Valuation/Forward/
+    │   Flow/Market) — V1_REQUIRED만 9개 이상, registry엔 2개뿐(PARTIAL) ✓
+    ├── Forward는 feature identity 자체가 미정 — Registry가 아니라
+    │   Component 레벨(ComponentAssessment)에서 이미 blocked 보존됨 확인 ✓
+    ├── Coverage Readiness prerequisite 5개 중 A/E는 NOT MET →
+    │   **Coverage Readiness = NOT READY** ✓
+    ├── ROE/Operating Margin evaluator 무변경(회귀 없음), 새 production
+    │   entry는 추가하지 않음(범위를 audit+correction으로 한정) ✓
+    └── 신규 테스트 8건, 전체 479 passed, ruff clean ✓ (dev-log §38)
+    │
+    ▼
+RE-05 Complete V1 Feature Catalog(추천) — READY_TO_REGISTER 항목부터
+등록, Coverage Readiness prerequisite A 충족   ← NEXT
+    (dev-log 2026-08-29 §38.18 참고)
 ```
 
 ---
