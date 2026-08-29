@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** FeatureFamilyAssessment/ComponentAssessment Assembly(추천 — Coverage Layer 5개 component 전부 완료돼 CoverageEvaluator 추가 설계는 더 이상 다음 단계가 아님, 실제 파이프라인에 꽂는 조립 코드가 필요) + 병행 candidate: Market Confirmation/Flow용 `NormalizedResearchData` model-wiring → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin, 변경 없음) + **RE-05 Feature Registry semantic role = FULL V1 CATALOG, completeness = PARTIAL(14 entries, evaluator 2개 구현, default_requirement_role 전부 확정)** + **RE-05 Coverage Contract = FROZEN** + **RE-05 Family-Level Coverage Policy = FROZEN** + **RE-05 CoverageEvaluator = Coverage Layer IMPLEMENTATION COMPLETE(후보)**(§43~§46, Fundamental+Valuation+Flow+Market+Forward 5개 component + Future-Opportunity Evidence alternative path 전부 구현, `app/evaluation/coverage_evaluator.py` — deterministic feature→family→component coverage; 구현 과정에서 empty-critical-family/CRITICAL-family-UNKNOWN 두 latent 버그 발견·수정; Forward는 Flow와 달리 INSUFFICIENT+non-gating을 정직하게 보고, Event evidence로 Forward coverage를 mutate하지 않음; RecommendationEvaluationState가 model 변경 없이 결과를 담을 수 있음을 실측 확인(ASSEMBLY READY)), assembly/Event Intelligence/Recommendation Policy는 여전히 NOT STARTED(numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§46)
+> **Next:** Valuation/Forward/Flow/Market Assembly 확장(추천 — `assemble_component_assessment()`가 이제 component-agnostic이라 즉시 재사용 가능) + 병행 candidate: Market Confirmation/Flow용 `NormalizedResearchData` model-wiring → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin, 변경 없음) + **RE-05 Feature Registry semantic role = FULL V1 CATALOG, completeness = PARTIAL(14 entries, evaluator 2개 구현, default_requirement_role 전부 확정)** + **RE-05 Coverage Contract = FROZEN** + **RE-05 Family-Level Coverage Policy = FROZEN** + **RE-05 Coverage Layer = IMPLEMENTATION COMPLETE**(§43~§46, Fundamental+Valuation+Flow+Market+Forward + Future-Opportunity Evidence alternative path) + **RE-05 Assembly Boundary = FROZEN, Fundamental Family/Component Assembly = IMPLEMENTED**(§47~§48, `app/evaluation/assembly.py` — FeatureEvaluationResult + precomputed CoverageAssessment → FeatureFamilyAssessment → ComponentAssessment deterministic 조립; §48에서 assembly가 Coverage를 내부 실행하던 boundary violation을 발견·수정, 이제 CoverageAssessment를 파라미터로만 소비하고 identity까지 보존, component-agnostic API로 단순화, model 변경 없음, score=None/signal=UNKNOWN/confidence=UNKNOWN 유지), Valuation/Forward/Flow/Market assembly + scoring(FeatureFamilyEvaluator/ComponentEvaluator)은 여전히 NOT STARTED(numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§48)
 
 ---
 
@@ -2909,11 +2909,46 @@ Slice(§46)   완료 — Coverage Layer 5개 component 전부 완료
     └── 신규 테스트 26건(전체 90), 전체 597 passed, ruff clean ✓ (dev-log §46)
     │
     ▼
-FeatureFamilyAssessment/ComponentAssessment Assembly(추천, §46.17 B) —
-지금까지 만든 evaluate_*_coverage() 함수들을 실제 파이프라인
-(RecommendationEvaluationState)에 꽂는 조립 코드. CoverageEvaluator
-추가 설계는 더 이상 다음 단계가 아님(5개 component 전부 완료)   ← NEXT
-    (dev-log 2026-08-29 §46.17 참고)
+RE-05 FeatureFamilyAssessment/ComponentAssessment Assembly — First
+Structural Slice(§47)   완료(Fundamental)
+    ├── `app/evaluation/assembly.py` 신규 — feature → family → component
+    │   deterministic 조립, model 변경 없음(기존 model이 이미 충분했음을
+    │   실제 코드 audit으로 확인) ✓
+    ├── Coverage 재계산 없이 evaluate_family_coverage/evaluate_fundamental_
+    │   coverage 결과를 그대로 재사용(`==` 동일 객체로 실측) ✓
+    ├── score=None(0 아님)/signal=UNKNOWN(NEUTRAL 아님)/confidence=UNKNOWN
+    │   (자동 HIGH 생성 안 함) 전부 실측 확인 ✓
+    ├── family_status/component_status 신규 설계(Coverage/Confidence와
+    │   별개 축, "실제로 evaluator가 실행됐는가"만 표현) — 등록 feature
+    │   0개 family는 vacuous EVALUATED 아니라 NOT_EVALUATED로 정직하게 처리 ✓
+    ├── fake FeatureEvaluationResult 생성 없음, catalog 순서 기반
+    │   deterministic ordering(입력 순서 무관) 실측 확인 ✓
+    ├── RecommendationEvaluationState에 조립 결과를 model 변경 없이
+    │   담을 수 있음을 실측 확인 ✓
+    └── 신규 테스트 29건, 전체 626 passed, ruff clean ✓ (dev-log §47)
+    │
+    ▼
+RE-05 Assembly Boundary Final Correction(§48)   완료
+    ├── audit 결과 §47의 "Coverage 재계산 없음" 표현이 부정확했음을
+    │   실제 코드로 확인 — assembly가 evaluate_family_coverage/
+    │   evaluate_fundamental_coverage를 내부에서 직접 실행하고 있었음
+    │   (정책 중복은 없었으나 실행 중복은 있었음) ✓
+    ├── assembly가 이제 CoverageAssessment를 파라미터로만 소비 —
+    │   evaluate_*_coverage import 완전 제거, 전달된 객체와 identity(`is`)
+    │   까지 보존됨을 실측 ✓
+    ├── API 단순화 — component별 wrapper 제거, component-agnostic
+    │   assemble_component_assessment() 하나로 통합(dead parameter 제거) ✓
+    ├── family_status/component_status semantics = model intent와 일치
+    │   확인(재설계 불필요), get_component_families 현재 위치 유지가
+    │   맞다고 판정(FROZEN registry 재설계 없이는 이관 불가) ✓
+    └── 테스트 correction + 신규 6건, 전체 631 passed, ruff clean ✓ (dev-log §48)
+    │
+    ▼
+Valuation/Forward/Flow/Market Assembly 확장(추천, §47.20 A, 변경 없음) —
+assemble_component_assessment가 이제 component-agnostic이라 즉시 재사용
+가능. Scoring(FeatureFamilyEvaluator/ComponentEvaluator)은 Numeric
+Calibration이 여전히 OPEN이라 아직 착수 조건 미충족   ← NEXT
+    (dev-log 2026-08-29 §48.10 참고)
 ```
 
 ---

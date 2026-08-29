@@ -230,6 +230,28 @@ def get_family_criticality(component: Component, feature_family: str) -> FamilyC
     return _FAMILY_CRITICALITY[(component, feature_family)]
 
 
+# §47.2: component별 canonical family 목록의 공개 accessor -- `app.evaluation.
+# assembly`가 family list를 중복 정의하지 않고 이 모듈의 기존 tuple을
+# 그대로 재사용할 수 있게 한다(두 파일에 같은 목록이 따로 존재해 drift가
+# 나는 것을 방지). 기존 5개 private tuple을 그대로 참조할 뿐, 새 목록을
+# 만들지 않는다.
+_COMPONENT_FAMILIES: Mapping[Component, tuple[str, ...]] = MappingProxyType(
+    {
+        Component.FUNDAMENTAL: _FUNDAMENTAL_FAMILIES,
+        Component.VALUATION: _VALUATION_FAMILIES,
+        Component.FORWARD: _FORWARD_FAMILIES,
+        Component.FLOW: _FLOW_FAMILIES,
+        Component.MARKET_CONFIRMATION: _MARKET_FAMILIES,
+    }
+)
+
+
+def get_component_families(component: Component) -> tuple[str, ...]:
+    """component의 canonical family 목록을 반환한다(§47.2). 등록되지 않은
+    component는 `KeyError`를 raise한다(fail-fast, §35 원칙 그대로)."""
+    return _COMPONENT_FAMILIES[component]
+
+
 # ============================== Feature-level matching (§43.3 A~G) ==============================
 
 
