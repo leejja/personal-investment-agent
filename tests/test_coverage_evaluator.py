@@ -1,7 +1,7 @@
 """RE-05 CoverageEvaluator deterministic Coverage vertical slice 테스트
-(Fundamental §43, Valuation §44).
+(Fundamental §43, Valuation §44, Flow/Market §45, Forward §46).
 
-`docs/dev-log/2026-08-29.md` §43/§44가 이 구현의 설계 근거를 담는다. numeric
+`docs/dev-log/2026-08-29.md` §43~§46이 이 구현의 설계 근거를 담는다. numeric
 threshold/weight/window/percentage/count 테스트는 만들지 않는다(그런 필드
 자체가 존재하지 않는다는 것만 검증한다).
 """
@@ -14,7 +14,9 @@ from app.evaluation.coverage_evaluator import (
     FamilyCriticality,
     evaluate_family_coverage,
     evaluate_flow_coverage,
+    evaluate_forward_coverage,
     evaluate_fundamental_coverage,
+    evaluate_future_opportunity_evidence,
     evaluate_market_coverage,
     evaluate_valuation_coverage,
     get_family_criticality,
@@ -31,11 +33,13 @@ from app.models.recommendation import (
     Component,
     CoverageStatus,
     EvaluationBasis,
+    EvidencePathAvailability,
     FeatureEvaluationResult,
     Provenance,
     RequirementRole,
+    RequirementSatisfaction,
 )
-from app.models.research_context import EvaluationContext
+from app.models.research_context import EvaluationContext, RecommendationEvaluationState
 from app.models.stock import (
     AnnualFinancialFeatures,
     FinancialFeatures,
@@ -927,10 +931,340 @@ def test_flow_and_market_public_api_has_no_context_parameter():
     assert market_params == {"feature_results"}
 
 
-def test_forward_not_implemented_in_this_slice():
-    """§12: Forward coverage는 이번 slice에서 구현하지 않는다 --
-    module에 evaluate_forward_coverage 같은 이름이 없다."""
+def test_forward_now_implemented_after_46():
+    """§45 시점의 스냅샷 테스트를 §46 결과에 맞게 갱신한다(§45에서는
+    Forward가 미구현이었지만 §46에서 구현됐다)."""
     import app.evaluation.coverage_evaluator as module
 
-    assert not hasattr(module, "evaluate_forward_coverage")
-    assert (Component.FORWARD, "consensus_growth") not in module._FAMILY_CRITICALITY
+    assert hasattr(module, "evaluate_forward_coverage")
+    assert hasattr(module, "evaluate_future_opportunity_evidence")
+    assert (Component.FORWARD, "consensus_growth") in module._FAMILY_CRITICALITY
+
+
+# ============================== §46: Forward Alternative Evidence Slice ==============================
+
+
+def test_forward_has_zero_registered_features():
+    """§18 case 2 재료: registry에 Forward feature가 실제로 0개다."""
+    forward_definitions = [
+        d for d in list_feature_definitions() if d.component == Component.FORWARD
+    ]
+    assert forward_definitions == []
+
+
+def test_forward_registry_feature_zero_is_not_sufficient():
+    """§13 case 1 + §7/§20류 핵심 regression: 등록 feature 0개인 Forward가
+    SUFFICIENT로 오판되지 않는다."""
+    coverage = evaluate_forward_coverage([])
+    assert coverage.coverage_status != CoverageStatus.SUFFICIENT
+
+
+def test_forward_component_coverage_is_insufficient_not_unknown():
+    """§13 case 2 + §46.4 핵심 설계: Forward는 Flow/Market과 달리
+    UNKNOWN이 아니라 INSUFFICIENT를 보고한다 -- §27.1/§29.4가 이미 얼려둔
+    "coverage=insufficient"를 정확히 재현한다(dev-log 3537행 설계 목표)."""
+    coverage = evaluate_forward_coverage([])
+    assert coverage.coverage_status == CoverageStatus.INSUFFICIENT
+    assert coverage.critical_path_satisfied is False
+
+
+def test_forward_and_flow_are_not_treated_identically():
+    """Forward != Flow(§46.4) 재확인: 둘 다 등록 feature 0개이지만
+    coverage_status/critical_path_satisfied가 다르다 -- Forward는
+    CRITICAL family로 분류돼 INSUFFICIENT+False, Flow는 SUPPORTING류라
+    UNKNOWN+True다."""
+    forward = evaluate_forward_coverage([])
+    flow = evaluate_flow_coverage([])
+    assert forward.coverage_status != flow.coverage_status
+    assert forward.critical_path_satisfied != flow.critical_path_satisfied
+    assert forward.coverage_status == CoverageStatus.INSUFFICIENT
+    assert flow.coverage_status == CoverageStatus.UNKNOWN
+
+
+def test_forward_coverage_insufficiency_does_not_change_event_path():
+    """§13 case 3: Forward coverage 부족 자체는 Event path 상태를
+    변경하지 않는다 -- 두 값은 evaluate_future_opportunity_evidence의
+    서로 다른 입력이다(조립만 할 뿐 서로 간섭하지 않는다)."""
+    forward_coverage = evaluate_forward_coverage([])
+    result_low_forward = evaluate_future_opportunity_evidence(
+        forward_coverage, EvidencePathAvailability.AVAILABLE
+    )
+    assert result_low_forward.event_path_availability == EvidencePathAvailability.AVAILABLE
+    assert result_low_forward.forward_path_availability == EvidencePathAvailability.UNAVAILABLE
+
+
+def test_forward_path_available_satisfies_requirement():
+    """§13 case 4: Forward coverage가 SUFFICIENT면(가상 상황 -- 실제로는
+    항상 INSUFFICIENT지만 매핑 함수 자체를 독립적으로 검증) requirement가
+    SATISFIED로 조립된다."""
+    from app.evaluation.coverage_evaluator import _forward_coverage_to_path_availability
+    from app.models.recommendation import CoverageAssessment
+
+    sufficient_forward = CoverageAssessment(
+        critical_path_satisfied=True,
+        coverage_status=CoverageStatus.SUFFICIENT,
+    )
+    assert (
+        _forward_coverage_to_path_availability(sufficient_forward)
+        == EvidencePathAvailability.AVAILABLE
+    )
+    result = evaluate_future_opportunity_evidence(
+        sufficient_forward, EvidencePathAvailability.UNKNOWN
+    )
+    assert result.requirement_satisfied == RequirementSatisfaction.SATISFIED
+
+
+def test_forward_unavailable_event_available_satisfies_requirement():
+    """§13 case 5."""
+    forward_coverage = evaluate_forward_coverage([])  # 항상 INSUFFICIENT -> UNAVAILABLE
+    result = evaluate_future_opportunity_evidence(
+        forward_coverage, EvidencePathAvailability.AVAILABLE
+    )
+    assert result.forward_path_availability == EvidencePathAvailability.UNAVAILABLE
+    assert result.event_path_availability == EvidencePathAvailability.AVAILABLE
+    assert result.requirement_satisfied == RequirementSatisfaction.SATISFIED
+
+
+def test_forward_unavailable_event_unavailable_not_satisfied():
+    """§13 case 6."""
+    forward_coverage = evaluate_forward_coverage([])
+    result = evaluate_future_opportunity_evidence(
+        forward_coverage, EvidencePathAvailability.UNAVAILABLE
+    )
+    assert result.forward_path_availability == EvidencePathAvailability.UNAVAILABLE
+    assert result.event_path_availability == EvidencePathAvailability.UNAVAILABLE
+    assert result.requirement_satisfied == RequirementSatisfaction.NOT_SATISFIED
+
+
+def test_forward_unknown_event_unknown_yields_unknown():
+    """§13 case 7."""
+    from app.evaluation.coverage_evaluator import _combine_evidence_paths_kleene_or
+
+    result = _combine_evidence_paths_kleene_or(
+        EvidencePathAvailability.UNKNOWN, EvidencePathAvailability.UNKNOWN
+    )
+    assert result == RequirementSatisfaction.UNKNOWN
+
+
+def test_event_available_does_not_mutate_forward_coverage():
+    """§13 case 8 + §9/§46.9 RE-04 원칙: Event evidence가 AVAILABLE이어도
+    Forward Component 자신의 CoverageAssessment는 그대로다 -- Event
+    Overlay가 Core component를 mutate하지 않는다."""
+    forward_coverage = evaluate_forward_coverage([])
+    before = forward_coverage.model_copy(deep=True)
+    evaluate_future_opportunity_evidence(forward_coverage, EvidencePathAvailability.AVAILABLE)
+    assert forward_coverage == before  # 함수 호출 전후로 완전히 동일(mutate 없음)
+    assert forward_coverage.coverage_status == CoverageStatus.INSUFFICIENT  # SUFFICIENT로 안 바뀜
+
+
+def test_event_absence_differs_from_event_failure_via_explicit_input():
+    """§13 case 9 + §11: 이 모듈은 "event가 없다"와 "event 확인 실패"를
+    스스로 구분하지 않는다(Event Intelligence가 이미 구분해서 넘겨야
+    한다) -- 대신 호출자가 그 구분 결과를 UNAVAILABLE(확인했는데 없음)
+    /UNKNOWN(확인 자체를 못함)으로 명시적으로 넘기면 각각 다른 결과로
+    이어짐을 확인한다(값이 뭉개지지 않는다)."""
+    forward_coverage = evaluate_forward_coverage([])  # UNAVAILABLE
+    absence = evaluate_future_opportunity_evidence(
+        forward_coverage, EvidencePathAvailability.UNAVAILABLE
+    )
+    failure = evaluate_future_opportunity_evidence(
+        forward_coverage, EvidencePathAvailability.UNKNOWN
+    )
+    assert absence.requirement_satisfied == RequirementSatisfaction.NOT_SATISFIED
+    assert failure.requirement_satisfied == RequirementSatisfaction.UNKNOWN
+    assert absence.requirement_satisfied != failure.requirement_satisfied
+
+
+def test_event_unknown_is_not_treated_as_false():
+    """§13 case 10 + self-audit 항목: event_path_availability=UNKNOWN이
+    "이벤트가 없다"(UNAVAILABLE)와 동일하게 취급되지 않는다 -- 서로 다른
+    RequirementSatisfaction 결과로 이어질 수 있다(§9와 함께 위 테스트가
+    이미 실측했지만, "UNKNOWN이 False로 축약되지 않는다"는 것 자체를
+    명시적으로 재확인한다)."""
+    unavailable_forward = evaluate_forward_coverage([])
+    result_with_unknown_event = evaluate_future_opportunity_evidence(
+        unavailable_forward, EvidencePathAvailability.UNKNOWN
+    )
+    assert result_with_unknown_event.requirement_satisfied != RequirementSatisfaction.NOT_SATISFIED
+    assert result_with_unknown_event.requirement_satisfied == RequirementSatisfaction.UNKNOWN
+
+
+def test_tri_state_not_collapsed_to_boolean():
+    """§13 case 11: EvidencePathAvailability/RequirementSatisfaction 모두
+    3개 값을 유지한다(2개로 줄이지 않았다)."""
+    assert {v.value for v in EvidencePathAvailability} == {"available", "unavailable", "unknown"}
+    assert {v.value for v in RequirementSatisfaction} == {
+        "satisfied",
+        "not_satisfied",
+        "unknown",
+    }
+
+
+def test_flow_regression_after_forward_addition():
+    """§13 case 12."""
+    coverage = evaluate_flow_coverage([])
+    assert coverage.coverage_status == CoverageStatus.UNKNOWN
+    assert coverage.critical_path_satisfied is True
+
+
+def test_market_regression_after_forward_addition():
+    """§13 case 13."""
+    coverage = evaluate_market_coverage([])
+    assert coverage.coverage_status == CoverageStatus.UNKNOWN
+    assert coverage.critical_path_satisfied is True
+
+
+def test_fundamental_regression_after_forward_addition():
+    """§13 case 14: §46.4의 UNKNOWN->INSUFFICIENT correction이
+    Fundamental의 기존 결과를 바꾸지 않는다(모든 기존 테스트가 이미
+    재확인하지만, 여기서도 명시적으로 한 번 더)."""
+    results = _real_roe_and_operating_margin_results(roe=12.3, operating_margin=15.0)
+    debt_ratio = _hypothetical_result(_DEBT_RATIO_ID, AvailabilityStatus.AVAILABLE)
+    coverage = evaluate_fundamental_coverage([*results, debt_ratio])
+    assert coverage.coverage_status == CoverageStatus.SUFFICIENT
+    assert coverage.critical_path_satisfied is True
+
+
+def test_valuation_regression_after_forward_addition():
+    """§13 case 15."""
+    per_result = _hypothetical_result(_PER_ID, AvailabilityStatus.AVAILABLE)
+    coverage = evaluate_valuation_coverage([per_result])
+    assert coverage.coverage_status == CoverageStatus.SUFFICIENT
+    assert coverage.critical_path_satisfied is True
+
+
+def test_critical_family_unknown_now_becomes_insufficient_not_partial():
+    """§46.4 correction 자체를 직접 재현: CRITICAL family가 있는
+    component에서 그 family가 전부 UNKNOWN(Tier 3)이면 component
+    coverage_status는 PARTIAL이 아니라 INSUFFICIENT다(correction 이전
+    코드의 latent bug를 이 테스트가 lock-in한다)."""
+    coverage = evaluate_family_coverage(Component.FORWARD, "consensus_growth", [])
+    assert coverage.coverage_status == CoverageStatus.UNKNOWN  # family 자체는 Tier 3
+
+    component_coverage = evaluate_forward_coverage([])
+    assert component_coverage.coverage_status == CoverageStatus.INSUFFICIENT  # PARTIAL이 아니다
+
+
+def test_forward_all_false_completeness_absent():
+    """§13 case 16: 등록 feature가 0개라 `all([])`류 vacuous-True 버그가
+    Forward에서도 재발하지 않는다(coverage_status가 SUFFICIENT가 아님을
+    한 번 더 명시적으로 확인)."""
+    coverage = evaluate_forward_coverage([])
+    assert coverage.coverage_status != CoverageStatus.SUFFICIENT
+
+
+def test_forward_slice_produces_no_recommendation_classification():
+    """§13 case 17."""
+    body = _module_code_body()
+    for forbidden in ("ATTRACTIVE", "UNATTRACTIVE", "BUY", "SELL", "HOLD"):
+        assert forbidden not in body
+
+
+def test_forward_slice_does_not_compute_event_materiality_or_scoring():
+    """§13 case 18: Event materiality/direction/priced-in/confidence 같은
+    Event Intelligence 계산이 이 모듈의 실제 코드(식별자)에 없다 -- docstring
+    산문(예: "materiality를 새로 판단하지 않는다"는 설명 문장)에 그 단어가
+    등장하는 것은 여기서 검사 대상이 아니다(AST 식별자만 검사, 텍스트
+    부분일치가 아니다)."""
+    import ast
+
+    import app.evaluation.coverage_evaluator as module
+
+    tree = ast.parse(inspect.getsource(module))
+    identifiers: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            identifiers.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            identifiers.add(node.attr)
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            identifiers.add(node.name)
+    identifiers_lower = {name.lower() for name in identifiers}
+
+    forbidden = (
+        "materiality",
+        "priced_in",
+        "pricedin",
+        "impactpath",
+        "impact_path",
+        "claim_extraction",
+        "verify_event",
+    )
+    for term in forbidden:
+        assert term not in identifiers_lower
+
+
+def test_forward_slice_has_no_numeric_policy():
+    """§13 case 19."""
+    body = _module_code_body()
+    for term in ("threshold=", "weight=", "lookback=", "window=", "cutoff=", "/ len("):
+        assert term not in body
+
+
+def test_forward_and_future_opportunity_evidence_output_is_deterministic():
+    """§13 case 20."""
+    forward_coverage_1 = evaluate_forward_coverage([])
+    forward_coverage_2 = evaluate_forward_coverage([])
+    assert forward_coverage_1 == forward_coverage_2
+
+    fo_1 = evaluate_future_opportunity_evidence(
+        forward_coverage_1, EvidencePathAvailability.AVAILABLE
+    )
+    fo_2 = evaluate_future_opportunity_evidence(
+        forward_coverage_2, EvidencePathAvailability.AVAILABLE
+    )
+    assert fo_1 == fo_2
+
+
+def test_future_opportunity_evidence_public_api_shape():
+    """§5: signature가 실제 model(FutureOpportunityEvidenceAssessment)에
+    맞춰져 있다 -- vendor/LLM/PortfolioContext 파라미터가 없다."""
+    params = inspect.signature(evaluate_future_opportunity_evidence).parameters
+    assert set(params) == {"forward_coverage", "event_path_availability", "supporting_refs"}
+    assert params["event_path_availability"].default == EvidencePathAvailability.UNKNOWN
+    assert params["supporting_refs"].default == ()
+
+
+def test_forward_family_criticality_matches_freeze():
+    for family in (
+        "consensus_growth",
+        "estimate_revision",
+        "guidance",
+        "expected_economics",
+    ):
+        assert get_family_criticality(Component.FORWARD, family) == FamilyCriticality.CRITICAL
+
+
+def test_recommendation_evaluation_state_can_hold_forward_and_future_opportunity_evidence():
+    """§14 RecommendationEvaluationState integration audit: 기존 model이
+    Forward component coverage(component_assessments를 통해)와
+    future_opportunity_evidence를 이미 자연스럽게 담을 수 있다 --
+    model 변경 없이 실제로 생성해 확인한다(추측이 아니라 실측)."""
+    as_of = datetime(2026, 8, 29, tzinfo=UTC)
+    context = EvaluationContext(symbol="005930", as_of=as_of)
+
+    result_input = DeterministicAnalysisResult(
+        price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=1.0),
+        financials=FinancialSnapshot(business_year="2025", roe=12.3),
+        facts=[],
+        max_confidence=AnalysisConfidence.MEDIUM,
+        risk_level=RiskLevel.MEDIUM,
+    )
+    normalized_data = build_normalized_research_data(result_input, as_of=as_of)
+
+    forward_coverage = evaluate_forward_coverage([])
+    future_opportunity_evidence = evaluate_future_opportunity_evidence(
+        forward_coverage, EvidencePathAvailability.UNKNOWN
+    )
+
+    state = RecommendationEvaluationState(
+        context=context,
+        normalized_research_data=normalized_data,
+        coverage=forward_coverage,
+        future_opportunity_evidence=future_opportunity_evidence,
+    )
+    assert state.coverage is forward_coverage
+    assert state.future_opportunity_evidence is future_opportunity_evidence
+    assert (
+        state.future_opportunity_evidence.requirement_satisfied == RequirementSatisfaction.UNKNOWN
+    )

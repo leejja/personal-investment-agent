@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** Forward CoverageEvaluator(추천 — 남은 유일한 component, top-level FutureOpportunityEvidenceAssessment 결합이 필요한 새 설계) + 병행 candidate: Market Confirmation/Flow용 `NormalizedResearchData` model-wiring → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin, 변경 없음) + **RE-05 Feature Registry semantic role = FULL V1 CATALOG, completeness = PARTIAL(14 entries, evaluator 2개 구현, default_requirement_role 전부 확정)** + **RE-05 Coverage Contract = FROZEN** + **RE-05 Family-Level Coverage Policy = FROZEN** + **RE-05 CoverageEvaluator = Fundamental + Valuation + Flow + Market IMPLEMENTED**(§43~§45, `app/evaluation/coverage_evaluator.py` — deterministic feature→family→component coverage; §45에서 CRITICAL family가 없는 component의 empty-set false-completeness 버그를 발견·수정; non-gating(critical_path_satisfied) != sufficient(coverage_status) 실측 확인), **Forward NOT STARTED**(numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§45)
+> **Next:** FeatureFamilyAssessment/ComponentAssessment Assembly(추천 — Coverage Layer 5개 component 전부 완료돼 CoverageEvaluator 추가 설계는 더 이상 다음 단계가 아님, 실제 파이프라인에 꽂는 조립 코드가 필요) + 병행 candidate: Market Confirmation/Flow용 `NormalizedResearchData` model-wiring → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin, 변경 없음) + **RE-05 Feature Registry semantic role = FULL V1 CATALOG, completeness = PARTIAL(14 entries, evaluator 2개 구현, default_requirement_role 전부 확정)** + **RE-05 Coverage Contract = FROZEN** + **RE-05 Family-Level Coverage Policy = FROZEN** + **RE-05 CoverageEvaluator = Coverage Layer IMPLEMENTATION COMPLETE(후보)**(§43~§46, Fundamental+Valuation+Flow+Market+Forward 5개 component + Future-Opportunity Evidence alternative path 전부 구현, `app/evaluation/coverage_evaluator.py` — deterministic feature→family→component coverage; 구현 과정에서 empty-critical-family/CRITICAL-family-UNKNOWN 두 latent 버그 발견·수정; Forward는 Flow와 달리 INSUFFICIENT+non-gating을 정직하게 보고, Event evidence로 Forward coverage를 mutate하지 않음; RecommendationEvaluationState가 model 변경 없이 결과를 담을 수 있음을 실측 확인(ASSEMBLY READY)), assembly/Event Intelligence/Recommendation Policy는 여전히 NOT STARTED(numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§46)
 
 ---
 
@@ -2888,12 +2888,32 @@ Slice(§45)   완료
     └── 신규 테스트 20건(전체 64), 전체 571 passed, ruff clean ✓ (dev-log §45)
     │
     ▼
-Forward CoverageEvaluator(추천, §45.12 A) — 남은 유일한 component. Component
-자체 coverage(§29.4/§42.10)와 top-level FutureOpportunityEvidenceAssessment
-(A/B, §27.3)를 결합하는 새 설계가 필요해 이전 slice의 단순 재사용 패턴이
-아니다. 병행 candidate: Market Confirmation/Flow normalized-data
-wiring   ← NEXT
-    (dev-log 2026-08-29 §45.12 참고)
+RE-05 CoverageEvaluator Implementation — Forward Alternative Evidence
+Slice(§46)   완료 — Coverage Layer 5개 component 전부 완료
+    ├── evaluate_forward_coverage() 신규 — Forward 4-family(Consensus
+    │   Growth/Estimate Revision/Guidance/Expected Economics) 전부 CRITICAL
+    │   분류 — Flow와 달리 coverage_status=INSUFFICIENT/critical_path_
+    │   satisfied=False를 정직하게 보고(§27.1/§29.4 frozen 값 정확히 재현) ✓
+    ├── **버그 발견 및 수정**: _evaluate_component_coverage에서 CRITICAL
+    │   family가 UNKNOWN(Tier3)일 때 PARTIAL로 새던 latent 버그를 Forward
+    │   구현 중 발견 — INSUFFICIENT로 correction(Fundamental/Valuation/
+    │   Flow/Market 89개 테스트 무수정 통과로 회귀 없음 확인) ✓
+    ├── evaluate_future_opportunity_evidence() 신규 — Forward/Event
+    │   evidence path를 Kleene 3치 논리 OR로 조립(Event materiality/
+    │   direction/priced-in 계산 없음, 이미 결정된 tri-state만 소비) ✓
+    ├── Event evidence AVAILABLE이어도 Forward CoverageAssessment는
+    │   불변(mutate 없음) 실측 확인 — RE-04 Event Overlay 원칙 보존 ✓
+    ├── RecommendationEvaluationState가 model 변경 없이 Forward
+    │   coverage+future_opportunity_evidence를 동시에 담을 수 있음을
+    │   실측 확인 — ASSEMBLY READY ✓
+    └── 신규 테스트 26건(전체 90), 전체 597 passed, ruff clean ✓ (dev-log §46)
+    │
+    ▼
+FeatureFamilyAssessment/ComponentAssessment Assembly(추천, §46.17 B) —
+지금까지 만든 evaluate_*_coverage() 함수들을 실제 파이프라인
+(RecommendationEvaluationState)에 꽂는 조립 코드. CoverageEvaluator
+추가 설계는 더 이상 다음 단계가 아님(5개 component 전부 완료)   ← NEXT
+    (dev-log 2026-08-29 §46.17 참고)
 ```
 
 ---

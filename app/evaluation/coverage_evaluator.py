@@ -1,11 +1,12 @@
 """RE-05 CoverageEvaluator -- deterministic Coverage vertical slice
-(Fundamental §43, Valuation §44, Flow/Market §45).
+(Fundamental §43, Valuation §44, Flow/Market §45, Forward §46).
 
 `docs/dev-log/2026-08-29.md` §41(Coverage Contract FROZEN)/§42(Family-Level
 Coverage Policy FROZEN)/§43(Fundamental 구현)/§44(Valuation 구현)/§45
-(Flow/Market non-gating 구현)이 이 모듈의 semantic 근거를 담는다 -- 이
-모듈은 그 세션들이 이미 확정한 규칙을 코드로 옮길 뿐, 새로운 policy
-결정을 내리지 않는다.
+(Flow/Market non-gating 구현)/§46(Forward + Future-Opportunity Evidence
+alternative path 구현)이 이 모듈의 semantic 근거를 담는다 -- 이 모듈은
+그 세션들이 이미 확정한 규칙을 코드로 옮길 뿐, 새로운 policy 결정을
+내리지 않는다.
 
 **입력**: 이미 실행된 `FeatureEvaluationResult`의 목록 하나뿐이다(§41.7 C
 계층 -- FeatureEvaluator는 role을 소유하지 않고, 이 모듈이 canonical
@@ -45,6 +46,32 @@ CURRENTLY_UNSUPPORTED와 마찬가지로 CoverageAssessment 자체는 정직하�
 LLM 호출, 외부 API 호출, 시계열 계산 없음 -- 이미 평가된 evidence와
 module-level static family-criticality policy(§42.13, §43.4)만 본다.
 
+**Forward != Flow(§46.4)**: Forward의 4개 family(Consensus Growth/
+Estimate Revision/Guidance/Expected Economics, §24.2)는 전부 CRITICAL로
+분류한다 -- Flow(SUPPORTING/CURRENTLY_UNSUPPORTED)와 다르다. Forward
+정보 자체는 존재했다면 critical했을 dimension이고, 단지 "이게 없어도
+alternative path(Event evidence)로 대체 가능하다"는 architecture 결정
+때문에 overall eligibility를 막지 않을 뿐이다(§27.3) -- Forward가
+"원래 안 중요해서" non-gating인 Flow와는 이유가 다르다. 그래서
+`evaluate_forward_coverage()`는 (현재처럼 등록 feature가 0개인 동안)
+`coverage_status=INSUFFICIENT`/`critical_path_satisfied=False`를 정직하게
+반환한다 -- Flow/Market처럼 UNKNOWN+True로 완화하지 않는다. 이 값은
+Forward Component 자기 자신의 self-report일 뿐, overall Decision
+Eligibility 게이트로 절대 쓰이지 않는다(§42.14 예외, 변경 없음) -- 그
+게이트는 `evaluate_future_opportunity_evidence()`가 별도로 담당한다.
+
+**Future-Opportunity Evidence alternative path(§46.5~§46.8)**:
+`evaluate_future_opportunity_evidence()`는 Forward Component의
+CoverageAssessment(자체 계산됨)와, 이미 다른 곳(Event Intelligence,
+이 모듈이 구현하지 않음)에서 평가된 `event_path_availability`
+(`EvidencePathAvailability`, 기본값 UNKNOWN)를 **조립만** 한다 -- claim
+extraction/event verification/materiality/direction/temporal relevance/
+priced-in/confidence 계산을 전혀 하지 않는다(§27.3 numeric boundary는
+여전히 OPEN). Kleene 3치 논리 OR(어느 한쪽이라도 확정적으로 AVAILABLE이면
+SATISFIED, 둘 다 확정적으로 UNAVAILABLE이면 NOT_SATISFIED, 그 외
+(하나 이상이 UNKNOWN이고 둘 다 AVAILABLE은 아님)는 UNKNOWN)를 쓴다 --
+`Unknown != False`를 구조적으로 지킨다(§27 failure semantics).
+
 **하지 않는 것**:
 - `ATTRACTIVE`/`NEUTRAL`/`UNATTRACTIVE`/`BUY`/`SELL`/`HOLD` 같은
   recommendation classification(§42.15, Coverage는 evidence sufficiency
@@ -53,8 +80,9 @@ module-level static family-criticality policy(§42.13, §43.4)만 본다.
 - coverage percentage/N-of-M/minimum count/threshold/weight 같은 numeric
   policy(existence-based OR는 counting이 아니라 "존재 여부"만 판단한다,
   §42.1/§43 지시사항 §22).
-- Forward coverage(§45.12, top-level alternative-evidence semantics가
-  별도로 필요해 이 slice에서 제외).
+- Event evidence 자체의 claim extraction/verification/materiality/
+  direction/temporal relevance/priced-in/confidence 계산(§46.6, Event
+  Intelligence upstream 책임).
 """
 
 from collections.abc import Mapping, Sequence
@@ -72,8 +100,11 @@ from app.models.recommendation import (
     Component,
     CoverageAssessment,
     CoverageStatus,
+    EvidencePathAvailability,
     FeatureEvaluationResult,
+    FutureOpportunityEvidenceAssessment,
     RequirementRole,
+    RequirementSatisfaction,
 )
 
 # ============================== Family Criticality (§42.13 policy, 이번에 코드화) ==============================
@@ -137,6 +168,19 @@ _FAMILY_CRITICALITY: Mapping[tuple[Component, str], FamilyCriticality] = Mapping
             Component.MARKET_CONFIRMATION,
             "technical_confirmation",
         ): FamilyCriticality.NOT_DECISION_GATING,
+        # §46.4 Forward: §24.2 "2.3 Forward Opportunity"의 4-family를 그대로
+        # 옮긴다(Consensus Growth/Estimate Revision/Guidance/Expected
+        # Economics, §29.4). 전부 CRITICAL이다 -- Flow와 달리 Forward
+        # 정보는 존재했다면 critical했을 dimension이고, non-gating인 이유는
+        # "안 중요해서"가 아니라 "alternative path(Event evidence)가
+        # 있어서"다(모듈 docstring 참고). 등록 feature 0개(scope 전부
+        # V1_BLOCKED, §29.4) -- CRITICAL family가 전부 Tier 3(UNKNOWN)이면
+        # component coverage_status는 INSUFFICIENT로 계산된다(아래
+        # _evaluate_component_coverage의 §46.4 correction).
+        (Component.FORWARD, "consensus_growth"): FamilyCriticality.CRITICAL,
+        (Component.FORWARD, "estimate_revision"): FamilyCriticality.CRITICAL,
+        (Component.FORWARD, "guidance"): FamilyCriticality.CRITICAL,
+        (Component.FORWARD, "expected_economics"): FamilyCriticality.CRITICAL,
     }
 )
 
@@ -169,6 +213,14 @@ _FLOW_FAMILIES: tuple[str, ...] = ("investor_flow",)
 
 # §45.4 Market Confirmation -- §24.2 2-family 목록 그대로.
 _MARKET_FAMILIES: tuple[str, ...] = ("momentum", "technical_confirmation")
+
+# §46.4 Forward -- §24.2/§29.4 4-family 목록 그대로.
+_FORWARD_FAMILIES: tuple[str, ...] = (
+    "consensus_growth",
+    "estimate_revision",
+    "guidance",
+    "expected_economics",
+)
 
 
 def get_family_criticality(component: Component, feature_family: str) -> FamilyCriticality:
@@ -549,9 +601,23 @@ def _evaluate_component_coverage(
         critical_path_satisfied = all(
             a.coverage_status in non_gating_statuses for a in critical_assessments
         )
+        # §46.4 correction: UNKNOWN도 INSUFFICIENT와 함께 취급한다 -- 원래
+        # 코드는 UNKNOWN을 어느 분기에도 명시적으로 넣지 않아(SUFFICIENT도
+        # INSUFFICIENT도 아니므로) PARTIAL로 새 나갔다. Fundamental/
+        # Valuation은 지금까지 CRITICAL family가 UNKNOWN(Tier 3)이 되는
+        # 경우가 테스트되지 않았지만(모든 CRITICAL family에 등록된
+        # feature가 항상 있었다), Forward는 4개 CRITICAL family 전부가
+        # 상시 UNKNOWN이다(등록 feature 0개) -- 이 경우 PARTIAL이 아니라
+        # INSUFFICIENT가 정확하다(§27.1/§29.4가 이미 얼려둔
+        # "coverage=insufficient" 그대로, dev-log 3537행의 설계 목표와
+        # 일치). "CRITICAL family에 아무 근거도 없다"는 "일부만 있다"
+        # (PARTIAL)보다 "근거가 부족하다"(INSUFFICIENT)에 더 가깝다.
         if all(a.coverage_status is CoverageStatus.SUFFICIENT for a in critical_assessments):
             coverage_status = CoverageStatus.SUFFICIENT
-        elif any(a.coverage_status is CoverageStatus.INSUFFICIENT for a in critical_assessments):
+        elif any(
+            a.coverage_status in (CoverageStatus.INSUFFICIENT, CoverageStatus.UNKNOWN)
+            for a in critical_assessments
+        ):
             coverage_status = CoverageStatus.INSUFFICIENT
         else:
             coverage_status = CoverageStatus.PARTIAL
@@ -653,4 +719,132 @@ def evaluate_market_coverage(
     는 Tier 3(UNKNOWN)로 정직하게 남는다 -- non-gating != sufficient."""
     return _evaluate_component_coverage(
         Component.MARKET_CONFIRMATION, _MARKET_FAMILIES, feature_results
+    )
+
+
+def evaluate_forward_coverage(
+    feature_results: Sequence[FeatureEvaluationResult],
+) -> CoverageAssessment:
+    """§46.4: Forward Component 자체의 coverage(1. Forward component 자체의
+    Coverage) -- Future-Opportunity Evidence Requirement의 만족 여부(2,
+    `evaluate_future_opportunity_evidence`)와는 완전히 별개다.
+
+    Forward의 4개 family가 전부 CRITICAL이고(모듈 docstring §46.4 참고)
+    등록 feature가 0개(scope 전부 V1_BLOCKED, §29.4)라 항상 Tier 3
+    (family-level UNKNOWN)다 -- component-level에서는
+    `_evaluate_component_coverage`의 §46.4 correction에 따라 이것이
+    `coverage_status=INSUFFICIENT`/`critical_path_satisfied=False`로
+    계산된다. 이는 §27.1/§29.4가 이미 얼려둔 "Forward score=unavailable/
+    signal=UNKNOWN/coverage=insufficient"의 `coverage=insufficient`
+    부분을 정확히 재현한다 -- Flow/Market과 달리 UNKNOWN+non-gating(True)
+    으로 완화하지 않는다(Forward는 "안 중요해서"가 아니라 "alternative
+    path가 있어서" non-gating이기 때문, 그 alternative path 처리는 이
+    함수의 책임이 아니다).
+
+    **이 함수의 출력을 Event evidence로 SUFFICIENT로 바꾸지 않는다** --
+    Event Overlay가 Core component를 mutate하지 않는다는 RE-04 원칙
+    그대로(§46.9)."""
+    return _evaluate_component_coverage(Component.FORWARD, _FORWARD_FAMILIES, feature_results)
+
+
+def _forward_coverage_to_path_availability(
+    forward_coverage: CoverageAssessment,
+) -> EvidencePathAvailability:
+    """Forward Component의 `CoverageAssessment.coverage_status`를
+    `EvidencePathAvailability`로 옮기는 순수 구조적 변환이다 -- "reliable
+    Forward evidence"(§27.3 A경로)의 materiality/신뢰도를 새로 판단하지
+    않는다(§46.6 금지사항). 이미 §42.3/§42.14가 확정한 `SUFFICIENT`의
+    의미("이 component의 CRITICAL family 전부에 실제 evidence가 있다")를
+    그대로 재사용할 뿐이다.
+
+    SUFFICIENT      -> AVAILABLE   (기존에 이미 확정된 sufficiency 기준을
+                                     그대로 재사용, 새 threshold 없음)
+    UNKNOWN         -> UNKNOWN     (source failure 등으로 확인 자체를
+                                     못한 상태, §27 Unknown != False 그대로)
+    PARTIAL/
+    INSUFFICIENT    -> UNAVAILABLE (일부만 있거나 전혀 없음 -- "reliable"
+                                     이라고 주장할 근거가 없다는 뜻으로
+                                     보수적으로 묶는다, 새 threshold를
+                                     만드는 것이 아니라 이미 있는 4-value
+                                     enum을 3-value enum으로 보수적으로
+                                     투영하는 것)
+    """
+    if forward_coverage.coverage_status is CoverageStatus.SUFFICIENT:
+        return EvidencePathAvailability.AVAILABLE
+    if forward_coverage.coverage_status is CoverageStatus.UNKNOWN:
+        return EvidencePathAvailability.UNKNOWN
+    return EvidencePathAvailability.UNAVAILABLE
+
+
+def _combine_evidence_paths_kleene_or(
+    forward_path: EvidencePathAvailability,
+    event_path: EvidencePathAvailability,
+) -> RequirementSatisfaction:
+    """§27.3 Future-Opportunity Evidence Requirement(A OR B)를 Kleene
+    3치 논리로 조립한다(§46.5~§46.8) -- numeric threshold/count 없이
+    tri-state 값만으로 판단한다.
+
+    진리표(§46 지시사항 §8이 준 예시와 전부 일치):
+        AVAILABLE  + (무엇이든)     -> SATISFIED     (한쪽만 확정 충족돼도 OR 충족)
+        (무엇이든)  + AVAILABLE     -> SATISFIED
+        UNAVAILABLE + UNAVAILABLE   -> NOT_SATISFIED  (둘 다 확인했는데 둘 다 없음)
+        그 외(UNKNOWN이 하나 이상 섞이고 AVAILABLE이 하나도 없음)
+                                    -> UNKNOWN         (Unknown을 False로 바꾸지 않는다)
+    """
+    if (
+        forward_path is EvidencePathAvailability.AVAILABLE
+        or event_path is EvidencePathAvailability.AVAILABLE
+    ):
+        return RequirementSatisfaction.SATISFIED
+    if (
+        forward_path is EvidencePathAvailability.UNAVAILABLE
+        and event_path is EvidencePathAvailability.UNAVAILABLE
+    ):
+        return RequirementSatisfaction.NOT_SATISFIED
+    return RequirementSatisfaction.UNKNOWN
+
+
+def evaluate_future_opportunity_evidence(
+    forward_coverage: CoverageAssessment,
+    event_path_availability: EvidencePathAvailability = EvidencePathAvailability.UNKNOWN,
+    *,
+    supporting_refs: Sequence[str] = (),
+) -> FutureOpportunityEvidenceAssessment:
+    """§15/§27.3 Future-Opportunity Evidence Requirement의 A(reliable
+    Forward evidence) OR B(qualifying future-facing Event evidence)를
+    조립한다 -- `evaluate_forward_coverage()`의 출력(Forward 자신의
+    CoverageAssessment)과, 이미 다른 곳(Event Intelligence, 이 함수가
+    구현하지 않음)에서 평가된 Event evidence path 상태만 입력으로
+    받는다. `event_path_availability`의 기본값이 `UNKNOWN`인 이유는 Event
+    Intelligence가 아직 구현되지 않아 실제로 확인된 바가 없기 때문이다
+    (source가 아예 없음 = "확인했더니 없음"이 아니라 "확인 자체를
+    안 했음" -- UNAVAILABLE이 아니라 UNKNOWN이 정확하다, §27 Empty
+    Result != No Event).
+
+    **이 함수는 다음을 계산하지 않는다**(§46.6, Event Intelligence
+    upstream 책임): claim extraction, event verification, materiality,
+    direction, temporal relevance, priced-in, confidence. 오직 이미
+    결정된 두 tri-state를 조립할 뿐이다.
+
+    `supporting_refs`는 호출자가 이미 갖고 있는 근거 참조를 그대로
+    전달하는 것일 뿐(이 함수가 새로 만들지 않는다) -- 기본값은 빈
+    tuple이다."""
+    forward_path = _forward_coverage_to_path_availability(forward_coverage)
+    requirement_satisfied = _combine_evidence_paths_kleene_or(forward_path, event_path_availability)
+
+    warnings: list[str] = []
+    if requirement_satisfied is RequirementSatisfaction.UNKNOWN:
+        warnings.append(
+            "future_opportunity_evidence: requirement_satisfied is UNKNOWN because "
+            f"forward_path_availability={forward_path.value} and "
+            f"event_path_availability={event_path_availability.value} -- at least one "
+            "path is unresolved and neither is confirmed AVAILABLE (Unknown != False, §27)"
+        )
+
+    return FutureOpportunityEvidenceAssessment(
+        forward_path_availability=forward_path,
+        event_path_availability=event_path_availability,
+        requirement_satisfied=requirement_satisfied,
+        supporting_refs=tuple(supporting_refs),
+        warnings=tuple(warnings),
     )
