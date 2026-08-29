@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** CoverageEvaluator implementation(추천 — Coverage Readiness가 READY로 전환됨) + 병행 candidate: Market Confirmation/Flow용 `NormalizedResearchData` model-wiring → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin, 변경 없음) + **RE-05 Feature Registry semantic role = FULL V1 CATALOG, completeness = PARTIAL(14 entries, evaluator 2개 구현, default_requirement_role 전부 확정)** + **RE-05 Coverage Contract = FROZEN** + **RE-05 Family-Level Coverage Policy = FROZEN**(§42: 3-tier family coverage rule + family criticality classification 확정 — Fundamental 5개/Valuation 2개 family classify, Debt Ratio→REQUIRED/Asset Turnover·PBR→OPTIONAL 최종 확정, component propagation 규칙 + Forward/Market 예외 재확인, family policy는 새 registry 없이 미래 CoverageEvaluator 내부 policy로 귀속) + **Coverage Readiness = READY**(numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§42)
+> **Next:** Valuation CoverageEvaluator(추천 — §43이 만든 `evaluate_family_coverage`/family-criticality mapping 패턴 재사용) + 병행 candidate: Market Confirmation/Flow용 `NormalizedResearchData` model-wiring → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin, 변경 없음) + **RE-05 Feature Registry semantic role = FULL V1 CATALOG, completeness = PARTIAL(14 entries, evaluator 2개 구현, default_requirement_role 전부 확정)** + **RE-05 Coverage Contract = FROZEN** + **RE-05 Family-Level Coverage Policy = FROZEN** + **RE-05 CoverageEvaluator = Fundamental IMPLEMENTED(§43, `app/evaluation/coverage_evaluator.py` 신규 — deterministic feature→family→component coverage, false-completeness regression 통과), Valuation/Forward/Flow/Market NOT STARTED**(numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§43)
 
 ---
 
@@ -2832,11 +2832,29 @@ RE-05 Family-Level Coverage Policy Resolution(§42)   완료
     └── 신규/갱신 테스트(전체 67), 전체 507 passed, ruff clean ✓ (dev-log §42)
     │
     ▼
-CoverageEvaluator implementation(추천, §42.20 A) — Coverage Readiness
-전제조건이 이번에 READY로 전환됨(policy/design 준비 완료, Market/Flow raw
-wiring은 구현 착수의 선행 조건이 아님을 확인). 병행 candidate: Market
-Confirmation/Flow normalized-data wiring   ← NEXT
-    (dev-log 2026-08-29 §42.20 참고)
+RE-05 CoverageEvaluator Implementation — First Deterministic Coverage
+Slice(§43)   완료(Fundamental only)
+    ├── `app/evaluation/coverage_evaluator.py` 신규 — feature → family →
+    │   component 3-layer 전부 deterministic 구현(LLM/외부 API 없음) ✓
+    ├── feature universe = full catalog(들어온 result 목록 아님) —
+    │   ROE+Operating Margin만 AVAILABLE이어도 Debt Ratio 결측을 인지해
+    │   SUFFICIENT 오판 안 함(false-completeness regression 통과) ✓
+    ├── NOT_IMPLEMENTED/RESULT_MISSING/UNAVAILABLE/BLOCKED/NOT_APPLICABLE
+    │   5개 상태를 구분되는 warning 문구로 표현 ✓
+    ├── §42 3-tier family policy(Tier1 all-effective-REQUIRED /
+    │   Tier2 existence-based OR / Tier3 UNKNOWN) 그대로 코드화, family
+    │   criticality를 module-level static mapping으로 표현(새 registry
+    │   생성 없음) ✓
+    ├── Financial Resilience(CRITICAL, Debt Ratio 미구현)가 실제로
+    │   component critical-path를 막음을 확인 — 구현 부족을 숨기지 않음 ✓
+    └── 신규 테스트 26건, 전체 533 passed, ruff clean ✓ (dev-log §43)
+    │
+    ▼
+Valuation CoverageEvaluator(추천, §43.20 A) — 동일 패턴(evaluate_family_
+coverage/_FAMILY_CRITICALITY) 재사용, Earnings-based=CRITICAL/Asset-based
+=CONTEXT_DEPENDENT 구체화. 병행 candidate: Market Confirmation/Flow
+normalized-data wiring   ← NEXT
+    (dev-log 2026-08-29 §43.20 참고)
 ```
 
 ---
