@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** RE-05 Recommendation / Scoring Data Model Design(Feature/FeatureFamily/ComponentScore/ComponentSignal/Coverage/Confidence/EventOverlay reference/StockOpportunityAssessment 등 structured data contract 설계 — scoring algorithm 구현 착수 아님) → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지, adjusted-price 등 일부 검증 항목 남음)** + **Core 4-component 구조·Forward Coverage 처리·Future-Opportunity Evidence Requirement 확정(FROZEN candidate, numeric은 OPEN)** + **RE-05 V1 Feature Set FROZEN**(scope contract 확정 — 모든 데이터 완비를 의미하지 않음, 상세는 `docs/dev-log/2026-08-29.md` §25~§29)
+> **Next:** evaluator/aggregator 설계(여전히 numeric parameter 없이 semantic calculation 구조만) 또는 `StockAnalysis`-recommendation model 연결 설계 중 우선순위 결정 → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model 설계 + additive 구현 완료**(`app/models/recommendation.py`, evaluator/aggregator/scorer/numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§30)
 
 ---
 
@@ -2658,8 +2658,20 @@ RE-05 V1 Feature Set   FROZEN
     └── 남은 Data Verification/Feature Semantic/Calibration Question은 그대로 보존 ✓
     │
     ▼
-RE-05 Recommendation / Scoring Data Model Design   ← NEXT (structured data contract
-    설계 — scoring algorithm 구현 아님, dev-log 2026-08-29 §29.11 참고)
+RE-05 Recommendation / Scoring Data Model Design   완료
+    ├── app/models/recommendation.py 신규(27개 model/enum) — 기존 model
+    │   무수정, 완전히 additive ✓
+    ├── Feature→FeatureFamily→Component→Core/MarketConfirmation→
+    │   StockOpportunityAssessment 전 layer 구현 ✓
+    ├── Forward unavailable(score=None/signal=UNKNOWN/coverage=insufficient),
+    │   INSUFFICIENT_EVIDENCE→classification=null을 model_validator로 강제 ✓
+    ├── evaluator/aggregator/scorer/policy logic/numeric parameter 없음 ✓
+    └── 신규 테스트 15건(스키마/invariant만, threshold 테스트 없음), 전체
+        376 passed, ruff clean ✓ (dev-log §30)
+    │
+    ▼
+evaluator/aggregator 설계 또는 StockAnalysis 연결 설계 우선순위 결정   ← NEXT
+    (dev-log 2026-08-29 §30.17 참고)
 ```
 
 ---
@@ -2764,8 +2776,8 @@ RE-05 Recommendation / Scoring Data Model Design   ← NEXT (structured data con
 >
 > 상세는 `docs/dev-log/2026-08-28.md` §19~§21(RE-02~RE-03.3 — RE-03.4는 이 파일에 없음, 위 RE-03.4 요약이 현재 유일한 기록), `docs/dev-log/2026-08-29.md`(RE-04 base + Amendment 1 Step 1~5는 §1~§21, Amendment 1 Step 6~14 Final Freeze + RE-05 Handoff는 §23) 참고.
 
-- [ ] Recommendation data models (`StockRecommendation`/`ComponentResult`/`RiskResult`/`InvestmentEvent`)
-- [ ] Data Acquisition / Deterministic Feature Layer
+- [x] Recommendation data models(`app/models/recommendation.py` — `FeatureEvaluationResult`/`ComponentAssessment`/`RiskAssessment`/`CoreAttractivenessAssessment`/`StockOpportunityAssessment` 등 27개 model/enum, evaluator/aggregator/scorer 없음, 상세는 dev-log §30)
+- [ ] Data Acquisition / Deterministic Feature Layer(evaluator — 아직 미착수)
 - [ ] Core Attractiveness — Fundamental Quality
 - [ ] Core Attractiveness — Valuation Attractiveness
 - [ ] Core Attractiveness — Forward Opportunity
