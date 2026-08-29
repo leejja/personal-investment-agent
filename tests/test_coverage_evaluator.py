@@ -13,11 +13,13 @@ from app.agents.stock_research.analysis import DeterministicAnalysisResult
 from app.evaluation.coverage_evaluator import (
     FamilyCriticality,
     evaluate_family_coverage,
+    evaluate_flow_coverage,
     evaluate_fundamental_coverage,
+    evaluate_market_coverage,
     evaluate_valuation_coverage,
     get_family_criticality,
 )
-from app.evaluation.feature_registry import get_feature_definition
+from app.evaluation.feature_registry import get_feature_definition, list_feature_definitions
 from app.evaluation.fundamental_evaluators import (
     OperatingMarginFeatureEvaluator,
     RoeFeatureEvaluator,
@@ -727,3 +729,208 @@ def test_valuation_coverage_public_api_has_no_context_parameter():
     assert fundamental_params == {"feature_results"}
     assert valuation_params == {"feature_results"}
     assert family_params == {"component", "feature_family", "feature_results"}
+
+
+# ============================== §45: Flow & Market Non-Gating Slice ==============================
+
+
+def test_flow_has_zero_registered_features():
+    """§2/§3 재확인: registry에 Flow feature가 실제로 0개다(추측 아님)."""
+    flow_definitions = [d for d in list_feature_definitions() if d.component == Component.FLOW]
+    assert flow_definitions == []
+
+
+def test_market_confirmation_has_zero_registered_features():
+    """§5 재확인: registry에 Market Confirmation feature가 실제로 0개다."""
+    market_definitions = [
+        d for d in list_feature_definitions() if d.component == Component.MARKET_CONFIRMATION
+    ]
+    assert market_definitions == []
+
+
+def test_flow_empty_catalog_is_not_sufficient():
+    """§11 case 1 + §7/§20 핵심 regression: registered feature가 0개인
+    Flow가 `all([])`류 vacuous-True 버그로 SUFFICIENT가 되지 않는다 --
+    이 버그가 실제로 있었고(스모크 테스트로 발견) §45.3에서 correction했다."""
+    coverage = evaluate_flow_coverage([])
+    assert coverage.coverage_status != CoverageStatus.SUFFICIENT
+    assert coverage.coverage_status == CoverageStatus.UNKNOWN
+
+
+def test_flow_reports_unknown_unsupported_semantics():
+    """§11 case 2."""
+    coverage = evaluate_family_coverage(Component.FLOW, "investor_flow", [])
+    assert coverage.coverage_status == CoverageStatus.UNKNOWN
+
+
+def test_flow_missing_evidence_is_not_a_universal_blocker():
+    """§11 case 3: Flow에 evidence가 전혀 없어도(coverage_status=UNKNOWN)
+    Flow 자신의 critical_path_satisfied는 True다 -- CRITICAL family가
+    아예 없기 때문(§42.11), Flow가 Core 전체를 block하지 않는다."""
+    coverage = evaluate_flow_coverage([])
+    assert coverage.critical_path_satisfied is True
+
+
+def test_market_empty_catalog_is_not_sufficient():
+    """§11 case 4 + §7/§20."""
+    coverage = evaluate_market_coverage([])
+    assert coverage.coverage_status != CoverageStatus.SUFFICIENT
+    assert coverage.coverage_status == CoverageStatus.UNKNOWN
+
+
+def test_market_reports_unknown_semantics():
+    """§11 case 5."""
+    momentum = evaluate_family_coverage(Component.MARKET_CONFIRMATION, "momentum", [])
+    technical = evaluate_family_coverage(
+        Component.MARKET_CONFIRMATION, "technical_confirmation", []
+    )
+    assert momentum.coverage_status == CoverageStatus.UNKNOWN
+    assert technical.coverage_status == CoverageStatus.UNKNOWN
+
+
+def test_market_non_gating_semantics_confirmed_by_warning():
+    """§11 case 6: Market coverage가 non-gating이라는 사실이 warning으로
+    명시적으로 남는다(architecture 사유, capability 부재와 다른 사유)."""
+    coverage = evaluate_market_coverage([])
+    assert any(
+        "NOT_DECISION_GATING" in w and "momentum" in w and "architecturally excluded" in w
+        for w in coverage.warnings
+    )
+    assert any(
+        "NOT_DECISION_GATING" in w and "technical_confirmation" in w for w in coverage.warnings
+    )
+
+
+def test_non_gating_does_not_mean_sufficient():
+    """§11 case 7 + 핵심 self-audit 항목: non-gating(critical_path_satisfied
+    =True)과 sufficient(coverage_status=SUFFICIENT)는 다른 필드이고 다른
+    값을 가질 수 있다 -- Market이 정확히 그 사례다(non-gating이지만
+    coverage_status는 UNKNOWN이지 SUFFICIENT가 아니다)."""
+    coverage = evaluate_market_coverage([])
+    assert coverage.critical_path_satisfied is True  # non-gating
+    assert coverage.coverage_status is not CoverageStatus.SUFFICIENT  # != sufficient
+
+
+def test_empty_all_any_false_completeness_prevented_at_family_level():
+    """§11 case 8: family-level에서도(component-level뿐 아니라) 등록된
+    feature가 0개면 Tier 3(UNKNOWN)이지 SUFFICIENT가 아니다."""
+    for component, family in (
+        (Component.FLOW, "investor_flow"),
+        (Component.MARKET_CONFIRMATION, "momentum"),
+        (Component.MARKET_CONFIRMATION, "technical_confirmation"),
+    ):
+        coverage = evaluate_family_coverage(component, family, [])
+        assert coverage.coverage_status == CoverageStatus.UNKNOWN
+        assert coverage.coverage_status != CoverageStatus.SUFFICIENT
+
+
+def test_250d_high_low_and_benchmark_not_registered_as_features():
+    """§11 case 9/10 + §5/§39.8 재확인: raw fact(250d High/Low)와
+    reference input(Benchmark)이 feature로 등록되지 않았다는 §39 결정이
+    이번 slice에서도 유지된다 -- 임의로 새로 등록하지 않았다."""
+    market_ids = {
+        d.feature_id
+        for d in list_feature_definitions()
+        if d.component == Component.MARKET_CONFIRMATION
+    }
+    assert market_ids == set()  # 애초에 하나도 없다 -- raw/reference 오인 자체가 불가능하다
+    for forbidden_substring in ("250d_high", "250d_low", "high_250d", "low_250d", "benchmark"):
+        assert not any(forbidden_substring in fid.lower() for fid in market_ids)
+
+
+def test_flow_and_market_use_full_catalog_semantics():
+    """§6/§11 case 11: full catalog matching이 Flow/Market에도 동일하게
+    적용된다 -- `evaluate_family_coverage`를 그대로 재사용하므로 별도
+    검증이 필요하지만, 관련 없는 result가 섞여 들어와도 catalog(0개)를
+    기준으로 동작해 영향을 주지 않는다."""
+    unrelated_result = FeatureEvaluationResult(
+        feature_id="fundamental.profitability.roe",  # Flow/Market과 무관한 feature_id
+        component=Component.FUNDAMENTAL,
+        feature_family="profitability",
+        availability=AvailabilityStatus.AVAILABLE,
+        requirement_role=RequirementRole.REQUIRED,
+        evaluation_basis=[EvaluationBasis.ABSOLUTE],
+        provenance=Provenance(source="test"),
+    )
+    flow_coverage = evaluate_flow_coverage([unrelated_result])
+    market_coverage = evaluate_market_coverage([unrelated_result])
+    assert flow_coverage.coverage_status == CoverageStatus.UNKNOWN
+    assert market_coverage.coverage_status == CoverageStatus.UNKNOWN
+    assert unrelated_result.feature_id not in flow_coverage.available_required
+    assert unrelated_result.feature_id not in market_coverage.available_required
+
+
+def test_fundamental_regression_after_flow_market_addition():
+    """§11 case 12: Flow/Market 추가로 Fundamental 결과가 바뀌지 않는다."""
+    results = _real_roe_and_operating_margin_results(roe=12.3, operating_margin=15.0)
+    debt_ratio = _hypothetical_result(_DEBT_RATIO_ID, AvailabilityStatus.AVAILABLE)
+    coverage = evaluate_fundamental_coverage([*results, debt_ratio])
+    assert coverage.coverage_status == CoverageStatus.SUFFICIENT
+    assert coverage.critical_path_satisfied is True
+
+
+def test_valuation_regression_after_flow_market_addition():
+    """§11 case 13: Flow/Market 추가로 Valuation 결과가 바뀌지 않는다."""
+    per_result = _hypothetical_result(_PER_ID, AvailabilityStatus.AVAILABLE)
+    coverage = evaluate_valuation_coverage([per_result])
+    assert coverage.coverage_status == CoverageStatus.SUFFICIENT
+    assert coverage.critical_path_satisfied is True
+
+
+def test_flow_and_market_output_is_deterministic():
+    """§11 case 14."""
+    first_flow, second_flow = evaluate_flow_coverage([]), evaluate_flow_coverage([])
+    first_market, second_market = evaluate_market_coverage([]), evaluate_market_coverage([])
+    assert first_flow == second_flow
+    assert first_market == second_market
+
+
+def test_flow_and_market_produce_no_recommendation_classification():
+    """§11 case 15: Coverage 출력에 recommendation 관련 값이 없다 --
+    CoverageAssessment 자체가 그런 필드를 갖지 않는다는 것과, 모듈
+    소스에도 그런 개념이 없다는 것(기존 스캔 테스트가 전체 모듈을
+    스캔하므로 §45의 신규 함수도 이미 커버됨)을 재확인한다."""
+    body = _module_code_body()
+    for forbidden in ("ATTRACTIVE", "UNATTRACTIVE", "BUY", "SELL", "HOLD"):
+        assert forbidden not in body
+
+
+def test_flow_and_market_coverage_have_no_numeric_fields():
+    """§11 case 16."""
+    flow = evaluate_flow_coverage([])
+    market = evaluate_market_coverage([])
+    assert flow.coverage_percentage is None
+    assert market.coverage_percentage is None
+
+
+def test_flow_and_market_family_criticality_matches_freeze():
+    assert (
+        get_family_criticality(Component.FLOW, "investor_flow")
+        == FamilyCriticality.CURRENTLY_UNSUPPORTED
+    )
+    assert (
+        get_family_criticality(Component.MARKET_CONFIRMATION, "momentum")
+        == FamilyCriticality.NOT_DECISION_GATING
+    )
+    assert (
+        get_family_criticality(Component.MARKET_CONFIRMATION, "technical_confirmation")
+        == FamilyCriticality.NOT_DECISION_GATING
+    )
+
+
+def test_flow_and_market_public_api_has_no_context_parameter():
+    import app.evaluation.coverage_evaluator as module
+
+    flow_params = set(inspect.signature(module.evaluate_flow_coverage).parameters)
+    market_params = set(inspect.signature(module.evaluate_market_coverage).parameters)
+    assert flow_params == {"feature_results"}
+    assert market_params == {"feature_results"}
+
+
+def test_forward_not_implemented_in_this_slice():
+    """§12: Forward coverage는 이번 slice에서 구현하지 않는다 --
+    module에 evaluate_forward_coverage 같은 이름이 없다."""
+    import app.evaluation.coverage_evaluator as module
+
+    assert not hasattr(module, "evaluate_forward_coverage")
+    assert (Component.FORWARD, "consensus_growth") not in module._FAMILY_CRITICALITY

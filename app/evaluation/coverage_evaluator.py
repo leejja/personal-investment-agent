@@ -1,10 +1,11 @@
 """RE-05 CoverageEvaluator -- deterministic Coverage vertical slice
-(Fundamental §43, Valuation §44).
+(Fundamental §43, Valuation §44, Flow/Market §45).
 
 `docs/dev-log/2026-08-29.md` §41(Coverage Contract FROZEN)/§42(Family-Level
-Coverage Policy FROZEN)/§43(Fundamental 구현)/§44(Valuation 구현)이 이
-모듈의 semantic 근거를 담는다 -- 이 모듈은 그 세션들이 이미 확정한 규칙을
-코드로 옮길 뿐, 새로운 policy 결정을 내리지 않는다.
+Coverage Policy FROZEN)/§43(Fundamental 구현)/§44(Valuation 구현)/§45
+(Flow/Market non-gating 구현)이 이 모듈의 semantic 근거를 담는다 -- 이
+모듈은 그 세션들이 이미 확정한 규칙을 코드로 옮길 뿐, 새로운 policy
+결정을 내리지 않는다.
 
 **입력**: 이미 실행된 `FeatureEvaluationResult`의 목록 하나뿐이다(§41.7 C
 계층 -- FeatureEvaluator는 role을 소유하지 않고, 이 모듈이 canonical
@@ -31,6 +32,15 @@ CRITICAL도, universal OPTIONAL도 만들지 않는다.** context-free baseline
 보류함"을 구분한다. 업종별 override는 이 모듈의 책임이 아니다(§44.5 옵션 C,
 미래의 별도 runtime resolver 몫으로 명시적으로 남긴다).
 
+**NOT_DECISION_GATING family(§45.4)**: Market Confirmation은 Core 밖
+별도 layer라 architecture 자체가 이 component를 Decision Eligibility
+게이트에서 제외한다(§24.5, capability 유무와 무관 -- CONTEXT_DEPENDENT나
+CURRENTLY_UNSUPPORTED와 다른 이유다: 저 둘은 "지금은 판단/구현이 안 됨"
+이고 NOT_DECISION_GATING은 "애초에 게이트가 아니도록 설계됨"이다).
+CURRENTLY_UNSUPPORTED와 마찬가지로 CoverageAssessment 자체는 정직하게
+계산되지만(투명성), 별도 warning으로 "non-gating(설계상 의도) != sufficient"
+를 명시한다.
+
 **결정론적**: 동일 input(`feature_results`)이면 항상 동일 output이다.
 LLM 호출, 외부 API 호출, 시계열 계산 없음 -- 이미 평가된 evidence와
 module-level static family-criticality policy(§42.13, §43.4)만 본다.
@@ -43,7 +53,8 @@ module-level static family-criticality policy(§42.13, §43.4)만 본다.
 - coverage percentage/N-of-M/minimum count/threshold/weight 같은 numeric
   policy(existence-based OR는 counting이 아니라 "존재 여부"만 판단한다,
   §42.1/§43 지시사항 §22).
-- Forward/Flow/Market Confirmation coverage(§44.12, 다음 slice로 분리).
+- Forward coverage(§45.12, top-level alternative-evidence semantics가
+  별도로 필요해 이 slice에서 제외).
 """
 
 from collections.abc import Mapping, Sequence
@@ -81,9 +92,9 @@ class FamilyCriticality(str, Enum):
     NOT_DECISION_GATING = "not_decision_gating"
 
 
-# §42.4/§42.5가 확정한 family 판정을 그대로 옮긴다 -- 여기서 새로 판단하지
-# 않는다. Forward/Flow/Market은 아직 채우지 않는다(§44.12, 다음 slice에서
-# 각 component의 §42 판정을 옮긴다).
+# §42.4/§42.5/§45가 확정한 family 판정을 그대로 옮긴다 -- 여기서 새로
+# 판단하지 않는다. Forward는 아직 채우지 않는다(§45.12, top-level
+# alternative-evidence semantics가 별도로 필요해 다음 slice로 분리).
 _FAMILY_CRITICALITY: Mapping[tuple[Component, str], FamilyCriticality] = MappingProxyType(
     {
         (Component.FUNDAMENTAL, "profitability"): FamilyCriticality.CRITICAL,
@@ -104,6 +115,28 @@ _FAMILY_CRITICALITY: Mapping[tuple[Component, str], FamilyCriticality] = Mapping
         (Component.VALUATION, "ev_based"): FamilyCriticality.CURRENTLY_UNSUPPORTED,
         (Component.VALUATION, "cash_flow_based"): FamilyCriticality.CURRENTLY_UNSUPPORTED,
         (Component.VALUATION, "relative_context"): FamilyCriticality.CURRENTLY_UNSUPPORTED,
+        # §45.2 Flow: §24.2/§25.4의 "Investor Flow"는 애초에 Fundamental/
+        # Valuation처럼 여러 named family로 나뉜 적이 없다 -- Magnitude/
+        # Persistence/Acceleration/Breadth/Multi-day Net Flow는 그 하나의
+        # family 아래 개별 feature 후보였다(§24.2 "2.4 Investor Flow").
+        # family 이름은 그 canonical 이름을 snake_case로 옮긴 것이다.
+        # 등록 feature 0개(model-wiring gap, §39.7) -- CURRENTLY_UNSUPPORTED.
+        (Component.FLOW, "investor_flow"): FamilyCriticality.CURRENTLY_UNSUPPORTED,
+        # §45.4 Market Confirmation: §24.2 "2.5 Market Confirmation"이 이미
+        # Momentum/Technical Confirmation 2-family로 canonical하게 나눠뒀고,
+        # `MarketConfirmationAssessment`의 실제 필드 이름(momentum/
+        # technical_confirmation)과도 그대로 일치한다. 등록 feature
+        # 0개(§39.8 raw fact/reference input 재분류 결과)이지만,
+        # CURRENTLY_UNSUPPORTED가 아니라 NOT_DECISION_GATING을 쓴다 --
+        # capability가 갖춰져도(feature가 나중에 등록돼도) Market
+        # Confirmation은 architecture 자체가 Core Decision Eligibility
+        # 게이트 밖이기 때문이다(§24.5, 변경 없음). 이 구분은 §42.12의
+        # 서술을 더 정밀하게 다듬은 것이다(§45.4).
+        (Component.MARKET_CONFIRMATION, "momentum"): FamilyCriticality.NOT_DECISION_GATING,
+        (
+            Component.MARKET_CONFIRMATION,
+            "technical_confirmation",
+        ): FamilyCriticality.NOT_DECISION_GATING,
     }
 )
 
@@ -130,6 +163,12 @@ _VALUATION_FAMILIES: tuple[str, ...] = (
     "cash_flow_based",
     "relative_context",
 )
+
+# §45.2 Flow -- §24.2가 정의한 유일한 family.
+_FLOW_FAMILIES: tuple[str, ...] = ("investor_flow",)
+
+# §45.4 Market Confirmation -- §24.2 2-family 목록 그대로.
+_MARKET_FAMILIES: tuple[str, ...] = ("momentum", "technical_confirmation")
 
 
 def get_family_criticality(component: Component, feature_family: str) -> FamilyCriticality:
@@ -402,6 +441,21 @@ def _context_dependent_note(component: Component, family: str) -> str:
     )
 
 
+def _not_decision_gating_note(component: Component, family: str) -> str:
+    """§45.4: NOT_DECISION_GATING은 CONTEXT_DEPENDENT/CURRENTLY_UNSUPPORTED
+    와 다른 이유로 게이트에서 빠진다 -- "판단 보류"/"capability 없음"이
+    아니라 "architecture가 애초에 이 component/family를 Core Decision
+    Eligibility 게이트로 쓰지 않기로 설계함"(§24.5)이다. non-gating이
+    sufficient를 뜻하지 않는다는 것을 매번 명시한다(§45 지시사항 §8)."""
+    return (
+        f"{family}: family criticality is NOT_DECISION_GATING (component={component.value}) "
+        "-- this component/family is architecturally excluded from the Core Decision "
+        "Eligibility gate (§24.5), independent of whether evidence exists. "
+        "non-gating != sufficient: this family's own coverage_status below still "
+        "reflects actual evidence sufficiency."
+    )
+
+
 def _evaluate_component_coverage(
     component: Component,
     families: Sequence[str],
@@ -451,6 +505,14 @@ def _evaluate_component_coverage(
     for family in context_dependent_families:
         warnings.append(_context_dependent_note(component, family))
 
+    not_decision_gating_families = [
+        family
+        for family in families
+        if get_family_criticality(component, family) is FamilyCriticality.NOT_DECISION_GATING
+    ]
+    for family in not_decision_gating_families:
+        warnings.append(_not_decision_gating_note(component, family))
+
     critical_families = [
         family
         for family in families
@@ -468,16 +530,40 @@ def _evaluate_component_coverage(
     # 않는 정도의 evidence"로 취급하기로 이미 결정했었다 -- 두 개념을
     # 혼동해 family.critical_path_satisfied를 그대로 재사용하면 PARTIAL
     # critical family가 component 전체를 부당하게 block한다(§44.7 correction).
-    non_gating_statuses = (CoverageStatus.SUFFICIENT, CoverageStatus.PARTIAL)
-    critical_path_satisfied = all(
-        a.coverage_status in non_gating_statuses for a in critical_assessments
-    )
-    if all(a.coverage_status is CoverageStatus.SUFFICIENT for a in critical_assessments):
-        coverage_status = CoverageStatus.SUFFICIENT
-    elif any(a.coverage_status is CoverageStatus.INSUFFICIENT for a in critical_assessments):
-        coverage_status = CoverageStatus.INSUFFICIENT
+    #
+    # §45.3 correction(empty-critical-family bug): critical_families가
+    # 공집합인 component(Flow/Market -- CRITICAL family가 아예 없음, §42.11/
+    # §42.14 의도 그대로)에서 위 로직을 그대로 쓰면 `all(...)`/`any(...)`가
+    # 빈 iterable에 대해 vacuously True/False를 반환해 **아무 evidence도
+    # 없는데 coverage_status가 SUFFICIENT로 잘못 계산되는 실제 버그**가
+    # 있었다(Flow/Market 첫 구현 중 스모크 테스트로 발견, §45 지시사항
+    # §7/§20이 정확히 경고한 그 상황). CRITICAL family가 없으면 판단
+    # 기준을 "전체 family의 coverage_status"로 낮춰 잡는다 -- 등록된
+    # feature가 하나도 없으면(전부 Tier 3/UNKNOWN) component도 UNKNOWN으로
+    # 정직하게 남고, 향후 실제로 evidence가 생기면(어떤 family든 SUFFICIENT
+    # 하나라도 있으면) 그때는 SUFFICIENT로 반영된다 -- 영구히 UNKNOWN에
+    # 갇히지 않는다. critical_path_satisfied는 여전히 항상 True다(막을
+    # CRITICAL family 자체가 없다, §42.11/§42.14).
+    if critical_families:
+        non_gating_statuses = (CoverageStatus.SUFFICIENT, CoverageStatus.PARTIAL)
+        critical_path_satisfied = all(
+            a.coverage_status in non_gating_statuses for a in critical_assessments
+        )
+        if all(a.coverage_status is CoverageStatus.SUFFICIENT for a in critical_assessments):
+            coverage_status = CoverageStatus.SUFFICIENT
+        elif any(a.coverage_status is CoverageStatus.INSUFFICIENT for a in critical_assessments):
+            coverage_status = CoverageStatus.INSUFFICIENT
+        else:
+            coverage_status = CoverageStatus.PARTIAL
     else:
-        coverage_status = CoverageStatus.PARTIAL
+        critical_path_satisfied = True
+        all_assessments = list(family_results.values())
+        if all(a.coverage_status is CoverageStatus.UNKNOWN for a in all_assessments):
+            coverage_status = CoverageStatus.UNKNOWN
+        elif any(a.coverage_status is CoverageStatus.SUFFICIENT for a in all_assessments):
+            coverage_status = CoverageStatus.SUFFICIENT
+        else:
+            coverage_status = CoverageStatus.INSUFFICIENT
 
     return CoverageAssessment(
         available_required=tuple(merged["available_required"]),
@@ -531,3 +617,40 @@ def evaluate_valuation_coverage(
     명시한다. EV based/Cash-flow based/Relative Context는 등록된 feature가
     없어 CURRENTLY_UNSUPPORTED(§44.2)."""
     return _evaluate_component_coverage(Component.VALUATION, _VALUATION_FAMILIES, feature_results)
+
+
+def evaluate_flow_coverage(
+    feature_results: Sequence[FeatureEvaluationResult],
+) -> CoverageAssessment:
+    """§42.14 component propagation rule의 Flow 적용(§45).
+
+    Flow는 CRITICAL family가 하나도 없다(`investor_flow`
+    =CURRENTLY_UNSUPPORTED, §45.2) -- `critical_families`가 항상 공집합이라
+    `all(...)`이 공집합에 대해 vacuously True를 반환하는 것이 정확히
+    §42.11/§42.14가 의도한 "Flow는 구조적으로 critical-path를 절대 막지
+    않는다"는 결과와 일치한다(언어 레벨 empty-predicate가 우연히 맞아
+    떨어지는 것이 아니라, CRITICAL family가 없다는 사실 자체가 그 의미를
+    만든다). **하지만 `investor_flow` family 자체의 `coverage_status`는
+    등록된 feature가 0개이므로 Tier 3(UNKNOWN)이다 -- SUFFICIENT로
+    위장하지 않는다**(§45.3, empty-catalog false-completeness 방지가
+    이번 slice의 핵심 regression)."""
+    return _evaluate_component_coverage(Component.FLOW, _FLOW_FAMILIES, feature_results)
+
+
+def evaluate_market_coverage(
+    feature_results: Sequence[FeatureEvaluationResult],
+) -> CoverageAssessment:
+    """§42.14 component propagation rule의 Market Confirmation 적용(§45).
+
+    **이 함수의 출력(`critical_path_satisfied`/`coverage_status`)은 Core
+    Decision Eligibility 게이트로 절대 쓰여서는 안 된다** -- Market
+    Confirmation은 Core 밖 별도 layer다(§24.5, 변경 없음). 이 evaluator는
+    투명성/traceability 목적으로만 coverage를 계산한다(§42.12). Momentum/
+    Technical Confirmation 둘 다 NOT_DECISION_GATING이라 `critical_families`
+    가 항상 공집합이고, 등록 feature도 0개다(§39.8: 250d High/Low는 raw
+    fact, Benchmark는 reference input이라 애초에 feature로 등록하지 않았다
+    -- 이번 slice에서도 새로 등록하지 않는다). family 자체의 coverage_status
+    는 Tier 3(UNKNOWN)로 정직하게 남는다 -- non-gating != sufficient."""
+    return _evaluate_component_coverage(
+        Component.MARKET_CONFIRMATION, _MARKET_FAMILIES, feature_results
+    )
