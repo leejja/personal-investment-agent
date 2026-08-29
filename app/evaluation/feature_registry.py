@@ -291,11 +291,13 @@ _NET_MARGIN_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     feature_family="profitability",
     scope_status=FeatureScopeStatus.V1_REQUIRED,
     verification_requirements=(),
-    # §40.4 UNRESOLVED: ROE/Operating Margin의 REQUIRED는 기존 evaluator
-    # 동작을 옮긴 것(§24.8/§37)이지, Net Margin은 그런 replicated
-    # precedent가 없다 -- "같은 family+V1_REQUIRED니까 REQUIRED"는 금지된
-    # 자동 유도 논리이므로 None으로 둔다.
-    default_requirement_role=None,
+    # §41.5 CONFIRMED_OPTIONAL (anchor rule): profitability family는 이미
+    # ROE/Operating Margin이 REQUIRED anchor로 존재한다 -- family
+    # critical-path evidence가 이 둘로 이미 보장되므로, Net Margin
+    # 개별이 REQUIRED일 근거는 없지만 "판단을 아직 안 함"(None)도 더는
+    # 맞지 않다 -- OPTIONAL이 정확한 판단이다(§40.4의 UNRESOLVED에서
+    # correction).
+    default_requirement_role=RequirementRole.OPTIONAL,
     directionality=Directionality.HIGHER_IS_BETTER,
     # Operating Margin과 동일한 revenue-dependency 구조적 제약(§26.2/§28.5).
     applicability=FeatureApplicability.REVIEW_REQUIRED,
@@ -311,10 +313,14 @@ _REVENUE_GROWTH_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     feature_family="observed_growth_quality",
     scope_status=FeatureScopeStatus.V1_REQUIRED,
     verification_requirements=(),
-    # §40.4 UNRESOLVED: family(observed_growth_quality)에 3개 feature가
-    # 있어 "family의 유일한 대표"라는 근거도 성립하지 않는다 -- 근거
-    # 없이 REQUIRED를 채우지 않는다.
-    default_requirement_role=None,
+    # §41.5 CONFIRMED_OPTIONAL (family-policy-deferred rule): family
+    # (observed_growth_quality) 안에 3개의 non-blocked candidate가
+    # 공존하고 그중 어느 것도 개별적으로 "이거 하나 없으면 무조건 결정
+    # 불가"는 아니다 -- family 전체의 evidence 충분성은 개별 feature
+    # role이 아니라 family/component 단위 Coverage policy(§41.4)가
+    # 판단한다. 개별 feature는 OPTIONAL(가능하면 좋은 evidence
+    # contributor)로 확정한다.
+    default_requirement_role=RequirementRole.OPTIONAL,
     directionality=Directionality.HIGHER_IS_BETTER,
     # revenue 기반이라 Operating Margin과 동일한 applicability 제약을 받는다.
     applicability=FeatureApplicability.REVIEW_REQUIRED,
@@ -333,9 +339,9 @@ _OPERATING_PROFIT_GROWTH_DEFINITION: Final[FeatureDefinition] = FeatureDefinitio
     feature_family="observed_growth_quality",
     scope_status=FeatureScopeStatus.V1_REQUIRED,
     verification_requirements=(),
-    # §40.4 UNRESOLVED: 위 Revenue Growth와 동일한 이유(family 내 3개
-    # 중 하나, replicated evaluator precedent 없음).
-    default_requirement_role=None,
+    # §41.5 CONFIRMED_OPTIONAL: 위 Revenue Growth와 동일한
+    # family-policy-deferred rule.
+    default_requirement_role=RequirementRole.OPTIONAL,
     directionality=Directionality.HIGHER_IS_BETTER,
     # 영업이익 계정 자체가 없는 업종 가능성이 §26.2 실측으로 완전히
     # 배제되지 않았다 -- 보수적으로 REVIEW_REQUIRED(§39.2).
@@ -352,8 +358,9 @@ _NET_INCOME_GROWTH_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     feature_family="observed_growth_quality",
     scope_status=FeatureScopeStatus.V1_REQUIRED,
     verification_requirements=(),
-    # §40.4 UNRESOLVED: 위 두 Growth feature와 동일한 이유.
-    default_requirement_role=None,
+    # §41.5 CONFIRMED_OPTIONAL: 위 두 Growth feature와 동일한
+    # family-policy-deferred rule.
+    default_requirement_role=RequirementRole.OPTIONAL,
     directionality=Directionality.HIGHER_IS_BETTER,
     # 순이익 계정은 §26.2에서 KB금융(금융지주) 포함 전 업종에 존재함이
     # 실측 확인됐다 -- revenue/영업이익과 달리 UNIVERSAL(§39.2, §40.5에서
@@ -376,13 +383,15 @@ _DEBT_RATIO_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     # scope 축소).
     scope_status=FeatureScopeStatus.V1_REQUIRED,
     verification_requirements=(),
-    # §40.3/§40.4 UNRESOLVED: financial_resilience family에서 현재
-    # 유일하게 등록된 feature라 "없으면 family 전체 coverage가 0"이라는
-    # 주장도 가능하지만, 이는 register 시점의 우연한 family 구성에
-    # 의존하는 추론이라 ROE류의 replicated-precedent 근거와 질이 다르다
-    # -- 이런 간접 추론까지 CONFIRMED로 인정하면 "V1_REQUIRED -> REQUIRED"
-    # 자동 유도와 실질적으로 구분이 안 된다고 판단해 None으로 둔다(향후
-    # family 구성이 바뀌면 재검토).
+    # §41.5 REMAIN_UNRESOLVED (sole-representative rule): financial_resilience
+    # family에서 현재 유일한 등록 feature다 -- profitability/
+    # observed_growth_quality처럼 다른 anchor나 복수 candidate가 없어
+    # anchor rule도 family-policy-deferred rule도 적용할 수 없다.
+    # OPTIONAL로 확정하면 "Financial Resilience family 전체가 v1
+    # coverage에서 critical하지 않다"는 실질적 family-level 정책 결정을
+    # 개별 feature 값으로 몰래 내리는 셈이 된다 -- 이 family 자체가
+    # Fundamental coverage에 critical한지는 별도 family/component policy
+    # 결정이 필요하다(§41.4/§41.11, 아직 없음). 그 결정 전까지 None 유지.
     default_requirement_role=None,
     directionality=Directionality.LOWER_IS_BETTER,
     # §29.3 FINANCIAL_SECTOR_APPLICABILITY_REVIEW_REQUIRED 목록에 포함,
@@ -399,11 +408,13 @@ _ROA_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     feature_family="profitability",
     scope_status=FeatureScopeStatus.V1_OPTIONAL,
     verification_requirements=(),
-    # §40.1/§40.4 UNRESOLVED correction: §39는 여기에 OPTIONAL을 넣고
-    # "OPEN"이라고 보고서에 별도로 적었다 -- 이는 registry 값과 보고서
-    # 서술이 모순되는 상태였다. UNKNOWN/UNRESOLVED != OPTIONAL이므로
-    # None으로 correction한다(V1_OPTIONAL -> OPTIONAL 자동 유도 금지).
-    default_requirement_role=None,
+    # §41.5 CONFIRMED_OPTIONAL (anchor rule): Net Margin과 동일 -- ROE/
+    # Operating Margin이 이미 profitability family의 REQUIRED anchor다.
+    # §40에서는 "V1_OPTIONAL이니 OPTIONAL" 자동 유도를 correction해
+    # None으로 바꿨는데, 이번엔 자동 유도가 아니라 anchor rule이라는
+    # 독립적인 근거로 다시 OPTIONAL에 도달했다 -- 결과값은 같지만 근거의
+    # 질이 다르다(§40.1의 문제였던 "OPEN인데 구체값"과는 다른 상태).
+    default_requirement_role=RequirementRole.OPTIONAL,
     directionality=Directionality.HIGHER_IS_BETTER,
     # net_income/total_assets 둘 다 금융업 포함 전 업종에 존재(§26.2).
     applicability=FeatureApplicability.UNIVERSAL,
@@ -419,7 +430,11 @@ _ASSET_TURNOVER_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     feature_family="capital_efficiency",
     scope_status=FeatureScopeStatus.V1_OPTIONAL,
     verification_requirements=(),
-    # §40.1/§40.4 UNRESOLVED correction: ROA와 동일한 이유.
+    # §41.5 REMAIN_UNRESOLVED (sole-representative rule): capital_efficiency
+    # family의 다른 등록 feature는 ROIC뿐인데 ROIC는 V1_BLOCKED다 --
+    # "현재 v1에서 실제로 evidence를 낼 수 있는" 유일한 candidate라는
+    # 점에서 Debt Ratio와 같은 상황이다. Debt Ratio와 동일한 이유로 None
+    # 유지(§41.4/§41.11 family-level policy 결정 필요).
     default_requirement_role=None,
     directionality=Directionality.HIGHER_IS_BETTER,
     # revenue 기반 -- §29.3 review 목록에 포함.
@@ -441,10 +456,13 @@ _ROIC_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     verification_requirements=(
         "invested capital denominator account naming unstable across companies (§29.2)",
     ),
-    # §40.1/§40.4 UNRESOLVED correction: V1_BLOCKED feature에도 OPTIONAL을
-    # 자동으로 주지 않는다 -- coverage 관점의 role 판단 자체를 아직
-    # 안 했다는 것을 그대로 표현한다.
-    default_requirement_role=None,
+    # §41.5 CONFIRMED_OPTIONAL (blocked rule): scope_status=V1_BLOCKED인
+    # feature는 v1에서 구조적으로 evidence를 낼 수 없다 -- critical-path
+    # REQUIRED/IMPORTANT일 수 없다는 것이 scope 정의 자체에서 나온다
+    # (V1_BLOCKED -> OPTIONAL은 "BLOCKED는 절대 critical-path gate가 될
+    # 수 없다"는 명시적 semantic rule이지, "V1_REQUIRED -> REQUIRED"류의
+    # 근거 없는 자동 유도가 아니다, §41.11).
+    default_requirement_role=RequirementRole.OPTIONAL,
     directionality=Directionality.HIGHER_IS_BETTER,
     applicability=FeatureApplicability.REVIEW_REQUIRED,
     required_inputs=(),
@@ -458,8 +476,8 @@ _EPS_GROWTH_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     # EPS 증가율)는 명확하다(§39.4).
     scope_status=FeatureScopeStatus.V1_BLOCKED,
     verification_requirements=("historical shares outstanding series not available (§29.2)",),
-    # §40.1/§40.4 UNRESOLVED correction: ROIC와 동일한 이유.
-    default_requirement_role=None,
+    # §41.5 CONFIRMED_OPTIONAL (blocked rule): ROIC와 동일.
+    default_requirement_role=RequirementRole.OPTIONAL,
     directionality=Directionality.HIGHER_IS_BETTER,
     applicability=FeatureApplicability.UNIVERSAL,
     required_inputs=(),
@@ -471,10 +489,10 @@ _TRAILING_PER_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     feature_family="earnings_based",
     scope_status=FeatureScopeStatus.V1_REQUIRED,
     verification_requirements=(),
-    # §40.3/§40.4 UNRESOLVED: earnings_based family에 Earnings Yield도
-    # 있어 "유일한 대표" 근거도 약하고, replicated evaluator precedent도
-    # 없다.
-    default_requirement_role=None,
+    # §41.5 CONFIRMED_OPTIONAL (family-policy-deferred rule): earnings_based
+    # family에 Earnings Yield도 있어 PER 혼자 family를 대표하지 않는다 --
+    # Growth ×3과 동일한 논리(복수 non-blocked candidate 존재).
+    default_requirement_role=RequirementRole.OPTIONAL,
     # PER는 ROE처럼 단순 HIGHER/LOWER_IS_BETTER가 아니다 -- 극단적으로
     # 낮은 PER는 저평가가 아니라 실적 악화/부실 신호일 수 있다(§39.9).
     # 이 axis를 numeric threshold 없이 이미 존재하는
@@ -493,10 +511,9 @@ _PBR_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     feature_family="asset_based",
     scope_status=FeatureScopeStatus.V1_REQUIRED,
     verification_requirements=(),
-    # §40.3/§40.4 UNRESOLVED: asset_based family의 유일한 등록 feature라
-    # Debt Ratio와 동일한 "family 전체 coverage가 0" 간접 추론이
-    # 가능하지만, 같은 이유로 이번 audit에서는 CONFIRMED로 인정하지
-    # 않기로 일관되게 판단했다(§40.3 Debt Ratio 참고).
+    # §41.5 REMAIN_UNRESOLVED (sole-representative rule): asset_based
+    # family의 유일한 등록 feature다 -- Debt Ratio/Asset Turnover와 동일한
+    # 이유로 family-level policy 결정 전까지 None 유지.
     default_requirement_role=None,
     # PER와 동일한 이유(극단적 저PBR = 자산 부실/청산가치 우려 신호
     # 가능성, §39.9) -- CONTEXT_DEPENDENT. directionality는 이번 audit
@@ -512,9 +529,9 @@ _EARNINGS_YIELD_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     feature_family="earnings_based",
     scope_status=FeatureScopeStatus.V1_OPTIONAL,
     verification_requirements=(),
-    # §40.1/§40.4 UNRESOLVED correction: 다른 V1_OPTIONAL entry들과 동일한
-    # 이유.
-    default_requirement_role=None,
+    # §41.5 CONFIRMED_OPTIONAL (family-policy-deferred rule): PER와 동일 --
+    # earnings_based family에 복수 candidate 존재.
+    default_requirement_role=RequirementRole.OPTIONAL,
     # yield framing은 관례상 monotonic하게 다뤄진다(PER의 raw multiple
     # framing과 달리) -- HIGHER_IS_BETTER로 유지하되, 동일한 극단값
     # distress 신호 가능성은 PER만큼 크지 않다고 판단한다(§39.9).

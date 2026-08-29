@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** CoverageEvaluator Contract 설계 검토(추천 — 단, 착수 전 12개 feature의 `default_requirement_role` UNRESOLVED(None) 상태를 확정할지 결정 필요) + 병행 candidate: Market Confirmation/Flow용 `NormalizedResearchData` model-wiring → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin, 변경 없음) + **RE-05 Feature Registry semantic role = FULL V1 CATALOG, completeness = PARTIAL(14 entries, evaluator 2개 구현), Coverage Readiness = NOT READY**(§40: `default_requirement_role`을 `RequirementRole | None`으로 correction — ROE/Operating Margin만 CONFIRMED REQUIRED, §39 신규 12개는 전부 UNRESOLVED(None)로 재분류, "V1_REQUIRED → REQUIRED" 자동 유도 금지, applicability는 재검토 결과 FROZEN 재확인, numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§40)
+> **Next:** family-level Coverage policy 내용 확정(추천 — 복수-candidate family의 sufficiency 정책 + Debt Ratio/Asset Turnover/PBR 3개 sole-representative family의 critical성 결정) → CoverageEvaluator implementation + 병행 candidate: Market Confirmation/Flow용 `NormalizedResearchData` model-wiring → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin, 변경 없음) + **RE-05 Feature Registry semantic role = FULL V1 CATALOG, completeness = PARTIAL(14 entries, evaluator 2개 구현)** + **RE-05 Coverage Contract = FROZEN**(Coverage definition/hierarchy는 기존 model로 충분함을 확인, RequirementRole 4-rule 체계로 §39 신규 12개 중 9개 CONFIRMED_OPTIONAL 해소·3개 REMAIN_UNRESOLVED, FeatureEvaluationResult/CoverageAssessment contract 둘 다 SUFFICIENT 확인, model correction 없음), **Coverage Readiness = NOT READY**(family-level policy 내용은 아직 미결정, numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§41)
 
 ---
 
@@ -2796,10 +2796,28 @@ RE-05 V1 Feature Catalog Final Contract Audit(§40)   완료
     └── 신규 테스트 10건(전체 63), 전체 503 passed, ruff clean ✓ (dev-log §40)
     │
     ▼
-CoverageEvaluator Contract 설계 검토(추천) — 단, 착수 전 12개
-UNRESOLVED default_requirement_role 확정 여부 결정 필요. 병행:
-Market Confirmation/Flow NormalizedResearchData model-wiring   ← NEXT
-    (dev-log 2026-08-29 §40.12 참고)
+RE-05 Coverage Contract & RequirementRole Resolution Design(§41)   완료
+    ├── Coverage definition/hierarchy 재확인 — 기존 model(FeatureEvaluationResult
+    │   ~ StockOpportunityAssessment 전 layer에 coverage/confidence 필드가
+    │   이미 존재)이 충분함을 확인, 신규 model 없음 ✓
+    ├── RequirementRole 4-rule 체계 확정(anchor/family-policy-deferred/
+    │   blocked/sole-representative) — §39 신규 12개 중 9개를
+    │   CONFIRMED_OPTIONAL로 해소, 3개(Debt Ratio/Asset Turnover/PBR)만
+    │   family-level policy 미결정으로 REMAIN_UNRESOLVED ✓
+    ├── FeatureEvaluationResult.requirement_role이 이미 Optional이었음을
+    │   코드로 확인(§40.12의 "추정" 오류 정정) — contract correction 불필요 ✓
+    ├── CoverageAssessment 필드로 implementation-gap/blocked/not-applicable
+    │   전부 간접 표현 가능 확인 — model correction 불필요(SUFFICIENT) ✓
+    ├── Forward Component insufficient + Overall Eligibility satisfied
+    │   동시 상태가 이미 구조적으로 preserved됨을 확인 ✓
+    └── 신규/갱신 테스트(전체 64), 전체 504 passed, ruff clean ✓ (dev-log §41)
+    │
+    ▼
+family-level Coverage policy 내용 확정(추천, §41.20 F) — Observed Growth
+Quality 등 복수-candidate family의 sufficiency 정책 + Debt Ratio/Asset
+Turnover/PBR 3개 sole-representative family의 critical성 결정. 이후
+CoverageEvaluator implementation(A)   ← NEXT
+    (dev-log 2026-08-29 §41.20 참고)
 ```
 
 ---
