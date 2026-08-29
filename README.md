@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** OpenDART `fnlttSinglAcntAll.json`(전체 재무제표, CF 지원 여부) 실측 + Open Design Question #3/#4(Investor Flow 일별 시계열, `ka10081` 수정주가 효과) 해결 → 그 후 V1 Feature Set FROZEN candidate 검토 → Recommendation data model 설계 착수 → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification 완료(PARTIAL)** + **Core 4-component 구조 유지·Forward Coverage 처리·Decision Eligibility Future-Opportunity Evidence Requirement 확정(FROZEN candidate, numeric은 OPEN)** — V1 Feature Set은 여전히 NOT READY(상세는 `docs/dev-log/2026-08-29.md` §25~§27)
+> **Next:** RE-05 Recommendation / Scoring Data Model Design(Feature/FeatureFamily/ComponentScore/ComponentSignal/Coverage/Confidence/EventOverlay reference/StockOpportunityAssessment 등 structured data contract 설계 — scoring algorithm 구현 착수 아님) → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지, adjusted-price 등 일부 검증 항목 남음)** + **Core 4-component 구조·Forward Coverage 처리·Future-Opportunity Evidence Requirement 확정(FROZEN candidate, numeric은 OPEN)** + **RE-05 V1 Feature Set FROZEN**(scope contract 확정 — 모든 데이터 완비를 의미하지 않음, 상세는 `docs/dev-log/2026-08-29.md` §25~§29)
 
 ---
 
@@ -2641,7 +2641,25 @@ RE-05 Design Resolution — Fundamental scope 정정 + Forward Coverage/Core 구
     └── Broker Opinion/Target Price = Supplemental Research Context로 최종 확정 ✓ (dev-log §27)
     │
     ▼
-fnlttSinglAcntAll.json 실측 + Open Design Question #3/#4 해결   ← NEXT (dev-log 2026-08-29 §27.5 참고)
+RE-05 Targeted Data Verification   PARTIAL → 거의 COMPLETE
+    ├── fnlttSinglAcntAll.json 실측 — CF(현금흐름표) 33~69행/사 확인,
+    │   fnlttSinglAcnt(주요계정)는 여전히 UNAVAILABLE이지만 OpenDART 전체는
+    │   AVAILABLE_RAW로 정정 ✓
+    ├── Kiwoom 일별 investor flow 시계열 확보 확인(Open Design Question #3 RESOLVED) ✓
+    └── ka10081 수정주가(upd_stkpc_tp) 효과 — 3종목 600거래일 diff했으나 여전히
+        UNKNOWN(known corporate action 종목 미확보, Open Design Question #4 유지)
+    │
+    ▼
+RE-05 V1 Feature Set   FROZEN
+    ├── scope contract 확정 — V1_REQUIRED/V1_OPTIONAL/V1_DEFERRED/V1_BLOCKED/
+    │   VERIFICATION_REQUIRED 경계가 Component별로 명확해짐 ✓ (dev-log §29)
+    ├── FROZEN != 모든 데이터 완비 — Data Verification은 여전히 PARTIAL ✓
+    ├── Forward 4-component 구조·UNKNOWN coverage 처리는 변경 없이 유지 ✓
+    └── 남은 Data Verification/Feature Semantic/Calibration Question은 그대로 보존 ✓
+    │
+    ▼
+RE-05 Recommendation / Scoring Data Model Design   ← NEXT (structured data contract
+    설계 — scoring algorithm 구현 아님, dev-log 2026-08-29 §29.11 참고)
 ```
 
 ---
