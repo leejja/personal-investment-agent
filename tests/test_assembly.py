@@ -22,7 +22,11 @@ from app.evaluation.assembly import (
 )
 from app.evaluation.coverage_evaluator import (
     evaluate_family_coverage,
+    evaluate_flow_coverage,
+    evaluate_forward_coverage,
     evaluate_fundamental_coverage,
+    evaluate_future_opportunity_evidence,
+    evaluate_market_coverage,
     evaluate_valuation_coverage,
     get_component_families,
 )
@@ -41,6 +45,7 @@ from app.models.recommendation import (
     ConfidenceLevel,
     CoverageAssessment,
     EvaluationBasis,
+    EvidencePathAvailability,
     FeatureEvaluationResult,
     FeatureFamilyStatus,
     Provenance,
@@ -129,6 +134,51 @@ def _assemble_fundamental(
     component_coverage = evaluate_fundamental_coverage(feature_results)
     component_assessment = assemble_component_assessment(
         Component.FUNDAMENTAL, family_assessments, component_coverage
+    )
+    return family_assessments, component_assessment, family_coverages, component_coverage
+
+
+# ============================== §49: generic multi-component helpers ==============================
+
+_COMPONENT_COVERAGE_FN = {
+    Component.FUNDAMENTAL: evaluate_fundamental_coverage,
+    Component.VALUATION: evaluate_valuation_coverage,
+    Component.FORWARD: evaluate_forward_coverage,
+    Component.FLOW: evaluate_flow_coverage,
+    Component.MARKET_CONFIRMATION: evaluate_market_coverage,
+}
+
+_ALL_COMPONENTS = (
+    Component.FUNDAMENTAL,
+    Component.VALUATION,
+    Component.FORWARD,
+    Component.FLOW,
+    Component.MARKET_CONFIRMATION,
+)
+
+
+def _family_coverages(
+    component: Component, feature_results: list[FeatureEvaluationResult]
+) -> dict[str, CoverageAssessment]:
+    """§48 순서(Coverage 먼저 계산 -> Assembly에 전달)를 임의 component에
+    대해 일반화한 테스트 helper -- production orchestrator가 아니다."""
+    return {
+        family: evaluate_family_coverage(component, family, feature_results)
+        for family in get_component_families(component)
+    }
+
+
+def _assemble(component: Component, feature_results: list[FeatureEvaluationResult]):
+    """`_assemble_fundamental`의 component-agnostic 버전 -- §49가
+    확인하려는 바로 그 사실(동일 generic assembly 함수가 5개 component
+    전부에 재사용 가능하다는 것)을 테스트 helper 레벨에서도 실증한다."""
+    family_coverages = _family_coverages(component, feature_results)
+    family_assessments = assemble_feature_family_assessments(
+        component, feature_results, family_coverages
+    )
+    component_coverage = _COMPONENT_COVERAGE_FN[component](feature_results)
+    component_assessment = assemble_component_assessment(
+        component, family_assessments, component_coverage
     )
     return family_assessments, component_assessment, family_coverages, component_coverage
 
@@ -619,3 +669,371 @@ def test_assembly_public_api_no_fundamental_specific_wrapper_left():
 
     assert not hasattr(module, "assemble_fundamental_component_assessment")
     assert hasattr(module, "assemble_component_assessment")
+
+
+# ============================== §49: Component Assembly Expansion — Valuation/Forward/Flow/Market ==============================
+#
+# §49.1 감사 결과: assemble_feature_family_assessments()/
+# assemble_component_assessment() 둘 다 이미 component-agnostic이다
+# (source에 Component.FUNDAMENTAL 리터럴이 전혀 없음, 아래
+# test_assembly_module_has_no_fundamental_specific_literal로 재확인) --
+# 이번 세션은 새 production 코드를 추가하지 않고 4개 component 전부에서
+# 기존 generic 함수가 실제로 정확히 동작하는지 실증한다.
+
+_PER_ID = "valuation.earnings_based.trailing_per"
+_EARNINGS_YIELD_ID = "valuation.earnings_based.earnings_yield"
+_PBR_ID = "valuation.asset_based.pbr"
+
+_VALUATION_FAMILY_IDS = (
+    "earnings_based",
+    "asset_based",
+    "ev_based",
+    "cash_flow_based",
+    "relative_context",
+)
+_FORWARD_FAMILY_IDS = (
+    "consensus_growth",
+    "estimate_revision",
+    "guidance",
+    "expected_economics",
+)
+_FLOW_FAMILY_IDS = ("investor_flow",)
+_MARKET_FAMILY_IDS = ("momentum", "technical_confirmation")
+
+
+def test_assembly_module_has_no_fundamental_specific_literal():
+    """§49.1: assembly.py 소스에 `Component.FUNDAMENTAL` 리터럴이 전혀
+    없다 -- 특정 component를 위한 하드코딩이 아니라는 것을 직접 재확인
+    한다(문서 주장이 아니라 실제 코드로)."""
+    import app.evaluation.assembly as module
+
+    source = inspect.getsource(module)
+    assert "FUNDAMENTAL" not in source
+
+
+# ---- Valuation ----
+
+
+def test_valuation_canonical_family_generated_in_order():
+    """§15 Valuation case 1."""
+    family_assessments, _, _, _ = _assemble(Component.VALUATION, [])
+    family_ids = tuple(fa.family_id for fa in family_assessments)
+    assert family_ids == _VALUATION_FAMILY_IDS
+
+
+def test_valuation_feature_results_placed_in_correct_family():
+    """§15 Valuation case 2."""
+    per_result = _hypothetical_result(_PER_ID, AvailabilityStatus.AVAILABLE)
+    pbr_result = _hypothetical_result(_PBR_ID, AvailabilityStatus.AVAILABLE)
+    family_assessments, _, _, _ = _assemble(Component.VALUATION, [per_result, pbr_result])
+
+    earnings_based = next(fa for fa in family_assessments if fa.family_id == "earnings_based")
+    asset_based = next(fa for fa in family_assessments if fa.family_id == "asset_based")
+    assert _PER_ID in {r.feature_id for r in earnings_based.feature_results}
+    assert _PBR_ID in {r.feature_id for r in asset_based.feature_results}
+    assert _PBR_ID not in {r.feature_id for r in earnings_based.feature_results}
+    assert _PER_ID not in {r.feature_id for r in asset_based.feature_results}
+
+
+def test_valuation_precomputed_coverage_identity_preserved():
+    """§15 Valuation case 3."""
+    per_result = _hypothetical_result(_PER_ID, AvailabilityStatus.AVAILABLE)
+    family_assessments, component_assessment, family_coverages, component_coverage = _assemble(
+        Component.VALUATION, [per_result]
+    )
+    for fa in family_assessments:
+        assert fa.coverage is family_coverages[fa.family_id]
+    assert component_assessment.coverage is component_coverage
+
+
+def test_valuation_asset_based_context_dependent_warning_passed_through_unchanged():
+    """Asset-based(CONTEXT_DEPENDENT) semantics는 이미 coverage 결과에
+    반영돼 있다 -- assembly가 이를 재해석하지 않고 그대로 통과시킨다."""
+    per_result = _hypothetical_result(_PER_ID, AvailabilityStatus.AVAILABLE)
+    family_assessments, _, _, component_coverage = _assemble(Component.VALUATION, [per_result])
+    asset_based = next(fa for fa in family_assessments if fa.family_id == "asset_based")
+    assert any("CONTEXT_DEPENDENT" in w for w in component_coverage.warnings)
+    # family-level coverage 자체에는 CONTEXT_DEPENDENT note가 없다(그 note는
+    # component 레벨 집계에서 붙는다, §45/§46) -- assembly는 이 구분을
+    # 만들지도 지우지도 않고 각 레벨의 coverage를 있는 그대로 전달한다.
+    assert asset_based.coverage is not None
+
+
+# ---- Forward ----
+
+
+def test_forward_four_families_generated_even_with_zero_features():
+    """§15 Forward case 4."""
+    family_assessments, _, _, _ = _assemble(Component.FORWARD, [])
+    family_ids = tuple(fa.family_id for fa in family_assessments)
+    assert family_ids == _FORWARD_FAMILY_IDS
+    for fa in family_assessments:
+        assert fa.feature_results == []
+        assert fa.family_status == FeatureFamilyStatus.NOT_EVALUATED
+
+
+def test_forward_coverage_identity_preserved():
+    """§15 Forward case 5."""
+    _, component_assessment, _, component_coverage = _assemble(Component.FORWARD, [])
+    assert component_assessment.coverage is component_coverage
+    # §46.4가 확정한 그대로 -- Forward는 Flow/Market과 달리 INSUFFICIENT다.
+    assert component_coverage.coverage_status.value == "insufficient"
+    assert component_coverage.critical_path_satisfied is False
+
+
+def test_future_opportunity_evidence_not_placed_inside_forward_component():
+    """§15 Forward case 6 + 핵심 boundary 확인: Forward
+    ComponentAssessment에는 future_opportunity_evidence 같은 필드가
+    아예 없다 -- 넣을 방법 자체가 model에 없다(model 필드 목록으로 재확인)."""
+    _, component_assessment, _, _ = _assemble(Component.FORWARD, [])
+    assert not hasattr(component_assessment, "future_opportunity_evidence")
+    assert "future_opportunity_evidence" not in type(component_assessment).model_fields
+
+
+def test_event_evidence_does_not_mutate_forward_component_assessment():
+    """Event evidence가 AVAILABLE이어도 이미 조립된 Forward
+    ComponentAssessment는 그대로다(RE-04 Event Overlay 원칙, §46.9의
+    component-assembly 버전)."""
+    _, component_assessment, _, forward_coverage = _assemble(Component.FORWARD, [])
+    before = component_assessment.model_copy(deep=True)
+    evaluate_future_opportunity_evidence(forward_coverage, EvidencePathAvailability.AVAILABLE)
+    assert component_assessment == before
+
+
+# ---- Flow ----
+
+
+def test_flow_investor_flow_family_generated():
+    """§15 Flow case 7."""
+    family_assessments, _, _, _ = _assemble(Component.FLOW, [])
+    family_ids = tuple(fa.family_id for fa in family_assessments)
+    assert family_ids == _FLOW_FAMILY_IDS
+
+
+def test_flow_allows_zero_features_without_disappearing():
+    """§15 Flow case 8."""
+    family_assessments, component_assessment, _, _ = _assemble(Component.FLOW, [])
+    investor_flow = family_assessments[0]
+    assert investor_flow.family_id == "investor_flow"
+    assert investor_flow.feature_results == []
+    assert component_assessment.status == ComponentStatus.UNAVAILABLE
+
+
+def test_flow_unknown_coverage_preserved_not_upgraded_to_sufficient():
+    """§15 Flow case 9 + §14 false-completeness 핵심: registered feature가
+    0개인데도 coverage가 SUFFICIENT로 승격되지 않는다."""
+    _, component_assessment, _, component_coverage = _assemble(Component.FLOW, [])
+    assert component_coverage.coverage_status.value == "unknown"
+    assert component_assessment.coverage.coverage_status.value != "sufficient"
+    assert component_assessment.score is None
+    assert component_assessment.signal == ComponentSignal.UNKNOWN
+
+
+# ---- Market ----
+
+
+def test_market_momentum_and_technical_confirmation_families_generated():
+    """§15 Market case 10."""
+    family_assessments, _, _, _ = _assemble(Component.MARKET_CONFIRMATION, [])
+    family_ids = tuple(fa.family_id for fa in family_assessments)
+    assert family_ids == _MARKET_FAMILY_IDS
+
+
+def test_market_allows_zero_features_without_disappearing():
+    """§15 Market case 11."""
+    family_assessments, _, _, _ = _assemble(Component.MARKET_CONFIRMATION, [])
+    for fa in family_assessments:
+        assert fa.feature_results == []
+        assert fa.family_status == FeatureFamilyStatus.NOT_EVALUATED
+
+
+def test_market_non_gating_coverage_state_passed_through_unchanged():
+    """§15 Market case 12: Assembly는 NOT_DECISION_GATING 여부를 다시
+    판단하지 않는다 -- CoverageEvaluator가 이미 만든 warning/상태를
+    그대로 소비한다."""
+    _, component_assessment, _, component_coverage = _assemble(Component.MARKET_CONFIRMATION, [])
+    assert component_assessment.coverage is component_coverage
+    assert any("NOT_DECISION_GATING" in w for w in component_coverage.warnings)
+    assert component_assessment.coverage.coverage_status.value == "unknown"
+
+
+# ---- 공통 (§15 case 13~19) ----
+
+
+def test_score_none_across_all_five_components():
+    for component in _ALL_COMPONENTS:
+        _, component_assessment, _, _ = _assemble(component, [])
+        assert component_assessment.score is None
+
+
+def test_signal_unknown_across_all_five_components():
+    for component in _ALL_COMPONENTS:
+        _, component_assessment, _, _ = _assemble(component, [])
+        assert component_assessment.signal == ComponentSignal.UNKNOWN
+
+
+def test_confidence_unknown_across_all_five_components():
+    for component in _ALL_COMPONENTS:
+        _, component_assessment, _, _ = _assemble(component, [])
+        assert component_assessment.confidence.level == ConfidenceLevel.UNKNOWN
+
+
+def test_no_fake_feature_evaluation_result_across_all_five_components():
+    for component in _ALL_COMPONENTS:
+        family_assessments, _, _, _ = _assemble(component, [])
+        all_ids = {r.feature_id for fa in family_assessments for r in fa.feature_results}
+        assert all_ids == set()
+
+
+def test_deterministic_family_order_across_all_five_components():
+    for component in _ALL_COMPONENTS:
+        first = [fa.family_id for fa in _assemble(component, [])[0]]
+        second = [fa.family_id for fa in _assemble(component, [])[0]]
+        assert first == second
+        assert tuple(first) == get_component_families(component)
+
+
+def test_deterministic_feature_order_for_valuation_regardless_of_input_order():
+    per_result = _hypothetical_result(_PER_ID, AvailabilityStatus.AVAILABLE)
+    ey_result = _hypothetical_result(_EARNINGS_YIELD_ID, AvailabilityStatus.AVAILABLE)
+
+    forward_order, _, _, _ = _assemble(Component.VALUATION, [per_result, ey_result])
+    reversed_order, _, _, _ = _assemble(Component.VALUATION, [ey_result, per_result])
+
+    forward_ids = [
+        r.feature_id
+        for r in next(
+            fa for fa in forward_order if fa.family_id == "earnings_based"
+        ).feature_results
+    ]
+    reversed_ids = [
+        r.feature_id
+        for r in next(
+            fa for fa in reversed_order if fa.family_id == "earnings_based"
+        ).feature_results
+    ]
+    assert forward_ids == reversed_ids
+
+
+def test_assembly_never_calls_coverage_evaluator_for_any_component():
+    """§3/§49 self-audit: source scan으로 재확인(모듈 전체에 대해 이미
+    test_assembly_module_does_not_import_coverage_evaluator_execution_functions
+    가 있지만, 여기서는 5개 component 전부에 대해 identity 보존이라는
+    행동적 증거로 다시 확인한다 -- source scan과 행동 증거 둘 다
+    갖춘다)."""
+    for component in _ALL_COMPONENTS:
+        feature_results: list[FeatureEvaluationResult] = []
+        family_coverages = _family_coverages(component, feature_results)
+        family_assessments = assemble_feature_family_assessments(
+            component, feature_results, family_coverages
+        )
+        for fa in family_assessments:
+            assert fa.coverage is family_coverages[fa.family_id]
+
+
+def test_fundamental_regression_after_component_expansion():
+    """§20."""
+    results = _real_roe_and_operating_margin_results()
+    debt_ratio = _hypothetical_result(_DEBT_RATIO_ID, AvailabilityStatus.AVAILABLE)
+    _, component_assessment, _, _ = _assemble_fundamental([*results, debt_ratio])
+    assert component_assessment.coverage.coverage_status.value == "sufficient"
+    assert component_assessment.status == ComponentStatus.PARTIALLY_EVALUATED
+
+
+def test_coverage_layer_regression_after_component_expansion():
+    """§21."""
+    results = _real_roe_and_operating_margin_results()
+    coverage = evaluate_fundamental_coverage(results)
+    assert coverage.critical_path_satisfied is False  # Debt Ratio 없음
+
+
+def test_recommendation_evaluation_state_holds_all_five_component_assessments():
+    """§13/§22: 5개 component ComponentAssessment 전부를
+    RecommendationEvaluationState에 동시에 배치할 수 있다(model 변경
+    없음)."""
+    as_of = _AS_OF
+    context = _context()
+    result_input = DeterministicAnalysisResult(
+        price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=1.0),
+        financials=FinancialSnapshot(business_year="2025", roe=12.3),
+        facts=[],
+        max_confidence=AnalysisConfidence.MEDIUM,
+        risk_level=RiskLevel.MEDIUM,
+    )
+    normalized_data = build_normalized_research_data(result_input, as_of=as_of)
+
+    component_assessments = [_assemble(component, [])[1] for component in _ALL_COMPONENTS]
+
+    state = RecommendationEvaluationState(
+        context=context,
+        normalized_research_data=normalized_data,
+        component_assessments=component_assessments,
+    )
+    assert len(state.component_assessments) == 5
+    assert {ca.component for ca in state.component_assessments} == set(_ALL_COMPONENTS)
+
+
+def test_future_opportunity_evidence_stays_top_level_alongside_five_components():
+    """§13/§23: FutureOpportunityEvidenceAssessment가
+    RecommendationEvaluationState의 top-level/parallel 필드로,
+    component_assessments 리스트 안의 Forward ComponentAssessment와
+    별개로 공존한다."""
+    as_of = _AS_OF
+    context = _context()
+    result_input = DeterministicAnalysisResult(
+        price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=1.0),
+        financials=FinancialSnapshot(business_year="2025", roe=12.3),
+        facts=[],
+        max_confidence=AnalysisConfidence.MEDIUM,
+        risk_level=RiskLevel.MEDIUM,
+    )
+    normalized_data = build_normalized_research_data(result_input, as_of=as_of)
+
+    component_assessments = [_assemble(component, [])[1] for component in _ALL_COMPONENTS]
+    forward_coverage = evaluate_forward_coverage([])
+    future_opportunity_evidence = evaluate_future_opportunity_evidence(forward_coverage)
+
+    state = RecommendationEvaluationState(
+        context=context,
+        normalized_research_data=normalized_data,
+        component_assessments=component_assessments,
+        future_opportunity_evidence=future_opportunity_evidence,
+    )
+    assert state.future_opportunity_evidence is future_opportunity_evidence
+    forward_assessment = next(
+        ca for ca in state.component_assessments if ca.component == Component.FORWARD
+    )
+    assert "future_opportunity_evidence" not in type(forward_assessment).model_fields
+
+
+def test_no_numeric_params_across_component_expansion_tests():
+    """§24."""
+    import app.evaluation.assembly as module
+
+    source = inspect.getsource(module)
+    for term in ("threshold=", "weight=", "lookback=", "window=", "cutoff=", "/ len("):
+        assert term not in source
+
+
+def test_no_recommendation_classification_across_component_expansion():
+    """§25."""
+    identifiers = _module_code_identifiers()
+    forbidden = {"ATTRACTIVE", "UNATTRACTIVE", "BUY", "SELL", "HOLD", "OpportunityClassification"}
+    assert identifiers.isdisjoint(forbidden)
+
+
+def test_no_llm_api_dependency_across_component_expansion():
+    """§26."""
+    import app.evaluation.assembly as module
+
+    tree = ast.parse(inspect.getsource(module))
+    imported_modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.add(node.module)
+    assert not any(m.startswith("app.services.") for m in imported_modules)
+    assert not any(m.startswith("app.mcp.") for m in imported_modules)
+    assert not any("anthropic" in m for m in imported_modules)
+    assert not any("openai" in m for m in imported_modules)
