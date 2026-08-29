@@ -383,16 +383,19 @@ _DEBT_RATIO_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     # scope 축소).
     scope_status=FeatureScopeStatus.V1_REQUIRED,
     verification_requirements=(),
-    # §41.5 REMAIN_UNRESOLVED (sole-representative rule): financial_resilience
-    # family에서 현재 유일한 등록 feature다 -- profitability/
-    # observed_growth_quality처럼 다른 anchor나 복수 candidate가 없어
-    # anchor rule도 family-policy-deferred rule도 적용할 수 없다.
-    # OPTIONAL로 확정하면 "Financial Resilience family 전체가 v1
-    # coverage에서 critical하지 않다"는 실질적 family-level 정책 결정을
-    # 개별 feature 값으로 몰래 내리는 셈이 된다 -- 이 family 자체가
-    # Fundamental coverage에 critical한지는 별도 family/component policy
-    # 결정이 필요하다(§41.4/§41.11, 아직 없음). 그 결정 전까지 None 유지.
-    default_requirement_role=None,
+    # §42.6 CONFIRMED_REQUIRED (family-criticality-derived rule): §42가
+    # financial_resilience family 자체를 canonical 5-family 목록(§24.2)의
+    # 독립 dimension으로서 CRITICAL로 classify했다(family criticality를
+    # feature 존재 여부와 무관하게 먼저 판단, §42.4) -- 이 family의 유일한
+    # non-blocked contributor인 Debt Ratio가 그 CRITICAL 판정을 실질적으로
+    # 대표하므로 REQUIRED로 promote한다. §41의 sole-representative
+    # REMAIN_UNRESOLVED와 다른 점: 이번엔 "유일한 feature라서"가 아니라
+    # "family가 독립적으로 CRITICAL로 판정됐고 그 family의 evidence
+    # channel이 이 feature뿐이라서"다. 금융업 등 §29.3 applicability
+    # REVIEW_REQUIRED 종목에서 runtime NOT_APPLICABLE이 나오면 §41.9
+    # 규칙대로 missing_required가 아니라 not_applicable bucket으로
+    # 빠진다 -- family 전체가 영구히 봉쇄되지 않는다(§42.4 Tier-1 rule).
+    default_requirement_role=RequirementRole.REQUIRED,
     directionality=Directionality.LOWER_IS_BETTER,
     # §29.3 FINANCIAL_SECTOR_APPLICABILITY_REVIEW_REQUIRED 목록에 포함,
     # 여전히 OPEN.
@@ -430,12 +433,16 @@ _ASSET_TURNOVER_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     feature_family="capital_efficiency",
     scope_status=FeatureScopeStatus.V1_OPTIONAL,
     verification_requirements=(),
-    # §41.5 REMAIN_UNRESOLVED (sole-representative rule): capital_efficiency
-    # family의 다른 등록 feature는 ROIC뿐인데 ROIC는 V1_BLOCKED다 --
-    # "현재 v1에서 실제로 evidence를 낼 수 있는" 유일한 candidate라는
-    # 점에서 Debt Ratio와 같은 상황이다. Debt Ratio와 동일한 이유로 None
-    # 유지(§41.4/§41.11 family-level policy 결정 필요).
-    default_requirement_role=None,
+    # §42.7 CONFIRMED_OPTIONAL (family-criticality-derived rule):
+    # capital_efficiency family는 §42가 SUPPORTING으로 classify했다(§24.2
+    # 5-family 중 하나이긴 하지만 Financial Resilience류의 solvency/
+    # downside 판단만큼 1차적이지 않고, ROIC/Asset Turnover 모두 "얼마나
+    # 효율적인가"라는 refinement 질문에 가깝다고 판단, §42.4). SUPPORTING
+    # family의 유일한 non-blocked contributor는 REQUIRED가 아니라
+    # OPTIONAL이 정확한 값이다(evidence는 기여하지만 gate는 아니다) --
+    # Debt Ratio와 결과가 다른 것은 family criticality 판정 자체가
+    # 다르기 때문이지 우연이 아니다.
+    default_requirement_role=RequirementRole.OPTIONAL,
     directionality=Directionality.HIGHER_IS_BETTER,
     # revenue 기반 -- §29.3 review 목록에 포함.
     applicability=FeatureApplicability.REVIEW_REQUIRED,
@@ -511,10 +518,17 @@ _PBR_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     feature_family="asset_based",
     scope_status=FeatureScopeStatus.V1_REQUIRED,
     verification_requirements=(),
-    # §41.5 REMAIN_UNRESOLVED (sole-representative rule): asset_based
-    # family의 유일한 등록 feature다 -- Debt Ratio/Asset Turnover와 동일한
-    # 이유로 family-level policy 결정 전까지 None 유지.
-    default_requirement_role=None,
+    # §42.9 CONFIRMED_OPTIONAL (family-criticality-derived rule):
+    # asset_based family(Valuation)는 §42가 CONTEXT_DEPENDENT로
+    # classify했다 -- 자산 기반 valuation(PBR)은 금융업/자산집약 업종에서는
+    # 상대적으로 더 중요하고 그 외 업종에서는 덜 중요하다는 것이 업종마다
+    # 갈리는 실제 경제적 특성이다(§42.9). CONTEXT_DEPENDENT family는
+    # CRITICAL이 아니므로 기본값을 REQUIRED로 promote하지 않는다 -- 특정
+    # 업종에서의 상향 조정은 static default가 아니라 향후 CoverageEvaluator
+    # 런타임 policy(§41.7 C 계층)의 몫으로 남긴다. earnings_based family
+    # (PER/Earnings Yield, CRITICAL)와 다른 이유로 같은 OPTIONAL 값에
+    # 도달한다.
+    default_requirement_role=RequirementRole.OPTIONAL,
     # PER와 동일한 이유(극단적 저PBR = 자산 부실/청산가치 우려 신호
     # 가능성, §39.9) -- CONTEXT_DEPENDENT. directionality는 이번 audit
     # 대상이 아니며 재확인 결과 변경 없음(§40.6).

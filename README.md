@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** family-level Coverage policy 내용 확정(추천 — 복수-candidate family의 sufficiency 정책 + Debt Ratio/Asset Turnover/PBR 3개 sole-representative family의 critical성 결정) → CoverageEvaluator implementation + 병행 candidate: Market Confirmation/Flow용 `NormalizedResearchData` model-wiring → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin, 변경 없음) + **RE-05 Feature Registry semantic role = FULL V1 CATALOG, completeness = PARTIAL(14 entries, evaluator 2개 구현)** + **RE-05 Coverage Contract = FROZEN**(Coverage definition/hierarchy는 기존 model로 충분함을 확인, RequirementRole 4-rule 체계로 §39 신규 12개 중 9개 CONFIRMED_OPTIONAL 해소·3개 REMAIN_UNRESOLVED, FeatureEvaluationResult/CoverageAssessment contract 둘 다 SUFFICIENT 확인, model correction 없음), **Coverage Readiness = NOT READY**(family-level policy 내용은 아직 미결정, numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§41)
+> **Next:** CoverageEvaluator implementation(추천 — Coverage Readiness가 READY로 전환됨) + 병행 candidate: Market Confirmation/Flow용 `NormalizedResearchData` model-wiring → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin, 변경 없음) + **RE-05 Feature Registry semantic role = FULL V1 CATALOG, completeness = PARTIAL(14 entries, evaluator 2개 구현, default_requirement_role 전부 확정)** + **RE-05 Coverage Contract = FROZEN** + **RE-05 Family-Level Coverage Policy = FROZEN**(§42: 3-tier family coverage rule + family criticality classification 확정 — Fundamental 5개/Valuation 2개 family classify, Debt Ratio→REQUIRED/Asset Turnover·PBR→OPTIONAL 최종 확정, component propagation 규칙 + Forward/Market 예외 재확인, family policy는 새 registry 없이 미래 CoverageEvaluator 내부 policy로 귀속) + **Coverage Readiness = READY**(numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§42)
 
 ---
 
@@ -2813,11 +2813,30 @@ RE-05 Coverage Contract & RequirementRole Resolution Design(§41)   완료
     └── 신규/갱신 테스트(전체 64), 전체 504 passed, ruff clean ✓ (dev-log §41)
     │
     ▼
-family-level Coverage policy 내용 확정(추천, §41.20 F) — Observed Growth
-Quality 등 복수-candidate family의 sufficiency 정책 + Debt Ratio/Asset
-Turnover/PBR 3개 sole-representative family의 critical성 결정. 이후
-CoverageEvaluator implementation(A)   ← NEXT
-    (dev-log 2026-08-29 §41.20 참고)
+RE-05 Family-Level Coverage Policy Resolution(§42)   완료
+    ├── Family Coverage 3-tier 정책 확정(Tier 1 effective-REQUIRED 전부
+    │   AVAILABLE / Tier 2 existence-based OR / Tier 3 UNKNOWN) —
+    │   numeric count/percentage 없이 semantic rule만 사용 ✓
+    ├── Fundamental 5개 family 전부 classify — Profitability/Financial
+    │   Resilience = CRITICAL, Observed Growth Quality/Capital Efficiency =
+    │   SUPPORTING, Cash/Earnings Quality = CURRENTLY_UNSUPPORTED ✓
+    ├── Valuation 2개 등록 family classify — Earnings-based = CRITICAL,
+    │   Asset-based(PBR) = CONTEXT_DEPENDENT(업종별 상향은 runtime policy로 분리) ✓
+    ├── Debt Ratio → REQUIRED(family=CRITICAL), Asset Turnover/PBR →
+    │   OPTIONAL(family=SUPPORTING/CONTEXT_DEPENDENT) — registry 14개
+    │   전부 default_requirement_role 확정(None 0개) ✓
+    ├── Component propagation 규칙 확정 + Forward/Market 예외 재확인
+    │   (Forward alternative path·Market non-gating 변경 없음) ✓
+    ├── family policy ownership = 미래 CoverageEvaluator 내부 static
+    │   policy로 결정 — 새 registry/model 생성 없음 ✓
+    └── 신규/갱신 테스트(전체 67), 전체 507 passed, ruff clean ✓ (dev-log §42)
+    │
+    ▼
+CoverageEvaluator implementation(추천, §42.20 A) — Coverage Readiness
+전제조건이 이번에 READY로 전환됨(policy/design 준비 완료, Market/Flow raw
+wiring은 구현 착수의 선행 조건이 아님을 확인). 병행 candidate: Market
+Confirmation/Flow normalized-data wiring   ← NEXT
+    (dev-log 2026-08-29 §42.20 참고)
 ```
 
 ---

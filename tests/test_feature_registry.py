@@ -884,52 +884,69 @@ def test_none_default_requirement_role_is_not_not_applicable_value():
     assert definition.default_requirement_role != RequirementRole.NOT_APPLICABLE
 
 
+def _hypothetical_unresolved_role_definition() -> FeatureDefinition:
+    """production registry에 추가하지 않는 가상 FeatureDefinition -- §42로
+    14개 전부의 default_requirement_role이 확정된 뒤에도, 스키마 자체는
+    여전히 None(미확정)을 표현할 수 있어야 한다(§40 correction이 되돌려진
+    것이 아니라는 것을 회귀 확인한다)."""
+    return FeatureDefinition(
+        feature_id="_test.unresolved_role.still_representable",
+        component=Component.VALUATION,
+        feature_family="_test",
+        scope_status=FeatureScopeStatus.V1_REQUIRED,
+        applicability=FeatureApplicability.UNIVERSAL,
+        # default_requirement_role 생략 -- 기본값 None.
+    )
+
+
 def test_scope_status_and_default_requirement_role_stay_independent_axes():
-    """§40.6/§41.9 재확인: scope_status(V1 scope)에서
+    """§40.6/§41.9/§42 재확인: scope_status(V1 scope)에서
     default_requirement_role을 자동으로 유도하는 로직이 없다 -- 동일한
     scope_status(V1_REQUIRED)를 가진 feature들이 서로 다른
     default_requirement_role(REQUIRED/OPTIONAL/None)을 가질 수 있음을
-    실제 등록된 값으로 확인한다."""
+    확인한다(§42 이후 production 14개는 전부 확정됐으므로 None 예시는
+    가상 인스턴스로 재확인)."""
     roe = get_feature_definition("fundamental.profitability.roe")
     net_margin = get_feature_definition("fundamental.profitability.net_margin")
-    debt_ratio = get_feature_definition("fundamental.financial_resilience.debt_ratio")
+    hypothetical = _hypothetical_unresolved_role_definition()
 
     assert (
         roe.scope_status
         == net_margin.scope_status
-        == debt_ratio.scope_status
+        == hypothetical.scope_status
         == FeatureScopeStatus.V1_REQUIRED
     )
     assert roe.default_requirement_role == RequirementRole.REQUIRED
     assert net_margin.default_requirement_role == RequirementRole.OPTIONAL
-    assert debt_ratio.default_requirement_role is None
+    assert hypothetical.default_requirement_role is None
 
 
 def test_applicability_and_default_requirement_role_stay_independent_axes():
-    """§40.6/§41.9 재확인: applicability(REVIEW_REQUIRED/UNIVERSAL)와
+    """§40.6/§41.9/§42 재확인: applicability(UNIVERSAL)와
     default_requirement_role(OPTIONAL/None) 조합이 자유롭다 -- 하나가
     다른 하나를 제약하지 않는다."""
-    debt_ratio = get_feature_definition("fundamental.financial_resilience.debt_ratio")
+    hypothetical = _hypothetical_unresolved_role_definition()
     roa = get_feature_definition("fundamental.profitability.roa")
 
-    # REVIEW_REQUIRED + role=None (Debt Ratio), UNIVERSAL + role=OPTIONAL
-    # (ROA) 조합이 둘 다 유효하다 -- applicability 값과 무관하게 role은
-    # 독립적으로 결정된다.
-    assert debt_ratio.applicability == FeatureApplicability.REVIEW_REQUIRED
+    # UNIVERSAL + role=None(가상), UNIVERSAL + role=OPTIONAL(ROA, 실제
+    # production) 조합이 둘 다 유효하다 -- 같은 applicability 값이어도
+    # role은 독립적으로 결정된다.
+    assert hypothetical.applicability == FeatureApplicability.UNIVERSAL
     assert roa.applicability == FeatureApplicability.UNIVERSAL
-    assert debt_ratio.default_requirement_role is None
+    assert hypothetical.default_requirement_role is None
     assert roa.default_requirement_role == RequirementRole.OPTIONAL
 
 
 def test_implementation_status_and_default_requirement_role_stay_independent_axes():
-    """§40.8/§41.9 재확인: evaluator 유무(is_implemented)와
+    """§40.8/§41.9/§42 재확인: evaluator 유무(is_implemented)와
     default_requirement_role 확정 여부는 서로 다른 축이다 -- ROE는
-    구현됨+role 확정(REQUIRED), ROA는 미구현+role 확정(OPTIONAL), Debt
-    Ratio는 미구현+role 미확정(None) -- 세 조합이 전부 유효하게
-    공존한다(스키마가 어느 쪽도 강제하지 않는다)."""
+    구현됨+role 확정(REQUIRED), ROA는 미구현+role 확정(OPTIONAL), 가상
+    인스턴스는 미구현+role 미확정(None) -- 세 조합이 전부 유효하게
+    공존한다(스키마가 어느 쪽도 강제하지 않는다). "미구현 + role 확정"도
+    별도로 가능함을 네 번째 조합으로 확인한다."""
     roe = get_feature_definition("fundamental.profitability.roe")
     roa = get_feature_definition("fundamental.profitability.roa")
-    debt_ratio = get_feature_definition("fundamental.financial_resilience.debt_ratio")
+    unresolved_role = _hypothetical_unresolved_role_definition()
 
     assert is_implemented(roe) is True
     assert roe.default_requirement_role == RequirementRole.REQUIRED
@@ -937,12 +954,10 @@ def test_implementation_status_and_default_requirement_role_stay_independent_axe
     assert is_implemented(roa) is False
     assert roa.default_requirement_role == RequirementRole.OPTIONAL
 
-    assert is_implemented(debt_ratio) is False
-    assert debt_ratio.default_requirement_role is None
+    assert is_implemented(unresolved_role) is False
+    assert unresolved_role.default_requirement_role is None
 
-    # 두 축이 실제로는 독립임을 증명하기 위해, "미구현 + role 확정"도
-    # 스키마 레벨에서 금지되지 않는다는 것을 별도 인스턴스로 확인한다.
-    hypothetical = FeatureDefinition(
+    confirmed_but_unimplemented = FeatureDefinition(
         feature_id="_test.unresolved_role.unimplemented_but_confirmed",
         component=Component.FUNDAMENTAL,
         feature_family="_test",
@@ -951,8 +966,8 @@ def test_implementation_status_and_default_requirement_role_stay_independent_axe
         default_requirement_role=RequirementRole.REQUIRED,
         # evaluator_id 생략 -- 미구현.
     )
-    assert is_implemented(hypothetical) is False
-    assert hypothetical.default_requirement_role == RequirementRole.REQUIRED
+    assert is_implemented(confirmed_but_unimplemented) is False
+    assert confirmed_but_unimplemented.default_requirement_role == RequirementRole.REQUIRED
 
 
 def test_roe_and_operating_margin_default_requirement_role_unchanged_by_40():
@@ -965,62 +980,98 @@ def test_roe_and_operating_margin_default_requirement_role_unchanged_by_40():
     assert om.default_requirement_role == RequirementRole.REQUIRED
 
 
-def test_39_new_catalog_entries_default_requirement_role_after_41_resolution():
-    """§41.5: §39가 등록한 12개 중 §41이 두 semantic rule(anchor rule,
-    family-policy-deferred rule, blocked rule)로 CONFIRMED_OPTIONAL에
-    도달한 9개는 OPTIONAL, 나머지 3개(sole-representative rule에 걸려
-    REMAIN_UNRESOLVED)는 여전히 None이다 -- 근거 없이 임의로 채운 값이
-    하나도 없다."""
+def test_39_new_catalog_entries_default_requirement_role_after_42_resolution():
+    """§42.6/§42.7/§42.9: §39가 등록한 12개 전부 이제 role이 확정됐다 --
+    §41의 4-rule 체계(9개 OPTIONAL)에 더해 §42가 family-criticality를
+    독립적으로 판정한 뒤 Debt Ratio를 REQUIRED로, Asset Turnover/PBR을
+    OPTIONAL로 promote했다. 근거 없이 임의로 채운 값은 없다(각각 다른
+    family-criticality 판정에서 나온 값)."""
+    confirmed_required_ids = ("fundamental.financial_resilience.debt_ratio",)
     confirmed_optional_ids = (
         "fundamental.profitability.net_margin",
         "fundamental.observed_growth_quality.revenue_growth",
         "fundamental.observed_growth_quality.operating_profit_growth",
         "fundamental.observed_growth_quality.net_income_growth",
         "fundamental.profitability.roa",
+        "fundamental.capital_efficiency.asset_turnover",
         "fundamental.capital_efficiency.roic",
         "fundamental.observed_growth_quality.eps_growth",
         "valuation.earnings_based.trailing_per",
         "valuation.earnings_based.earnings_yield",
-    )
-    remain_unresolved_ids = (
-        "fundamental.financial_resilience.debt_ratio",
-        "fundamental.capital_efficiency.asset_turnover",
         "valuation.asset_based.pbr",
     )
-    assert len(confirmed_optional_ids) + len(remain_unresolved_ids) == 12
+    assert len(confirmed_required_ids) + len(confirmed_optional_ids) == 12
+
+    for feature_id in confirmed_required_ids:
+        definition = get_feature_definition(feature_id)
+        assert definition.default_requirement_role == RequirementRole.REQUIRED
 
     for feature_id in confirmed_optional_ids:
         definition = get_feature_definition(feature_id)
         assert definition.default_requirement_role == RequirementRole.OPTIONAL
 
-    for feature_id in remain_unresolved_ids:
-        definition = get_feature_definition(feature_id)
-        assert definition.default_requirement_role is None
 
-
-def test_registry_wide_default_requirement_role_distribution_after_41():
-    """§41.16: registry 전체 14개의 default_requirement_role 분포가
-    설계대로다 -- REQUIRED 2(ROE/Operating Margin, replicated precedent),
-    OPTIONAL 9(anchor/family-policy-deferred/blocked rule로 CONFIRMED),
-    None 3(sole-representative, family-level policy 미결정)."""
+def test_registry_wide_default_requirement_role_distribution_after_42():
+    """§42.17: registry 전체 14개의 default_requirement_role 분포가
+    설계대로다 -- REQUIRED 3(ROE/Operating Margin은 replicated evaluator
+    precedent, Debt Ratio는 family-criticality-derived rule), OPTIONAL
+    11, None 0 -- §42로 12개 unresolved가 전부 해소됐다."""
     definitions = list_feature_definitions()
     required = [d for d in definitions if d.default_requirement_role == RequirementRole.REQUIRED]
     optional = [d for d in definitions if d.default_requirement_role == RequirementRole.OPTIONAL]
     unresolved = [d for d in definitions if d.default_requirement_role is None]
 
     assert len(definitions) == 14
-    assert len(required) == 2
-    assert len(optional) == 9
-    assert len(unresolved) == 3
+    assert len(required) == 3
+    assert len(optional) == 11
+    assert len(unresolved) == 0
     assert {d.feature_id for d in required} == {
         "fundamental.profitability.roe",
         "fundamental.profitability.operating_margin",
-    }
-    assert {d.feature_id for d in unresolved} == {
         "fundamental.financial_resilience.debt_ratio",
-        "fundamental.capital_efficiency.asset_turnover",
-        "valuation.asset_based.pbr",
     }
+
+
+# ============================== §42 Family-Level Coverage Policy Resolution ==============================
+
+
+def test_debt_ratio_becomes_required_via_family_criticality_not_sole_representative():
+    """§42.6: Debt Ratio가 REQUIRED로 promote된 근거는 "family의 유일한
+    feature라서"(§41이 명시적으로 거부한 논리)가 아니라 "family
+    criticality가 독립적으로 CRITICAL로 판정됐기 때문"이다 -- scope_status
+    가 여전히 V1_REQUIRED라는 사실 하나로 이 값이 자동 유도되지 않았음을
+    재확인한다(같은 V1_REQUIRED scope인 Net Margin/PBR은 REQUIRED가
+    아니다)."""
+    debt_ratio = get_feature_definition("fundamental.financial_resilience.debt_ratio")
+    net_margin = get_feature_definition("fundamental.profitability.net_margin")
+    pbr = get_feature_definition("valuation.asset_based.pbr")
+
+    assert debt_ratio.scope_status == net_margin.scope_status == pbr.scope_status
+    assert debt_ratio.default_requirement_role == RequirementRole.REQUIRED
+    assert net_margin.default_requirement_role != RequirementRole.REQUIRED
+    assert pbr.default_requirement_role != RequirementRole.REQUIRED
+
+
+def test_asset_turnover_and_pbr_stay_optional_not_required():
+    """§42.7/§42.9: capital_efficiency family(SUPPORTING)와 asset_based
+    family(CONTEXT_DEPENDENT)는 CRITICAL로 판정되지 않았다 -- 각 family의
+    유일한 non-blocked contributor(Asset Turnover/PBR)를 REQUIRED로
+    promote하지 않았다. Debt Ratio(CRITICAL family)와 결과가 다른 것은
+    family criticality 판정 자체가 다르기 때문이다."""
+    asset_turnover = get_feature_definition("fundamental.capital_efficiency.asset_turnover")
+    pbr = get_feature_definition("valuation.asset_based.pbr")
+
+    assert asset_turnover.default_requirement_role == RequirementRole.OPTIONAL
+    assert pbr.default_requirement_role == RequirementRole.OPTIONAL
+
+
+def test_all_fourteen_definitions_have_resolved_default_requirement_role():
+    """§42.18: CoverageEvaluator Readiness 판정의 근거 중 하나 -- registry
+    전체 14개 feature 중 default_requirement_role이 None(미확정)인
+    항목이 더 이상 없다."""
+    definitions = list_feature_definitions()
+    assert len(definitions) == 14
+    assert all(d.default_requirement_role is not None for d in definitions)
 
 
 def test_no_numeric_policy_metadata_leaked_by_40_correction():
