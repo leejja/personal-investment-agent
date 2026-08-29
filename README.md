@@ -43,6 +43,8 @@
                     StrategyResult
 ```
 
+> 위 `RecommendationResult`/`StrategyResult`는 이 다이어그램이 처음 그려질 당시의 개념적 이름이다 — RE-04에서 Stock Research ↔ Portfolio Strategy 경계는 `StockOpportunityAssessment`(종목 자체의 투자기회 판단, status/classification) → `PortfolioActionRecommendation`(BUY/ADD/HOLD/REDUCE/EXIT 등, 사용자의 실제 포트폴리오 exposure를 고려한 행동 판단) 2단 contract로 더 정밀하게 FROZEN됐다(상세: `docs/dev-log/2026-08-29.md` §23, Amendment 1 Step 10). **현재 v1 Portfolio Strategy Agent는 이 계약을 아직 소비하지 않는다** — `RecommendationResult` 없이 보유 종목 + 명시된 종목만 다루는 기존 `StrategyResult`/`PositionRecommendation`(`suggested_action`)으로 독립 동작 중이며(Phase 6 참고), Recommendation Engine이 `StockOpportunityAssessment`를 만들면 이 Agent가 그것도 입력으로 받도록 확장하는 것이 장기 로드맵이다 — `StockOpportunityAssessment`가 ATTRACTIVE여도 현재 exposure가 높으면 Portfolio Strategy Agent가 HOLD 등 다른 action을 선택할 수 있는 구조를 유지한다.
+
 시스템은 단순히 현재 시장 상황이나 특정 종목을 분석하는 데 그치지 않고,
 
 ```text
@@ -3089,7 +3091,7 @@ Deterministic Pipeline Slice(추천, §49.20 A)   ← NEXT
 - [ ] Coverage / Confidence 분리 평가
 - [ ] Event & Disclosure Intelligence Overlay (Amendment 1)
 - [ ] Recommendation Policy / Guardrail (double-counting 등, RE-05)
-- [ ] Portfolio Fit (Portfolio Strategy Agent 연계 — Stock Research에서는 생성하지 않음)
+- [ ] Portfolio Fit (`StockOpportunityAssessment` → `PortfolioActionRecommendation`, Portfolio Strategy Agent 연계 — Stock Research에서는 생성하지 않음)
 - [ ] Grounded LLM Explanation / Presentation
 - [ ] Backtesting / calibration (RE-05 이후)
 
