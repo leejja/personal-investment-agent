@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** evaluator/aggregator 설계(여전히 numeric parameter 없이 semantic calculation 구조만) 또는 `StockAnalysis`-recommendation model 연결 설계 중 우선순위 결정 → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model 설계 + additive 구현 완료**(`app/models/recommendation.py`, evaluator/aggregator/scorer/numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§30)
+> **Next:** 첫 `FeatureEvaluator` 구현(예: Fundamental Profitability family, `analysis.py`의 기존 deterministic 출력을 재사용하는 `NormalizedResearchData` builder 포함) + 최소 Feature Registry 도입 시점 판단(두 번째 evaluator 또는 첫 Coverage evaluator 등장 시) → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED**(`app/models/recommendation.py`) + **RE-05 Evaluation Boundary/Input Contract FROZEN**(`app/models/research_context.py` — canonical source는 vendor/deterministic normalization이지 `StockAnalysis`가 아님, `StockAnalysis`는 sibling 산출물, evaluator/aggregator/scorer/numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§33)
 
 ---
 
@@ -2670,8 +2670,33 @@ RE-05 Recommendation / Scoring Data Model Design   완료
         376 passed, ruff clean ✓ (dev-log §30)
     │
     ▼
-evaluator/aggregator 설계 또는 StockAnalysis 연결 설계 우선순위 결정   ← NEXT
-    (dev-log 2026-08-29 §30.17 참고)
+RE-05 Data Model Contract Audit(§31)   PASSED
+    ├── Risk severity 미분류 상태(risk_level=None) 표현 가능하도록 수정 ✓
+    ├── FutureOpportunityEvidence를 bool→tri-state(AVAILABLE/UNAVAILABLE/
+    │   UNKNOWN)로 격상해 source failure를 False로 collapse하지 않게 함 ✓
+    ├── StockOpportunityAssessment 양방향 invariant(ACTIONABLE→classification
+    │   non-null도 강제) ✓
+    └── Event enum(EventRole/PricedInLevel) canonical ownership TODO 문서화 ✓
+    │
+    ▼
+RE-05 Evaluation Boundary & Input Contract(§32~§33)   FROZEN
+    ├── app/models/research_context.py 신규 — NormalizedResearchData/
+    │   EvaluationContext/RecommendationEvaluationState/FeatureEvaluator
+    │   (Protocol, 구현 없음) ✓
+    ├── canonical source는 vendor→deterministic normalization(analysis.py의
+    │   기존 출력) — StockAnalysis는 sibling 산출물이지 부모가 아님(§33.1,
+    │   LLM narrative 역유입 구조적으로 차단) ✓
+    ├── RecommendationEvaluationInput → RecommendationEvaluationState로
+    │   개명, context/normalized_research_data만 필수(§33.2) ✓
+    ├── vendor model이 evaluator contract에 노출 안 됨(테스트로 구조적 보장),
+    │   EvaluationContext에 Portfolio 없음, Event path 분리 유지 ✓
+    ├── Feature Registry = USEFUL LATER(트리거: 2번째 evaluator 또는 첫
+    │   Coverage evaluator 등장 시, §33.4) ✓
+    └── 신규 테스트 17건, 전체 403 passed, ruff clean ✓ (dev-log §32~§33)
+    │
+    ▼
+첫 FeatureEvaluator 구현(NormalizedResearchData builder 포함) — Feature
+Registry 도입은 트리거 조건 도달 시   ← NEXT (dev-log 2026-08-29 §33.8 참고)
 ```
 
 ---
