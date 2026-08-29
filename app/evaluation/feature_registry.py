@@ -177,8 +177,51 @@ _ROE_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     evaluator_version="v1",
 )
 
+_OPERATING_MARGIN_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
+    feature_id="fundamental.profitability.operating_margin",
+    component=Component.FUNDAMENTAL,
+    # dev-log §24.2가 정의한 Fundamental Quality family 목록에서 ROE와
+    # Operating Margin은 둘 다 "Profitability" 아래에 있다 -- 새 family를
+    # 만들지 않고 그 이름을 그대로 썼다(§37.7).
+    feature_family="profitability",
+    # dev-log §29.2 V1 Feature Set 표(Fundamental Quality, "Operating
+    # Margin / Net Margin" 행)의 값을 그대로 옮겼다 -- 이번에 새로
+    # 판단하지 않았다.
+    scope_status=FeatureScopeStatus.V1_REQUIRED,
+    # ROE와 달리 별도 vendor 신뢰도 이슈는 없지만, revenue 기반 비율이라
+    # applicability(아래)와는 별개로 "값을 못 구하는" precondition은
+    # 없다 -- 빈 tuple.
+    verification_requirements=(),
+    default_requirement_role=RequirementRole.REQUIRED,
+    directionality=Directionality.HIGHER_IS_BETTER,
+    # §26.2/§28.5에서 이미 실측 확정된 사실: KB금융(금융지주)은 "매출액"
+    # 계정 자체가 없다(순이자손익/순수수료손익으로 대체) -- Operating
+    # Margin(operating_profit/revenue)은 Asset Turnover와 동일하게 이
+    # 구조적 제약을 그대로 물려받는다. ROE(Kiwoom 사전계산 필드)와 달리
+    # REVIEW_REQUIRED로 분류한다(새 rule engine을 만들지 않고 분류만
+    # 반영, §37.5/§35.7).
+    applicability=FeatureApplicability.REVIEW_REQUIRED,
+    # RE-01 financial_features.annual(오래된→최신 순)의 마지막 항목이
+    # "현재" 연도에 해당한다 -- FinancialSnapshot.current에는 이 값이
+    # 없다(§37.1 확인). 새 계산식을 만들지 않고 analysis.py가 이미
+    # 계산해둔 값만 읽는다.
+    required_inputs=("financial_facts.features.annual[latest].operating_margin",),
+    evaluator_id="OperatingMarginFeatureEvaluator",
+    evaluator_version="v1",
+)
+
+_ALL_DEFINITIONS: Final[tuple[FeatureDefinition, ...]] = (
+    _ROE_DEFINITION,
+    _OPERATING_MARGIN_DEFINITION,
+)
+
+if len({d.feature_id for d in _ALL_DEFINITIONS}) != len(_ALL_DEFINITIONS):
+    # §37.12 multi-feature audit: feature_id 중복을 dict comprehension이
+    # 조용히 덮어쓰지 않도록 module import 시점에 fail-fast한다.
+    raise ValueError("Duplicate feature_id detected in feature registry")
+
 _DEFINITIONS: Final[MappingProxyType[str, FeatureDefinition]] = MappingProxyType(
-    {definition.feature_id: definition for definition in (_ROE_DEFINITION,)}
+    {definition.feature_id: definition for definition in _ALL_DEFINITIONS}
 )
 
 

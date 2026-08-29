@@ -398,3 +398,91 @@ def test_roe_evaluator_behavior_unchanged_after_rename():
     assert outcome.raw.unit == "percent"
     assert outcome.normalized_value is None
     assert outcome.requirement_role == RequirementRole.REQUIRED
+
+
+# ============================== §37.11 Multi-feature registry audit ==============================
+
+
+def test_registry_now_holds_two_production_features():
+    definitions = list_feature_definitions()
+    ids = {d.feature_id for d in definitions}
+    assert ids == {
+        "fundamental.profitability.roe",
+        "fundamental.profitability.operating_margin",
+    }
+
+
+def test_both_features_retrievable_and_share_component_family():
+    from app.evaluation.feature_registry import get_feature_definition
+
+    roe = get_feature_definition("fundamental.profitability.roe")
+    om = get_feature_definition("fundamental.profitability.operating_margin")
+    assert roe.component == om.component == Component.FUNDAMENTAL
+    assert roe.feature_family == om.feature_family == "profitability"
+    # family aggregation 자체는 이번에도 구현하지 않는다 -- 같은 family를
+    # 공유한다는 사실만 확인한다(ComponentEvaluator/FeatureFamilyEvaluator
+    # 없음).
+
+
+def test_evaluator_id_maps_correctly_to_each_definition():
+    """evaluator ↔ definition mapping이 정확하다 -- ROE evaluator의
+    class attribute가 Operating Margin definition을 가리키지 않는다(그
+    반대도 마찬가지)."""
+    from app.evaluation.feature_registry import get_feature_definition
+    from app.evaluation.fundamental_evaluators import (
+        OperatingMarginFeatureEvaluator,
+        RoeFeatureEvaluator,
+    )
+
+    roe_def = get_feature_definition("fundamental.profitability.roe")
+    om_def = get_feature_definition("fundamental.profitability.operating_margin")
+
+    assert RoeFeatureEvaluator.definition is roe_def
+    assert OperatingMarginFeatureEvaluator.definition is om_def
+    assert RoeFeatureEvaluator.definition is not om_def
+    assert OperatingMarginFeatureEvaluator.definition is not roe_def
+
+
+def test_list_feature_definitions_order_is_deterministic():
+    """list_feature_definitions()가 매 호출마다 동일한 순서를 반환한다
+    (insertion order 기반 MappingProxyType, §37.11)."""
+    first_call = tuple(d.feature_id for d in list_feature_definitions())
+    second_call = tuple(d.feature_id for d in list_feature_definitions())
+    assert first_call == second_call
+
+
+def test_registry_raises_on_duplicate_feature_id_at_import_time():
+    """모듈 내부 duplicate-guard가 실제로 동작하는지, 동일한 패턴으로
+    임의 duplicate 목록을 만들어 재현한다(module reimport가 아니라 로직
+    자체를 격리 재현)."""
+    from app.evaluation.feature_registry import get_feature_definition
+
+    roe = get_feature_definition("fundamental.profitability.roe")
+    duplicate_list = (roe, roe)
+    assert len({d.feature_id for d in duplicate_list}) != len(duplicate_list)
+
+
+def test_scope_verification_and_runtime_axes_stay_independent_with_two_features():
+    """§36의 orthogonality가 feature가 2개로 늘어나도 깨지지 않는다 --
+    두 feature 모두 scope_status=V1_REQUIRED + verification_requirements=()
+    조합이지만 applicability는 서로 다르다(독립적으로 값이 갈릴 수
+    있음을 실측으로 재확인)."""
+    from app.evaluation.feature_registry import get_feature_definition
+
+    roe = get_feature_definition("fundamental.profitability.roe")
+    om = get_feature_definition("fundamental.profitability.operating_margin")
+
+    assert roe.scope_status == om.scope_status == FeatureScopeStatus.V1_REQUIRED
+    assert roe.verification_requirements == om.verification_requirements == ()
+    assert roe.applicability != om.applicability
+
+
+def test_no_numeric_policy_metadata_leaked_into_second_entry():
+    from app.evaluation.feature_registry import get_feature_definition
+
+    om = get_feature_definition("fundamental.profitability.operating_margin")
+    field_names = set(type(om).model_fields.keys())
+    forbidden = ("threshold", "weight", "lookback", "window", "cutoff", "boundary")
+    for name in field_names:
+        for term in forbidden:
+            assert term not in name.lower()

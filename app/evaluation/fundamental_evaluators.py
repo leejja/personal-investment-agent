@@ -1,5 +1,6 @@
-"""RE-05 첫 `FeatureEvaluator` 구현체 -- Fundamental Component, Profitability
-family.
+"""RE-05 Fundamental Component, Profitability family `FeatureEvaluator`
+구현체 -- `RoeFeatureEvaluator`(§34) + `OperatingMarginFeatureEvaluator`
+(§37, 두 번째 evaluator).
 
 이 모듈은 `app/models/research_context.FeatureEvaluator` Protocol(§32.6)의
 첫 실제 구현이다. `docs/dev-log/2026-08-29.md` §34가 이 vertical slice의
@@ -105,4 +106,94 @@ class RoeFeatureEvaluator:
             normalized_value=None,
             provenance=provenance,
             warnings=[_ROE_RELIABILITY_WARNING],
+        )
+
+
+_OPERATING_MARGIN_UNAVAILABLE_WARNING = (
+    "Operating margin not present in NormalizedResearchData.financial_facts"
+    ".features.annual (latest year) -- may be a data gap or a structural "
+    "sector exception (e.g. no revenue account, see applicability note)"
+)
+
+# ROE와 달리 revenue 기반 비율이라 매출액 계정이 없는 업종(금융지주 등,
+# §26.2/§28.5 실측)에서는 구조적으로 계산 자체가 안 될 수 있다 --
+# NormalizedResearchData에 업종 정보가 없어 evaluator가 "이 종목이 그
+# 케이스인지" 스스로 판별할 수 없으므로, 매번 review 필요 flag를 켠다
+# (rule engine이 아니라 단순 고정 flag, §37.5).
+_OPERATING_MARGIN_APPLICABILITY_NOTE = (
+    "Revenue-based ratio; not structurally computable for companies "
+    "without a revenue account (e.g. financial holding companies, "
+    "§26.2/§28.5) -- NormalizedResearchData carries no sector "
+    "classification, so this flag is set unconditionally pending a "
+    "future applicability rule"
+)
+
+
+class OperatingMarginFeatureEvaluator:
+    """Operating Margin(영업이익률) 하나만 담당하는 최소 evaluator --
+    `RoeFeatureEvaluator`와 동일한 architectural contract(입력
+    `NormalizedResearchData`+`EvaluationContext`, 출력
+    `FeatureEvaluationResult`)를 따른다.
+
+    raw source가 ROE와 다르다: ROE는 `financial_facts.current.roe`
+    (Kiwoom 사전계산 스칼라)를 직접 읽지만, Operating Margin은 RE-01이
+    이미 계산해둔 `financial_facts.features.annual`(오래된 -> 최신 순
+    리스트, `analysis.py`의 `_operating_margin()` 결과)의 **마지막
+    항목**을 읽는다 -- `FinancialSnapshot.current`에는 이 값이 없다
+    (§37.1 감사 결과). 이 evaluator가 `operating_profit/revenue`를
+    새로 계산하지 않는다 -- RE-01의 single source of truth를 그대로
+    재사용한다(중복 계산 경로를 만들지 않는다).
+    """
+
+    definition = get_feature_definition("fundamental.profitability.operating_margin")
+    feature_id = definition.feature_id
+    component = definition.component
+    feature_family = definition.feature_family
+
+    def evaluate(
+        self,
+        data: NormalizedResearchData,
+        context: EvaluationContext,
+    ) -> FeatureEvaluationResult:
+        features = data.financial_facts.features
+        annual = features.annual if features is not None else []
+        latest = annual[-1] if annual else None
+        operating_margin = latest.operating_margin if latest is not None else None
+
+        provenance = Provenance(
+            source="OpenDART",
+            as_of=context.as_of,
+        )
+
+        if operating_margin is None:
+            return FeatureEvaluationResult(
+                feature_id=self.feature_id,
+                component=self.component,
+                feature_family=self.feature_family,
+                raw=None,
+                availability=AvailabilityStatus.UNAVAILABLE,
+                requirement_role=self.definition.default_requirement_role,
+                evaluation_basis=[EvaluationBasis.ABSOLUTE],
+                normalized_value=None,
+                provenance=provenance,
+                applicability_review_required=True,
+                applicability_note=_OPERATING_MARGIN_APPLICABILITY_NOTE,
+                warnings=[_OPERATING_MARGIN_UNAVAILABLE_WARNING],
+            )
+
+        return FeatureEvaluationResult(
+            feature_id=self.feature_id,
+            component=self.component,
+            feature_family=self.feature_family,
+            raw=FeatureValue(value=operating_margin, unit="percent"),
+            availability=AvailabilityStatus.AVAILABLE,
+            requirement_role=self.definition.default_requirement_role,
+            evaluation_basis=[EvaluationBasis.ABSOLUTE],
+            # normalized score/threshold는 RE-05 Numeric Calibration이 OPEN인
+            # 동안 정의하지 않는다 -- AVAILABLE이어도 None으로 남긴다(§37.10:
+            # AVAILABLE != normalized score already calibrated).
+            normalized_value=None,
+            provenance=provenance,
+            applicability_review_required=True,
+            applicability_note=_OPERATING_MARGIN_APPLICABILITY_NOTE,
         )
