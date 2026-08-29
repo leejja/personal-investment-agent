@@ -15,6 +15,7 @@ from app.evaluation.feature_registry import (
     FeatureDefinition,
     FeatureScopeStatus,
     get_feature_definition,
+    is_implemented,
     list_feature_definitions,
 )
 from app.evaluation.fundamental_evaluators import RoeFeatureEvaluator
@@ -404,12 +405,15 @@ def test_roe_evaluator_behavior_unchanged_after_rename():
 
 
 def test_registry_now_holds_two_production_features():
+    """§37 시점 스냅샷 -- 이 시점에는 registry에 정확히 2개의 feature만
+    있었다. §39에서 evaluator-less catalog 항목이 추가된 뒤에도 이
+    2개는 여전히 registry 안에(부분집합으로) 존재해야 한다(회귀 확인)."""
     definitions = list_feature_definitions()
     ids = {d.feature_id for d in definitions}
-    assert ids == {
+    assert {
         "fundamental.profitability.roe",
         "fundamental.profitability.operating_margin",
-    }
+    } <= ids
 
 
 def test_both_features_retrievable_and_share_component_family():
@@ -628,3 +632,370 @@ def test_no_coverage_percentage_or_denominator_computed():
     forbidden = ("percentage", "available_count", "total_count", "coverage_ratio", "/ len(")
     for term in forbidden:
         assert term not in source
+
+
+# ============================== §39 Complete V1 Feature Catalog: population ==============================
+
+_NEW_V1_REQUIRED_OR_OPTIONAL_IDS = {
+    "fundamental.profitability.net_margin",
+    "fundamental.observed_growth_quality.revenue_growth",
+    "fundamental.observed_growth_quality.operating_profit_growth",
+    "fundamental.observed_growth_quality.net_income_growth",
+    "fundamental.financial_resilience.debt_ratio",
+    "fundamental.profitability.roa",
+    "fundamental.capital_efficiency.asset_turnover",
+    "valuation.earnings_based.trailing_per",
+    "valuation.asset_based.pbr",
+    "valuation.earnings_based.earnings_yield",
+}
+
+_NEW_V1_BLOCKED_IDS = {
+    "fundamental.capital_efficiency.roic",
+    "fundamental.observed_growth_quality.eps_growth",
+}
+
+_ALL_NEW_IDS = _NEW_V1_REQUIRED_OR_OPTIONAL_IDS | _NEW_V1_BLOCKED_IDS
+
+
+def test_registry_holds_fourteen_definitions_after_39_population():
+    """§39.17: 기존 2개(ROE/Operating Margin) + 신규 12개(§39.13
+    REGISTER_NOW 판단 결과) = 14개."""
+    definitions = list_feature_definitions()
+    assert len(definitions) == 14
+    ids = {d.feature_id for d in definitions}
+    assert _ALL_NEW_IDS <= ids
+
+
+def test_all_new_catalog_entries_have_unique_feature_ids():
+    """§18: feature_id 중복이 없다 -- import 시점 fail-fast guard(기존
+    로직)가 실제로 통과했다는 것으로도 확인되지만, 신규 12개만 따로도
+    재확인한다."""
+    assert len(_ALL_NEW_IDS) == 12
+
+
+def test_all_new_catalog_entries_have_no_evaluator_bound():
+    """§14/§18: 이번에 등록한 모든 신규 entry는 evaluator_id/version이
+    None이다 -- feature identity만 선언했을 뿐 evaluator는 구현하지
+    않았다. 가짜 evaluator id를 채우지 않았다."""
+    for feature_id in _ALL_NEW_IDS:
+        definition = get_feature_definition(feature_id)
+        assert definition.evaluator_id is None
+        assert definition.evaluator_version is None
+        assert is_implemented(definition) is False
+
+
+def test_existing_two_evaluators_remain_bound_after_39_population():
+    """§18: 기존 ROE/Operating Margin의 evaluator binding이 catalog
+    population 이후에도 바뀌지 않았다(회귀 확인)."""
+    roe = get_feature_definition("fundamental.profitability.roe")
+    om = get_feature_definition("fundamental.profitability.operating_margin")
+    assert roe.evaluator_id == "RoeFeatureEvaluator"
+    assert om.evaluator_id == "OperatingMarginFeatureEvaluator"
+
+
+def test_growth_features_are_three_distinct_identities_under_growth_family():
+    """§39.2 Growth semantic resolution: Revenue/OperatingProfit/NetIncome
+    Growth는 하나의 feature가 아니라 서로 다른 3개의 feature_id다 --
+    전부 `observed_growth_quality` family에 속하지만
+    `fundamental.profitability`(ROE/Operating Margin/Net Margin/ROA의
+    family)와는 구분된다."""
+    revenue = get_feature_definition("fundamental.observed_growth_quality.revenue_growth")
+    op = get_feature_definition("fundamental.observed_growth_quality.operating_profit_growth")
+    net = get_feature_definition("fundamental.observed_growth_quality.net_income_growth")
+
+    ids = {revenue.feature_id, op.feature_id, net.feature_id}
+    assert len(ids) == 3
+
+    for definition in (revenue, op, net):
+        assert definition.feature_family == "observed_growth_quality"
+        assert definition.component == Component.FUNDAMENTAL
+
+    profitability_family_ids = {d.feature_family for d in (revenue, op, net)} & {
+        get_feature_definition("fundamental.profitability.roe").feature_family
+    }
+    assert profitability_family_ids == set()
+
+
+def test_v1_blocked_catalog_entries_are_registerable_with_clear_identity():
+    """§39.4/§13 V1_BLOCKED_BUT_REGISTERABLE: ROIC/EPS Growth(순수)는
+    scope_status=V1_BLOCKED이면서 evaluator가 없어도 identity를
+    registry에 담을 수 있다(§38의 optional-evaluator correction을 실제
+    catalog 항목에 적용한 첫 사례)."""
+    roic = get_feature_definition("fundamental.capital_efficiency.roic")
+    eps_growth = get_feature_definition("fundamental.observed_growth_quality.eps_growth")
+
+    for definition in (roic, eps_growth):
+        assert definition.scope_status == FeatureScopeStatus.V1_BLOCKED
+        assert definition.evaluator_id is None
+        assert definition.verification_requirements != ()
+
+
+def test_per_and_pbr_use_context_dependent_directionality_not_lower_is_better():
+    """§39.9 Directionality audit: PER/PBR을 단순 LOWER_IS_BETTER로
+    두면 극단적 저평가(distress 신호 가능성)를 오분류할 위험이 있다 --
+    기존에 이미 존재하는 `Directionality.CONTEXT_DEPENDENT`를 쓴다(enum
+    확장 없이 표현 가능함을 확인)."""
+    from app.models.recommendation import Directionality
+
+    per = get_feature_definition("valuation.earnings_based.trailing_per")
+    pbr = get_feature_definition("valuation.asset_based.pbr")
+
+    assert per.directionality == Directionality.CONTEXT_DEPENDENT
+    assert pbr.directionality == Directionality.CONTEXT_DEPENDENT
+    assert per.directionality != Directionality.LOWER_IS_BETTER
+    assert pbr.directionality != Directionality.LOWER_IS_BETTER
+
+
+def test_debt_ratio_stays_v1_required_despite_open_sector_applicability():
+    """§39.3: 금융업 applicability가 OPEN(§29.3)이라는 이유로
+    scope_status=V1_REQUIRED 자체를 낮추지 않았다 -- applicability만
+    REVIEW_REQUIRED로 분리해서 표현한다(scope != applicability)."""
+    debt_ratio = get_feature_definition("fundamental.financial_resilience.debt_ratio")
+    assert debt_ratio.scope_status == FeatureScopeStatus.V1_REQUIRED
+    assert debt_ratio.applicability == FeatureApplicability.REVIEW_REQUIRED
+
+
+def test_new_entries_required_inputs_are_normalized_domain_paths():
+    """§7/§10 재확인: 신규 12개 entry 모두 vendor field 이름을 쓰지
+    않는다."""
+    for feature_id in _ALL_NEW_IDS:
+        definition = get_feature_definition(feature_id)
+        for path in definition.required_inputs:
+            assert not path.lower().startswith("kiwoom")
+            assert not path.lower().startswith("opendart")
+            assert not path.lower().startswith("ecos")
+
+
+def test_no_numeric_policy_metadata_leaked_into_new_entries():
+    """§18: 신규 12개 entry 어디에도 threshold/weight/window 필드가
+    없다(FeatureDefinition 스키마 자체가 이미 강제하지만, 값 자체도
+    한 번 더 확인)."""
+    forbidden = ("threshold", "weight", "lookback", "window", "cutoff", "boundary")
+    for feature_id in _ALL_NEW_IDS:
+        definition = get_feature_definition(feature_id)
+        dumped = definition.model_dump()
+        for key in dumped:
+            for term in forbidden:
+                assert term not in key.lower()
+
+
+def test_raw_facts_are_not_registered_as_features():
+    """§0/§39.6/§39.8: 250d High/Low, KOSPI/KOSDAQ Benchmark, Market Cap
+    정규화 같은 raw fact/reference input은 이번 population에 포함되지
+    않았다 -- registry에 해당 feature_id가 없다."""
+    ids = {d.feature_id for d in list_feature_definitions()}
+    forbidden_substrings = (
+        "250d_high",
+        "250d_low",
+        "high_250d",
+        "low_250d",
+        "kospi_benchmark",
+        "kosdaq_benchmark",
+        "benchmark",
+        "market_cap",
+        "free_float",
+    )
+    for feature_id in ids:
+        for substring in forbidden_substrings:
+            assert substring not in feature_id.lower()
+
+
+def test_forward_component_has_no_registered_feature_after_39():
+    """§39.6/§38.7 재확인: Forward는 이번 population에서도 등록된
+    feature가 하나도 없다 -- component-level preservation만 유지한다
+    (family 이름 존재가 곧 frozen feature_id를 뜻하지 않는다는 판단,
+    §39.6)."""
+    forward_definitions = [
+        d for d in list_feature_definitions() if d.component == Component.FORWARD
+    ]
+    assert forward_definitions == []
+
+
+def test_market_confirmation_component_has_no_registered_feature_after_39():
+    """§39.8: Market Confirmation도 이번 population에서 등록된 feature가
+    없다 -- 250d High/Low·Benchmark는 raw/reference로 판단해 제외했고,
+    Momentum류는 여전히 NEEDS_SEMANTIC_RESOLUTION이다(§38의 hypothetical
+    fixture만 존재, production에는 없음)."""
+    market_definitions = [
+        d for d in list_feature_definitions() if d.component == Component.MARKET_CONFIRMATION
+    ]
+    assert market_definitions == []
+
+
+# ============================== §40 Final Contract Audit: RequirementRole unresolved-state ==============================
+
+
+def test_default_requirement_role_field_accepts_none():
+    """§40.7 coverage safety test: default_requirement_role=None으로
+    FeatureDefinition을 생성할 수 있다(design-time coverage role
+    unresolved)."""
+    definition = FeatureDefinition(
+        feature_id="_test.unresolved_role.optional_scope",
+        component=Component.FUNDAMENTAL,
+        feature_family="_test",
+        scope_status=FeatureScopeStatus.V1_OPTIONAL,
+        applicability=FeatureApplicability.UNIVERSAL,
+        # default_requirement_role 생략 -- 기본값 None.
+    )
+    assert definition.default_requirement_role is None
+
+
+def test_default_requirement_role_none_representable_with_v1_blocked_scope_too():
+    """§40.7: scope_status=V1_BLOCKED + default_requirement_role=None
+    조합도 유효하게 표현 가능하다."""
+    definition = FeatureDefinition(
+        feature_id="_test.unresolved_role.blocked_scope",
+        component=Component.FUNDAMENTAL,
+        feature_family="_test",
+        scope_status=FeatureScopeStatus.V1_BLOCKED,
+        applicability=FeatureApplicability.REVIEW_REQUIRED,
+        default_requirement_role=None,
+    )
+    assert definition.scope_status == FeatureScopeStatus.V1_BLOCKED
+    assert definition.default_requirement_role is None
+
+
+def test_none_default_requirement_role_is_not_optional_value():
+    """§40.1 핵심 원칙: None != RequirementRole.OPTIONAL. 값 자체가
+    다른 타입(NoneType vs RequirementRole 멤버)임을 확인한다."""
+    definition = FeatureDefinition(
+        feature_id="_test.unresolved_role.not_optional",
+        component=Component.FUNDAMENTAL,
+        feature_family="_test",
+        scope_status=FeatureScopeStatus.V1_OPTIONAL,
+        applicability=FeatureApplicability.UNIVERSAL,
+    )
+    assert definition.default_requirement_role is not RequirementRole.OPTIONAL
+    assert definition.default_requirement_role != RequirementRole.OPTIONAL
+
+
+def test_none_default_requirement_role_is_not_not_applicable_value():
+    """§40.1 핵심 원칙: None != RequirementRole.NOT_APPLICABLE. 이 둘을
+    구분하지 못하면 "판단을 아직 안 함"과 "판단 결과 해당 없음"이
+    섞인다."""
+    definition = FeatureDefinition(
+        feature_id="_test.unresolved_role.not_not_applicable",
+        component=Component.FUNDAMENTAL,
+        feature_family="_test",
+        scope_status=FeatureScopeStatus.V1_OPTIONAL,
+        applicability=FeatureApplicability.UNIVERSAL,
+    )
+    assert definition.default_requirement_role is not RequirementRole.NOT_APPLICABLE
+    assert definition.default_requirement_role != RequirementRole.NOT_APPLICABLE
+
+
+def test_scope_status_and_default_requirement_role_stay_independent_axes():
+    """§40.6: scope_status(V1 scope)에서 default_requirement_role을
+    자동으로 유도하는 로직이 없다 -- 동일한 scope_status(V1_REQUIRED)를
+    가진 feature들이 서로 다른 default_requirement_role(REQUIRED 또는
+    None)을 가질 수 있음을 실제 등록된 값으로 확인한다."""
+    roe = get_feature_definition("fundamental.profitability.roe")
+    net_margin = get_feature_definition("fundamental.profitability.net_margin")
+
+    assert roe.scope_status == net_margin.scope_status == FeatureScopeStatus.V1_REQUIRED
+    assert roe.default_requirement_role == RequirementRole.REQUIRED
+    assert net_margin.default_requirement_role is None
+
+
+def test_applicability_and_default_requirement_role_stay_independent_axes():
+    """§40.6: applicability(REVIEW_REQUIRED/UNIVERSAL)와
+    default_requirement_role(REQUIRED/None) 조합이 자유롭다 -- 하나가
+    다른 하나를 제약하지 않는다."""
+    net_margin = get_feature_definition("fundamental.profitability.net_margin")
+    roa = get_feature_definition("fundamental.profitability.roa")
+
+    # REVIEW_REQUIRED + role=None (Net Margin), UNIVERSAL + role=None (ROA)
+    # 조합이 둘 다 유효하다 -- applicability 값과 무관하게 role은
+    # 독립적으로 None일 수 있다.
+    assert net_margin.applicability == FeatureApplicability.REVIEW_REQUIRED
+    assert roa.applicability == FeatureApplicability.UNIVERSAL
+    assert net_margin.default_requirement_role is None
+    assert roa.default_requirement_role is None
+
+
+def test_implementation_status_and_default_requirement_role_stay_independent_axes():
+    """§40.8: evaluator 유무(is_implemented)와 default_requirement_role
+    확정 여부는 서로 다른 축이다 -- ROE는 구현됨+role 확정, 신규
+    entry들은 미구현+role 미확정이지만, 이 둘의 조합이 강제되는
+    관계는 아니다(둘 다 독립적으로 None/False가 될 수 있다는 것을
+    스키마가 강제하지 않는다는 사실 자체를 확인)."""
+    roe = get_feature_definition("fundamental.profitability.roe")
+    net_margin = get_feature_definition("fundamental.profitability.net_margin")
+
+    assert is_implemented(roe) is True
+    assert roe.default_requirement_role is not None
+
+    assert is_implemented(net_margin) is False
+    assert net_margin.default_requirement_role is None
+
+    # 두 축이 실제로는 독립임을 증명하기 위해, "미구현 + role 확정"도
+    # 스키마 레벨에서 금지되지 않는다는 것을 별도 인스턴스로 확인한다.
+    hypothetical = FeatureDefinition(
+        feature_id="_test.unresolved_role.unimplemented_but_confirmed",
+        component=Component.FUNDAMENTAL,
+        feature_family="_test",
+        scope_status=FeatureScopeStatus.V1_REQUIRED,
+        applicability=FeatureApplicability.UNIVERSAL,
+        default_requirement_role=RequirementRole.REQUIRED,
+        # evaluator_id 생략 -- 미구현.
+    )
+    assert is_implemented(hypothetical) is False
+    assert hypothetical.default_requirement_role == RequirementRole.REQUIRED
+
+
+def test_roe_and_operating_margin_default_requirement_role_unchanged_by_40():
+    """§40.3: ROE/Operating Margin의 REQUIRED는 이번 audit에서 그대로
+    유지된다(회귀 없음) -- 유일하게 replicated evaluator precedent가
+    있는 두 feature다."""
+    roe = get_feature_definition("fundamental.profitability.roe")
+    om = get_feature_definition("fundamental.profitability.operating_margin")
+    assert roe.default_requirement_role == RequirementRole.REQUIRED
+    assert om.default_requirement_role == RequirementRole.REQUIRED
+
+
+def test_all_39_new_catalog_entries_have_unresolved_default_requirement_role():
+    """§40.4: §39에서 신규 등록한 12개 전부 default_requirement_role이
+    None이다 -- speculative REQUIRED/OPTIONAL 값을 남기지 않았다."""
+    new_ids = (
+        "fundamental.profitability.net_margin",
+        "fundamental.observed_growth_quality.revenue_growth",
+        "fundamental.observed_growth_quality.operating_profit_growth",
+        "fundamental.observed_growth_quality.net_income_growth",
+        "fundamental.financial_resilience.debt_ratio",
+        "fundamental.profitability.roa",
+        "fundamental.capital_efficiency.asset_turnover",
+        "fundamental.capital_efficiency.roic",
+        "fundamental.observed_growth_quality.eps_growth",
+        "valuation.earnings_based.trailing_per",
+        "valuation.asset_based.pbr",
+        "valuation.earnings_based.earnings_yield",
+    )
+    for feature_id in new_ids:
+        definition = get_feature_definition(feature_id)
+        assert definition.default_requirement_role is None
+
+
+def test_no_numeric_policy_metadata_leaked_by_40_correction():
+    """§40: default_requirement_role을 Optional화하는 correction
+    자체가 numeric threshold/weight/window를 도입하지 않았다."""
+    forbidden = ("threshold", "weight", "lookback", "window", "cutoff", "boundary")
+    for definition in list_feature_definitions():
+        dumped = definition.model_dump()
+        for key in dumped:
+            for term in forbidden:
+                assert term not in key.lower()
+
+
+def test_cash_earnings_quality_features_not_registered_pending_semantic_resolution():
+    """§39.4: OCF/FCF/Cash Conversion/CFO-NetIncome/Interest Coverage는
+    formula semantic question(FCF/Cash Conversion/Interest Coverage,
+    §29.9) 또는 model-wiring gap(OCF/CFO-NetIncome -- NormalizedResearchData
+    에 cash flow 관련 필드 자체가 아직 없음)으로 인해 이번에도 등록하지
+    않았다."""
+    ids = {d.feature_id for d in list_feature_definitions()}
+    for feature_id in ids:
+        assert "cash_earnings_quality" not in feature_id
+        assert "ocf" not in feature_id
+        assert "fcf" not in feature_id
+        assert "cash_conversion" not in feature_id
+        assert "interest_coverage" not in feature_id

@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** RE-05 Complete V1 Feature Catalog(추천 — `READY_TO_REGISTER`로 분류된 Net Margin/Debt Ratio/Trailing PER/PBR/250d High-Low/KOSPI-KOSDAQ Benchmark 등부터 registry entry 등록, `NEEDS_SEMANTIC_RESOLUTION` 항목은 별도 분리) — Coverage Readiness prerequisite A 충족이 목적, `CoverageEvaluator` 자체는 그 다음 → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin) + **RE-05 Feature Registry semantic role = FULL V1 CATALOG 확정, completeness = PARTIAL(2/9+ V1_REQUIRED 등록), Coverage Readiness = NOT READY**(`evaluator_id`/`evaluator_version` optional化로 미구현 feature도 registry에 등록 가능하도록 correction, numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§38)
+> **Next:** CoverageEvaluator Contract 설계 검토(추천 — 단, 착수 전 12개 feature의 `default_requirement_role` UNRESOLVED(None) 상태를 확정할지 결정 필요) + 병행 candidate: Market Confirmation/Flow용 `NormalizedResearchData` model-wiring → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin, 변경 없음) + **RE-05 Feature Registry semantic role = FULL V1 CATALOG, completeness = PARTIAL(14 entries, evaluator 2개 구현), Coverage Readiness = NOT READY**(§40: `default_requirement_role`을 `RequirementRole | None`으로 correction — ROE/Operating Margin만 CONFIRMED REQUIRED, §39 신규 12개는 전부 UNRESOLVED(None)로 재분류, "V1_REQUIRED → REQUIRED" 자동 유도 금지, applicability는 재검토 결과 FROZEN 재확인, numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§40)
 
 ---
 
@@ -2761,9 +2761,45 @@ RE-05 Feature Registry Completeness & Coverage Readiness Audit(§38)   완료
     └── 신규 테스트 8건, 전체 479 passed, ruff clean ✓ (dev-log §38)
     │
     ▼
-RE-05 Complete V1 Feature Catalog(추천) — READY_TO_REGISTER 항목부터
-등록, Coverage Readiness prerequisite A 충족   ← NEXT
-    (dev-log 2026-08-29 §38.18 참고)
+RE-05 Complete V1 Feature Catalog — Semantic Resolution & Population(§39)   완료
+    ├── raw fact/reference input(250d High-Low, KOSPI-KOSDAQ Benchmark,
+    │   Market Cap/Free Float 정규화)을 feature로 등록하지 않도록 재분류 ✓
+    ├── Growth semantic 확정 — Revenue/OpProfit/NetIncome Growth = family
+    │   1개(observed_growth_quality) 아래 독립 feature 3개로 등록 ✓
+    ├── PER/PBR directionality = CONTEXT_DEPENDENT(기존 enum 값 재사용,
+    │   단순 LOWER_IS_BETTER 오분류 방지) ✓
+    ├── Debt Ratio scope=V1_REQUIRED 유지, applicability만 REVIEW_REQUIRED로
+    │   분리(§29.3 OPEN을 scope 축소로 오독하지 않음) ✓
+    ├── ROIC/EPS Growth(순수) = V1_BLOCKED_BUT_REGISTERABLE로 신규 등록
+    │   (identity는 명확, evaluator만 없음) ✓
+    ├── OCF/CFO-NetIncome/Liquidity/Flow 계열/250-day Price Position =
+    │   model-wiring gap(신규 발견 카테고리, formula 문제와 구분)으로 보류 ✓
+    ├── Forward = 여전히 registry 0건, Component-level preservation만
+    │   유지(§38.7 재확인, 억지 feature 생성 안 함) ✓
+    ├── registry entry 2 → 14(신규 12개, 전부 evaluator_id=None) ✓
+    ├── Coverage Readiness prerequisite A — Fundamental/Valuation은 충족,
+    │   Market Confirmation/Flow는 여전히 NOT MET →
+    │   **Coverage Readiness = NOT READY(범위 축소됨)** ✓
+    └── 신규 테스트 14건(전체 53), 전체 493 passed, ruff clean ✓ (dev-log §39)
+    │
+    ▼
+RE-05 V1 Feature Catalog Final Contract Audit(§40)   완료
+    ├── default_requirement_role: RequirementRole → RequirementRole|None —
+    │   "OPEN"이라 보고했던 값이 registry엔 OPTIONAL로 박제된 모순 correction ✓
+    ├── ROE/Operating Margin(REQUIRED, replicated evaluator precedent)만
+    │   CONFIRMED, §39 신규 12개 전부 UNRESOLVED(None)로 재분류 —
+    │   "V1_REQUIRED니까 REQUIRED" 자동 유도 금지 원칙 적용 ✓
+    ├── Applicability(UNIVERSAL/REVIEW_REQUIRED) 재검토 — data 존재와
+    │   semantic applicability 구분, 재조정 없이 FROZEN 재확인 ✓
+    ├── scope_status/applicability/default_requirement_role 3축 독립성
+    │   coverage safety test로 재확인(cross-field validator 없음) ✓
+    └── 신규 테스트 10건(전체 63), 전체 503 passed, ruff clean ✓ (dev-log §40)
+    │
+    ▼
+CoverageEvaluator Contract 설계 검토(추천) — 단, 착수 전 12개
+UNRESOLVED default_requirement_role 확정 여부 결정 필요. 병행:
+Market Confirmation/Flow NormalizedResearchData model-wiring   ← NEXT
+    (dev-log 2026-08-29 §40.12 참고)
 ```
 
 ---

@@ -4,18 +4,26 @@ of truth.
 `docs/dev-log/2026-08-29.md` §35(초기 설계)/§36(scope status orthogonality
 correction, `requirement_role` rename)/§38(completeness & coverage
 readiness audit -- semantic role을 **FULL V1 CATALOG**로 명시적으로
-확정, `evaluator_id`/`evaluator_version`을 optional로 correction)가 이
-설계의 audit/결정 근거를 담는다.
+확정, `evaluator_id`/`evaluator_version`을 optional로 correction)/§39
+(Complete V1 Feature Catalog -- semantic resolution & population, raw
+fact/reference input과 evaluated feature를 구분해 REGISTER_NOW로 판단된
+항목을 실제로 등록)가 이 설계의 audit/결정 근거를 담는다.
 
 **semantic role(§38 확정)**: 이 registry는 "evaluator가 구현된 feature만
 담는 execution registry"가 아니라 **FROZEN V1 Feature Set(§29) 전체의
 canonical catalog**다 -- evaluator 유무와 무관하게 v1 scope에 속하는
 모든 feature identity를 담는 것이 목표다(그래야 Coverage가 "evaluator가
 없다"와 "feature 자체가 없다"를 혼동하지 않는다, §38.2 FALSE
-COMPLETENESS). **completeness는 현재 PARTIAL이다** -- §29가 FROZEN한
-전체 인벤토리(약 40개 이상) 중 2개(ROE/Operating Margin)만 실제로
-등록돼 있다. 전체 population은 이번 세션의 범위가 아니다(§38.6 inventory
-audit, 다음 단계로 분리).
+COMPLETENESS). **모든 §29.2 V1 인벤토리 항목이 FeatureDefinition은
+아니다**(§39.0 원칙) -- Raw Fact(예: 250d High/Low)와 Reference/Context
+Input(예: KOSPI/KOSDAQ Benchmark, Market Cap 정규화)은 의도적으로
+등록하지 않는다. **completeness는 현재 PARTIAL이다** -- §29가 FROZEN한
+전체 인벤토리(약 40개 이상) 중 §39가 evaluated feature identity로
+분류하고 semantic이 충분히 해소됐다고 판단한 항목만 등록돼 있다(§39.13
+REGISTER_NOW 목록). Forward/Market Confirmation/Flow의 다수 항목과
+FCF/Cash Conversion/Interest Coverage 등은 여전히 미등록이다(§39.15/
+§39.16 참고, formula semantic question 또는 model-wiring gap으로 인해
+이번에도 등록하지 않았다).
 
 이 모듈이 관리하는 것: feature identity, component/family ownership,
 V1 scope contract, verification/precondition 여부(scope와 orthogonal,
@@ -144,7 +152,31 @@ class FeatureDefinition(BaseModel):
     필드가 되기 때문, §38.12). **`NOT_IMPLEMENTED`(evaluator_id=None)와
     runtime `AvailabilityStatus.UNAVAILABLE`은 다른 축이다** -- 전자는
     "이 feature를 계산할 코드가 없다"(software capability), 후자는
-    "코드는 있는데 이번 평가에서 값을 못 구했다"(data/runtime state)."""
+    "코드는 있는데 이번 평가에서 값을 못 구했다"(data/runtime state).
+
+    §40 correction: `default_requirement_role`이 `RequirementRole | None`
+    (기본값 `None`)으로 바뀌었다 -- 원래는 required `RequirementRole`이었다.
+    §39가 registry를 12개 신규 entry로 채우면서 "이 feature가 없으면
+    critical-path coverage가 깨지는가"에 대해 실제로는 근거가 없는
+    항목에도 `REQUIRED`/`OPTIONAL` 같은 구체적인 값을 강제로 채워야
+    했다(스키마가 다른 선택지를 주지 않았기 때문) -- 이는 §39 자체
+    보고서가 "OPEN"/"강한 근거로 도달한 값 아님"이라고 명시한 상태와
+    모순이었다(§40.1). **`None`은 "coverage default role이 아직
+    design-time에 확정되지 않았다"는 뜻이다** -- 다음과 절대 혼동하지
+    않는다:
+    - `RequirementRole.OPTIONAL`(coverage 관점에서 "선택적이라고 확정
+      판단됨")과 다르다 -- `None`은 판단을 아직 안 한 것이고, `OPTIONAL`
+      은 "선택적"이라고 적극적으로 판단한 것이다.
+    - `RequirementRole.NOT_APPLICABLE`(특정 종목에 해당 없음이라고
+      확정 판단됨, runtime에서도 쓰이는 값)과도 다르다.
+    - runtime `AvailabilityStatus`(이 필드는 애초에 존재하지 않는
+      축 -- `FeatureDefinition`은 design-time 모델이라 runtime 값을
+      담지 않는다)와도 다르다.
+    `scope_status`(V1 scope)에서 `default_requirement_role`을 자동
+    유도하는 규칙은 존재하지 않는다(코드 어디에도 그런 매핑 로직이
+    없다) -- `V1_REQUIRED`이면서 `default_requirement_role=None`인
+    feature, `V1_OPTIONAL`/`V1_BLOCKED`이면서도 마찬가지인 feature가
+    모두 유효하게 표현 가능하다(§40.7)."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -157,7 +189,10 @@ class FeatureDefinition(BaseModel):
     # 빈 tuple = 현재 알려진 verification precondition 없음.
     verification_requirements: tuple[str, ...] = Field(default_factory=tuple)
 
-    default_requirement_role: RequirementRole
+    # None = coverage default role이 design-time에 아직 확정되지 않음
+    # (§40 correction) -- RequirementRole.OPTIONAL/NOT_APPLICABLE과
+    # 구분되는 별개의 "미확정" 상태다. 위 클래스 docstring 참고.
+    default_requirement_role: RequirementRole | None = None
     directionality: Directionality | None = None
     applicability: FeatureApplicability
 
@@ -242,9 +277,269 @@ _OPERATING_MARGIN_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     evaluator_version="v1",
 )
 
+# ---- §39 Complete V1 Feature Catalog: 신규 등록 (evaluator 전부 미구현) ----
+#
+# 아래 항목은 전부 evaluator_id/evaluator_version을 생략한다(기본값
+# None, §38 correction) -- feature identity만 선언할 뿐 어떤 evaluator도
+# 구현하지 않는다(§39.14). 각 항목의 상세 분류 근거(REGISTER_NOW 판단
+# 이유, raw fact/reference input과의 구분)는 dev-log §39를 참고한다 --
+# 여기서는 §29.2 FROZEN 표에 이미 기록된 사실만 옮긴다.
+
+_NET_MARGIN_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
+    feature_id="fundamental.profitability.net_margin",
+    component=Component.FUNDAMENTAL,
+    feature_family="profitability",
+    scope_status=FeatureScopeStatus.V1_REQUIRED,
+    verification_requirements=(),
+    # §40.4 UNRESOLVED: ROE/Operating Margin의 REQUIRED는 기존 evaluator
+    # 동작을 옮긴 것(§24.8/§37)이지, Net Margin은 그런 replicated
+    # precedent가 없다 -- "같은 family+V1_REQUIRED니까 REQUIRED"는 금지된
+    # 자동 유도 논리이므로 None으로 둔다.
+    default_requirement_role=None,
+    directionality=Directionality.HIGHER_IS_BETTER,
+    # Operating Margin과 동일한 revenue-dependency 구조적 제약(§26.2/§28.5).
+    applicability=FeatureApplicability.REVIEW_REQUIRED,
+    required_inputs=("financial_facts.features.annual[latest].net_margin",),
+)
+
+_REVENUE_GROWTH_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
+    feature_id="fundamental.observed_growth_quality.revenue_growth",
+    component=Component.FUNDAMENTAL,
+    # §24.2 family 목록: "Observed Growth Quality"는 Profitability와
+    # 구분되는 독립 family다 -- Growth 항목을 profitability에 합치지
+    # 않는다(§39.2).
+    feature_family="observed_growth_quality",
+    scope_status=FeatureScopeStatus.V1_REQUIRED,
+    verification_requirements=(),
+    # §40.4 UNRESOLVED: family(observed_growth_quality)에 3개 feature가
+    # 있어 "family의 유일한 대표"라는 근거도 성립하지 않는다 -- 근거
+    # 없이 REQUIRED를 채우지 않는다.
+    default_requirement_role=None,
+    directionality=Directionality.HIGHER_IS_BETTER,
+    # revenue 기반이라 Operating Margin과 동일한 applicability 제약을 받는다.
+    applicability=FeatureApplicability.REVIEW_REQUIRED,
+    # analysis.py의 FinancialFeatures.yoy/trends는 metric별로 독립된
+    # entry다(FinancialMetric.REVENUE) -- 단일 dotted path가 아니라 두
+    # 개의 semantic path로 표현한다(§39.2).
+    required_inputs=(
+        "financial_facts.features.yoy[metric=REVENUE]",
+        "financial_facts.features.trends[metric=REVENUE]",
+    ),
+)
+
+_OPERATING_PROFIT_GROWTH_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
+    feature_id="fundamental.observed_growth_quality.operating_profit_growth",
+    component=Component.FUNDAMENTAL,
+    feature_family="observed_growth_quality",
+    scope_status=FeatureScopeStatus.V1_REQUIRED,
+    verification_requirements=(),
+    # §40.4 UNRESOLVED: 위 Revenue Growth와 동일한 이유(family 내 3개
+    # 중 하나, replicated evaluator precedent 없음).
+    default_requirement_role=None,
+    directionality=Directionality.HIGHER_IS_BETTER,
+    # 영업이익 계정 자체가 없는 업종 가능성이 §26.2 실측으로 완전히
+    # 배제되지 않았다 -- 보수적으로 REVIEW_REQUIRED(§39.2).
+    applicability=FeatureApplicability.REVIEW_REQUIRED,
+    required_inputs=(
+        "financial_facts.features.yoy[metric=OPERATING_PROFIT]",
+        "financial_facts.features.trends[metric=OPERATING_PROFIT]",
+    ),
+)
+
+_NET_INCOME_GROWTH_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
+    feature_id="fundamental.observed_growth_quality.net_income_growth",
+    component=Component.FUNDAMENTAL,
+    feature_family="observed_growth_quality",
+    scope_status=FeatureScopeStatus.V1_REQUIRED,
+    verification_requirements=(),
+    # §40.4 UNRESOLVED: 위 두 Growth feature와 동일한 이유.
+    default_requirement_role=None,
+    directionality=Directionality.HIGHER_IS_BETTER,
+    # 순이익 계정은 §26.2에서 KB금융(금융지주) 포함 전 업종에 존재함이
+    # 실측 확인됐다 -- revenue/영업이익과 달리 UNIVERSAL(§39.2, §40.5에서
+    # applicability는 이 판단 그대로 재확인했다 -- default_requirement_role
+    # 미확정과는 별개 축이다).
+    applicability=FeatureApplicability.UNIVERSAL,
+    required_inputs=(
+        "financial_facts.features.yoy[metric=NET_INCOME]",
+        "financial_facts.features.trends[metric=NET_INCOME]",
+    ),
+)
+
+_DEBT_RATIO_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
+    feature_id="fundamental.financial_resilience.debt_ratio",
+    component=Component.FUNDAMENTAL,
+    feature_family="financial_resilience",
+    # §29.2 표 행 이름은 "Debt Ratio(비금융)"이지만 §29.3이 이 한정을
+    # "review 완료 전까지의 임시 scope 한정"이라고 명시했다 -- scope_status
+    # 자체는 변경하지 않는다(§39.3, 업종 부적합 가능성 != V1_REQUIRED
+    # scope 축소).
+    scope_status=FeatureScopeStatus.V1_REQUIRED,
+    verification_requirements=(),
+    # §40.3/§40.4 UNRESOLVED: financial_resilience family에서 현재
+    # 유일하게 등록된 feature라 "없으면 family 전체 coverage가 0"이라는
+    # 주장도 가능하지만, 이는 register 시점의 우연한 family 구성에
+    # 의존하는 추론이라 ROE류의 replicated-precedent 근거와 질이 다르다
+    # -- 이런 간접 추론까지 CONFIRMED로 인정하면 "V1_REQUIRED -> REQUIRED"
+    # 자동 유도와 실질적으로 구분이 안 된다고 판단해 None으로 둔다(향후
+    # family 구성이 바뀌면 재검토).
+    default_requirement_role=None,
+    directionality=Directionality.LOWER_IS_BETTER,
+    # §29.3 FINANCIAL_SECTOR_APPLICABILITY_REVIEW_REQUIRED 목록에 포함,
+    # 여전히 OPEN.
+    applicability=FeatureApplicability.REVIEW_REQUIRED,
+    required_inputs=("financial_facts.features.annual[latest].debt_ratio",),
+)
+
+_ROA_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
+    feature_id="fundamental.profitability.roa",
+    component=Component.FUNDAMENTAL,
+    # §24.2: ROA는 Profitability family 소속(ROE/ROIC/Margin과 동일)이지
+    # Capital Efficiency가 아니다(§39.2).
+    feature_family="profitability",
+    scope_status=FeatureScopeStatus.V1_OPTIONAL,
+    verification_requirements=(),
+    # §40.1/§40.4 UNRESOLVED correction: §39는 여기에 OPTIONAL을 넣고
+    # "OPEN"이라고 보고서에 별도로 적었다 -- 이는 registry 값과 보고서
+    # 서술이 모순되는 상태였다. UNKNOWN/UNRESOLVED != OPTIONAL이므로
+    # None으로 correction한다(V1_OPTIONAL -> OPTIONAL 자동 유도 금지).
+    default_requirement_role=None,
+    directionality=Directionality.HIGHER_IS_BETTER,
+    # net_income/total_assets 둘 다 금융업 포함 전 업종에 존재(§26.2).
+    applicability=FeatureApplicability.UNIVERSAL,
+    required_inputs=(
+        "financial_facts.current.net_income",
+        "financial_facts.current.total_assets",
+    ),
+)
+
+_ASSET_TURNOVER_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
+    feature_id="fundamental.capital_efficiency.asset_turnover",
+    component=Component.FUNDAMENTAL,
+    feature_family="capital_efficiency",
+    scope_status=FeatureScopeStatus.V1_OPTIONAL,
+    verification_requirements=(),
+    # §40.1/§40.4 UNRESOLVED correction: ROA와 동일한 이유.
+    default_requirement_role=None,
+    directionality=Directionality.HIGHER_IS_BETTER,
+    # revenue 기반 -- §29.3 review 목록에 포함.
+    applicability=FeatureApplicability.REVIEW_REQUIRED,
+    required_inputs=(
+        "financial_facts.current.revenue",
+        "financial_facts.current.total_assets",
+    ),
+)
+
+_ROIC_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
+    feature_id="fundamental.capital_efficiency.roic",
+    component=Component.FUNDAMENTAL,
+    feature_family="capital_efficiency",
+    # §29.2: raw ingredient(Invested Capital 분모) 자체가 불안정 --
+    # V1_BLOCKED. identity(ROIC라는 개념 자체)는 표준적이고 명확해
+    # evaluator 없이도 등록 가능하다고 판단한다(§39.4).
+    scope_status=FeatureScopeStatus.V1_BLOCKED,
+    verification_requirements=(
+        "invested capital denominator account naming unstable across companies (§29.2)",
+    ),
+    # §40.1/§40.4 UNRESOLVED correction: V1_BLOCKED feature에도 OPTIONAL을
+    # 자동으로 주지 않는다 -- coverage 관점의 role 판단 자체를 아직
+    # 안 했다는 것을 그대로 표현한다.
+    default_requirement_role=None,
+    directionality=Directionality.HIGHER_IS_BETTER,
+    applicability=FeatureApplicability.REVIEW_REQUIRED,
+    required_inputs=(),
+)
+
+_EPS_GROWTH_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
+    feature_id="fundamental.observed_growth_quality.eps_growth",
+    component=Component.FUNDAMENTAL,
+    feature_family="observed_growth_quality",
+    # §29.2: 과거 발행주식수 source 없음 -- V1_BLOCKED. identity(순수
+    # EPS 증가율)는 명확하다(§39.4).
+    scope_status=FeatureScopeStatus.V1_BLOCKED,
+    verification_requirements=("historical shares outstanding series not available (§29.2)",),
+    # §40.1/§40.4 UNRESOLVED correction: ROIC와 동일한 이유.
+    default_requirement_role=None,
+    directionality=Directionality.HIGHER_IS_BETTER,
+    applicability=FeatureApplicability.UNIVERSAL,
+    required_inputs=(),
+)
+
+_TRAILING_PER_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
+    feature_id="valuation.earnings_based.trailing_per",
+    component=Component.VALUATION,
+    feature_family="earnings_based",
+    scope_status=FeatureScopeStatus.V1_REQUIRED,
+    verification_requirements=(),
+    # §40.3/§40.4 UNRESOLVED: earnings_based family에 Earnings Yield도
+    # 있어 "유일한 대표" 근거도 약하고, replicated evaluator precedent도
+    # 없다.
+    default_requirement_role=None,
+    # PER는 ROE처럼 단순 HIGHER/LOWER_IS_BETTER가 아니다 -- 극단적으로
+    # 낮은 PER는 저평가가 아니라 실적 악화/부실 신호일 수 있다(§39.9).
+    # 이 axis를 numeric threshold 없이 이미 존재하는
+    # `Directionality.CONTEXT_DEPENDENT`로 표현한다(enum 확장 불필요).
+    # directionality와 default_requirement_role은 독립 축이다 -- 후자가
+    # 미확정이라고 전자의 판단(§39.9, 이번 audit에서 재확인)도 흔들리지
+    # 않는다(§40.6).
+    directionality=Directionality.CONTEXT_DEPENDENT,
+    applicability=FeatureApplicability.UNIVERSAL,
+    required_inputs=("financial_facts.current.per",),
+)
+
+_PBR_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
+    feature_id="valuation.asset_based.pbr",
+    component=Component.VALUATION,
+    feature_family="asset_based",
+    scope_status=FeatureScopeStatus.V1_REQUIRED,
+    verification_requirements=(),
+    # §40.3/§40.4 UNRESOLVED: asset_based family의 유일한 등록 feature라
+    # Debt Ratio와 동일한 "family 전체 coverage가 0" 간접 추론이
+    # 가능하지만, 같은 이유로 이번 audit에서는 CONFIRMED로 인정하지
+    # 않기로 일관되게 판단했다(§40.3 Debt Ratio 참고).
+    default_requirement_role=None,
+    # PER와 동일한 이유(극단적 저PBR = 자산 부실/청산가치 우려 신호
+    # 가능성, §39.9) -- CONTEXT_DEPENDENT. directionality는 이번 audit
+    # 대상이 아니며 재확인 결과 변경 없음(§40.6).
+    directionality=Directionality.CONTEXT_DEPENDENT,
+    applicability=FeatureApplicability.UNIVERSAL,
+    required_inputs=("financial_facts.current.pbr",),
+)
+
+_EARNINGS_YIELD_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
+    feature_id="valuation.earnings_based.earnings_yield",
+    component=Component.VALUATION,
+    feature_family="earnings_based",
+    scope_status=FeatureScopeStatus.V1_OPTIONAL,
+    verification_requirements=(),
+    # §40.1/§40.4 UNRESOLVED correction: 다른 V1_OPTIONAL entry들과 동일한
+    # 이유.
+    default_requirement_role=None,
+    # yield framing은 관례상 monotonic하게 다뤄진다(PER의 raw multiple
+    # framing과 달리) -- HIGHER_IS_BETTER로 유지하되, 동일한 극단값
+    # distress 신호 가능성은 PER만큼 크지 않다고 판단한다(§39.9).
+    directionality=Directionality.HIGHER_IS_BETTER,
+    applicability=FeatureApplicability.UNIVERSAL,
+    # 1/PER로 파생되는 값이라 raw ingredient는 PER와 동일하다 -- 새 raw
+    # data가 필요하지 않다.
+    required_inputs=("financial_facts.current.per",),
+)
+
 _ALL_DEFINITIONS: Final[tuple[FeatureDefinition, ...]] = (
     _ROE_DEFINITION,
     _OPERATING_MARGIN_DEFINITION,
+    _NET_MARGIN_DEFINITION,
+    _REVENUE_GROWTH_DEFINITION,
+    _OPERATING_PROFIT_GROWTH_DEFINITION,
+    _NET_INCOME_GROWTH_DEFINITION,
+    _DEBT_RATIO_DEFINITION,
+    _ROA_DEFINITION,
+    _ASSET_TURNOVER_DEFINITION,
+    _ROIC_DEFINITION,
+    _EPS_GROWTH_DEFINITION,
+    _TRAILING_PER_DEFINITION,
+    _PBR_DEFINITION,
+    _EARNINGS_YIELD_DEFINITION,
 )
 
 if len({d.feature_id for d in _ALL_DEFINITIONS}) != len(_ALL_DEFINITIONS):
