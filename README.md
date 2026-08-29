@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** RE-02 Final Decisions(scoring architecture 6개 설계 질문 확정) → RE-04(Final Recommendation Architecture) → Recommendation Engine v1 scoring/구현 → UX-02(InvestorProfile persistence) — RE-01~RE-03.3 순수 조사 전부 완료(KIS Developers 실제 인증 성공 + Forward Feature Verification Matrix 확정: Broker Investment Opinion/Target Price 계열만 v1 후보로 채택, `estimate-perform` 기반 Forward Revenue/OpProfit/NetIncome/EPS/PER/PBR/ROE 및 `rcmd_name` 기반 Consensus Investment Opinion은 신뢰도 문제로 제외)
+> **Next:** RE-05(Scoring & Weight Policy) Step 1(Feature → Component Score)부터 Step 2~12 → Recommendation Engine v1 구현 → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1(Event & Disclosure Intelligence Overlay) Step 1~14 전체 FROZEN**(numeric threshold/weight/calibration은 전부 RE-05로 DEFERRED, 상세는 `docs/dev-log/2026-08-29.md`)
 
 ---
 
@@ -2490,6 +2490,10 @@ RE-01(구조화된 재무 feature) commit·push 이후 Recommendation Engine v1�
 
 **결론: Forward Opportunity Layer v1 후보는 Broker Investment Opinion/Target Price 계열(및 그 파생 — Consensus Target Price, Implied Upside, Broker Opinion Revision)로 좁혀졌다.** `estimate-perform` 기반 Forward Revenue/Operating Profit/Net Income/EPS/PER/PBR/ROE와 `rcmd_name` 기반 Consensus Investment Opinion은 row semantics 미확정 및 reliability 불일치로 v1에서 제외한다. "Estimate Revision"이라는 모호한 이름 대신, 실제로 검증된 범위가 개별 브로커 리포트의 의견 변경(`invt_opnn` vs `rgbf_invt_opnn`) 추적임을 분명히 하기 위해 **Broker Opinion Revision**으로 명명한다 — EPS/영업이익 consensus estimate의 revision이 검증됐다는 뜻이 아니다. 상세는 dev-log §20.3/§21 참고.
 
+이어서 RE-03.4로 Kiwoom의 Valuation/Investor Flow/Historical/Technical 데이터를 실측 검증했고(Kiwoom 공식 머신리더블 스펙 `kiwoom_api_spec.json`을 1차 자료로 활용), 이 모든 데이터 조사 결과를 종합해 **RE-04 Final Recommendation Architecture**를 설계했다 — Recommendation Engine 구현 직전의 pipeline/component/contract 설계 단계다. base architecture(pipeline, Core Attractiveness/Market Confirmation/Opportunity State, Risk/Coverage/Confidence 분리, Stock Research/Portfolio Strategy 경계, `as_of` 원칙)는 **FROZEN**으로 확정했고, 설계 도중 필요성이 드러난 **Amendment 1(Event & Disclosure Intelligence Overlay — 최신 공시/뉴스 기반 catalyst·risk를 Core 위에 얹는 별도 layer)**의 Step 1~5(Source/Lifecycle/Normalization/Contract/Taxonomy 방향)까지 확정했다.
+
+같은 날짜에 이어진 세션에서 Amendment Step 6(Materiality & Impact Model)부터 Step 14(Amendment v1 Scope Freeze)까지 마저 확정해 **RE-04 Final Recommendation Architecture + Amendment 1을 전체 FROZEN**으로 마무리했다. Materiality는 `HIGH`/`MEDIUM`/`LOW`/`UNKNOWN` 4-level semantic으로만 정의하고 계산(Evaluator)과 threshold(PolicyConfig)의 책임을 분리했으며, Verification(사실 확인)과 Confidence(해석 신뢰도)를 Claim 단위로 분리했다. Investment Interpretation(Catalyst/Headwind/Risk/Context)은 Event 자체의 속성이 아니라 Event가 가질 수 있는 여러 `ImpactPath`별 속성으로 설계해 하나의 Event가 서로 다른 방향의 여러 interpretation을 동시에 가질 수 있게 했다. Stock Research와 Portfolio Strategy의 책임 경계를 `StockOpportunityAssessment`(status: ACTIONABLE/INSUFFICIENT_EVIDENCE, classification: ATTRACTIVE/NEUTRAL/UNATTRACTIVE) → `PortfolioActionRecommendation`(BUY/ADD/HOLD/REDUCE/EXIT 등) 2단 contract로 명시해 "Research는 Portfolio Decision이 아니다" 원칙을 구조화했고, Recommendation Policy는 weighted sum이 아니라 Eligibility → Core → Event Context → Priced-In → Risk → Market Confirmation → Correlation/Conflict → Coverage/Confidence 순서의 staged decision으로 정의했다. Priced-In LOW는 그 자체로 매수 신호가 아니며(방향은 Catalyst/Headwind가 별도로 결정), Market Confirmation은 mandatory veto가 아니고, missing/failure는 어디서도 neutral로 치환하지 않는다는 기존 원칙을 Event Intelligence 전 영역에 일관되게 적용했다. **RE-04/Amendment 1 전 과정에서 실제 numeric threshold·weight·score·calibration 값은 의도적으로 하나도 정하지 않았다** — 이 전부는 다음 단계인 **RE-05(Scoring & Weight Policy)**로 넘긴다. 상세는 아래 Phase 7과 `docs/dev-log/2026-08-29.md` §23 참고.
+
 ```text
 Foundation                         completed
     │
@@ -2583,14 +2587,34 @@ Candidate Discovery Theme Axis (UX-01) completed
     ▼
 Recommendation Engine Investigation  completed (조사만, 구현 아님)
     ├── RE-01 구조화된 재무 feature(financial_features)                 ✓ (Phase 6에 이미 반영)
-    ├── RE-02 Scoring Architecture 조사 — 6개 최종 결정 질문 미확정      ✓ (조사)
+    ├── RE-02 Scoring Architecture 조사                                  ✓ (조사)
     ├── RE-03 Forward-Looking Data Source 조사                          ✓ (조사)
     ├── RE-03.1 KIS 공식 스키마 조사(response schema 미문서화 확인)      ✓ (조사)
     ├── RE-03.2 KIS 라이브 인증 + 3개 TR 실측(재시도 후 성공)            ✓ (조사)
-    └── RE-03.3 Forward Feature Verification Matrix 확정                 ✓ (조사)
+    ├── RE-03.3 KIS Forward Feature Verification Matrix 확정             ✓ (조사)
+    └── RE-03.4 Valuation/Investor Flow/Historical/Technical 데이터 검증  ✓ (조사, Kiwoom)
     │
     ▼
-RE-02 Final Decisions               ← NEXT (scoring architecture 6개 설계 질문 확정)
+RE-04 Final Recommendation Architecture   FROZEN (base + Amendment 1 전체)
+    ├── Pipeline + 10개 architecture principle 확정                      ✓
+    ├── Core Attractiveness / Market Confirmation / Opportunity State    ✓
+    ├── ComponentResult / RiskResult contract 확정                       ✓
+    ├── Coverage(evidence 존재) vs Confidence(evidence 신뢰도) 분리       ✓
+    ├── Stock Research vs Portfolio Strategy 책임 경계 재확인             ✓
+    ├── AS_OF 원칙(look-ahead bias 방지) 신규 확정                       ✓
+    ├── Amendment 1 Step 1~5 — Event Source/Lifecycle/Normalization/Contract/Taxonomy 방향 ✓
+    ├── Amendment 1 Step 6 — Materiality & Impact Model (Evaluator/Policy/PolicyConfig 분리) ✓
+    ├── Amendment 1 Step 7 — Verification(Claim 단위) / Confidence(Interpretation 단위) 분리 ✓
+    ├── Amendment 1 Step 8 — Investment Interpretation(Catalyst/Headwind/Risk/Context는 ImpactPath 속성) ✓
+    ├── Amendment 1 Step 9 — 기존 Component 관계 audit(Priced-In/Correlation/Conflict 포함)     ✓
+    ├── Amendment 1 Step 10 — Recommendation Policy Integration(StockOpportunityAssessment → PortfolioActionRecommendation 2단 contract, staged decision) ✓
+    ├── Amendment 1 Step 11 — LLM vs Deterministic Logic 최종 경계                              ✓
+    ├── Amendment 1 Step 12 — Failure / Missing News / Missing Disclosure semantics             ✓
+    ├── Amendment 1 Step 13 — Evidence Lineage 최종 audit                                        ✓
+    └── Amendment 1 Step 14 — Amendment v1 Scope Freeze(numeric 항목 전부 RE-05로 DEFERRED 목록화) ✓
+    │
+    ▼
+RE-05 — Scoring & Weight Policy, Step 1(Feature → Component Score)   ← NEXT (상세는 dev-log 2026-08-29 §23 참고)
 ```
 
 ---
@@ -2674,32 +2698,43 @@ RE-02 Final Decisions               ← NEXT (scoring architecture 6개 설계 �
 
 ## Phase 7 — Recommendation Engine (scoring/ranking)
 
-> Stock Universe 확보와 조건 기반 후보 탐색은 Phase 7a(Candidate Discovery)로 먼저 구현했고, 종목별 구조화된 재무 feature는 Phase 6의 RE-01로 먼저 마련했다. 이 Phase는 그 위에 얹는 scoring/ranking 기반 전체 Recommendation Engine이다 — 아직 미착수. 구현 착수 전 순수 조사(RE-02/RE-03/RE-03.1/RE-03.2/RE-03.3, production code 미변경)를 완료했다:
+> Stock Universe 확보와 조건 기반 후보 탐색은 Phase 7a(Candidate Discovery)로 먼저 구현했고, 종목별 구조화된 재무 feature는 Phase 6의 RE-01로 먼저 마련했다. 구현 착수 전 순수 데이터 조사(RE-02/RE-03~RE-03.4)와 architecture 설계(RE-04, Amendment 1 포함 전체 FROZEN)를 완료했다 — **아직 구현 미착수**. 다음 단계는 RE-05(Scoring & Weight Policy).
 >
-> - **RE-02 (Scoring Architecture Investigation)**: Financial Quality/Growth-Trend/Valuation/Price Position/Risk 5개 컴포넌트의 데이터 실현 가능성 검토. absolute/relative/hybrid 채택 등 6개 최종 결정은 아직 미확정 — **다음 세션의 최우선 과제(RE-02 Final Decisions)**.
-> - **RE-03 (Forward-Looking Data Source Investigation)**: Fundamental layer 옆에 둘 Forward Opportunity Layer(Forward EPS 등)의 실제 데이터 소스 조사. Kiwoom/OpenDART에는 forward 데이터 없음(Grounded Catalyst만 OpenDART `report_nm`으로 제한적 확보). KIS Developers에 관련 TR 3개(`estimate-perform`/`invest-opinion`/`invest-opbysec`) 실존 확인.
-> - **RE-03.1 (KIS 공식 스키마 조사)**: request 파라미터는 공식 Postman/MCP config로 확정. response schema는 공식 문서로 확인 불가(라이브 호출 필요).
-> - **RE-03.2 (KIS 라이브 검증)**: 최초 시도는 `403 EGW00103`으로 실패(원인: `.env`의 `KIS_APP_KEY`에 Kiwoom App Key가 잘못 들어감). 실제 KIS App Key/Secret으로 교체 후 재시도해 인증 성공, `estimate-perform`/`invest-opinion`/`invest-opbysec` 3개 TR 전부 실제 호출·schema·값 검증 완료.
-> - **RE-03.3 (Forward Data Semantics & Reliability Verification)**: 업종 분산 10종목 cross-validation + 공식자료 재조사. **v1 채택**: Broker Investment Opinion, Broker Target Price(+ 파생: Consensus Target Price, Implied Upside, Broker Opinion Revision). **v1 제외**: `estimate-perform` 기반 Forward Revenue/OpProfit/NetIncome/EPS/PER/PBR/ROE(row semantics 미문서화, 삼성전자·SK하이닉스에서만 재현된 이상치로 종목별 reliability 불일치, 원인 미확인·추측 안 함), `rcmd_name` 기반 Consensus Investment Opinion(semantics 미확정).
+> **데이터 조사** (production code 미변경):
 >
-> 상세는 `docs/dev-log/2026-08-28.md` §19~§21 참고.
+> - **RE-02**: Financial Quality/Growth-Trend/Valuation/Price Position/Risk 5개 컴포넌트의 데이터 실현 가능성 검토.
+> - **RE-03~RE-03.3**: KIS Developers 라이브 검증 완료. **v1 채택**: Broker Investment Opinion/Target Price(+ 파생 Consensus Target Price/Implied Upside/Broker Opinion Revision). **v1 제외**: `estimate-perform` 기반 Forward Revenue/OpProfit/NetIncome/EPS/PER/PBR/ROE(row semantics 미문서화 + 종목별 reliability 불일치), `rcmd_name` 기반 Consensus Investment Opinion.
+> - **RE-03.4**: Kiwoom Valuation/Investor Flow/Historical/Technical 데이터 실측 검증(공식 spec `kiwoom_api_spec.json` 기반). **v1 채택**: Current PER/PBR/시가총액(`ka10001.mac`, 기존 통합 API에 이미 존재), Investor Flow(5D/20D/60D 순매수 `ka10061`, 추정평균매수가 `ka10045`, flow intensity), OHLCV historical(수정주가 `upd_stkpc_tp` 포함, 삼성전자 기준 최대 40년 depth 확인), Momentum/MA/52W/Volatility/Drawdown 전부. **v1 제외**: Peer-relative Valuation(기존 Industry axis `upName`가 우선주·이업종 지주사를 같은 그룹으로 묶어 UNRELIABLE로 확인됨), Historical PER/PBR percentile(전용 API 없음 + 표본 부족), Dividend Yield(필드 자체 없음).
+>
+> **Architecture 설계 — RE-04 Final Recommendation Architecture(base) FROZEN + Amendment 1 Step 1~5 확정**:
+>
+> ```text
+> Data Acquisition → Deterministic Feature Layer → Independent Component Evaluators
+>   → Core Attractiveness(Fundamental/Valuation/Forward/Investor Flow) × Market Confirmation(Momentum/Technical)
+>   → Opportunity State → Risk + Coverage + Confidence(완전 분리) → Recommendation Policy
+>   → Structured StockRecommendation → Grounded LLM Explanation
+> ```
+>
+> LLM은 numeric scoring engine으로 쓰지 않고 evidence 기반 explanation에만 쓴다. `NO DATA != NEUTRAL`, component 실패가 전체 Stock Research 실패를 의미하지 않는다, 모든 evidence는 분석 기준시점 `as_of` 이후 발행된 것을 쓰지 않는다(look-ahead bias 방지) 등 10개 architecture principle을 확정했다. Amendment 1로 **Event & Disclosure Intelligence Overlay**(공시·뉴스 기반 catalyst/risk를 반영하는 별도 overlay — Core의 새 weighted component가 아님)를 추가했고, Event source(OpenDART 우선 + News provider abstraction, provider 미확정)/lifecycle/normalization/taxonomy 방향(Step 1~5)에 이어 Materiality & Impact Model(Step 6)/Verification·Confidence(Step 7)/Investment Interpretation(Step 8)/기존 Component 관계 audit(Step 9, Priced-In·Correlation·Conflict 포함)/Recommendation Policy Integration(Step 10, Stock Research → `StockOpportunityAssessment` → Portfolio Strategy → `PortfolioActionRecommendation` 책임 분리)/LLM-Deterministic 경계(Step 11)/Failure semantics(Step 12)/Evidence Lineage(Step 13)/Scope Freeze(Step 14)까지 **Step 1~14 전체를 FROZEN**으로 확정했다. **RE-04/Amendment 1 전 과정에서 numeric materiality threshold/component weight/aggregation formula/calibration 값은 의도적으로 하나도 정하지 않았다** — 전부 다음 단계인 **RE-05(Scoring & Weight Policy)**로 DEFERRED했다.
+>
+> 상세는 `docs/dev-log/2026-08-28.md` §19~§21(RE-02~RE-03.3 — RE-03.4는 이 파일에 없음, 위 RE-03.4 요약이 현재 유일한 기록), `docs/dev-log/2026-08-29.md`(RE-04 base + Amendment 1 Step 1~5는 §1~§21, Amendment 1 Step 6~14 Final Freeze + RE-05 Handoff는 §23) 참고.
 
-- [ ] Recommendation data models (RecommendedStock/RecommendationResult)
-- [ ] Fundamental Score
-- [ ] Earnings Momentum Score
-- [ ] Valuation Score
-- [ ] Price Momentum Score
-- [ ] Foreign / Institution Flow Score
-- [ ] Catalyst Score
-- [ ] Risk Penalty
-- [ ] Portfolio Fit Score
-- [ ] Quantitative scoring engine
-- [ ] Top-N recommendation (scoring 기반)
-- [ ] Recommendation evidence tracking
-- [ ] RecommendationResult generation
-- [ ] Agent-based qualitative evaluation
-- [ ] Hybrid recommendation
-- [ ] Backtesting / scoring validation
+- [ ] Recommendation data models (`StockRecommendation`/`ComponentResult`/`RiskResult`/`InvestmentEvent`)
+- [ ] Data Acquisition / Deterministic Feature Layer
+- [ ] Core Attractiveness — Fundamental Quality
+- [ ] Core Attractiveness — Valuation Attractiveness
+- [ ] Core Attractiveness — Forward Opportunity
+- [ ] Core Attractiveness — Investor Flow
+- [ ] Market Confirmation — Momentum
+- [ ] Market Confirmation — Technical Confirmation
+- [ ] Opportunity State 산출 (Core × Market)
+- [ ] Risk (Base + Cross-Component)
+- [ ] Coverage / Confidence 분리 평가
+- [ ] Event & Disclosure Intelligence Overlay (Amendment 1)
+- [ ] Recommendation Policy / Guardrail (double-counting 등, RE-05)
+- [ ] Portfolio Fit (Portfolio Strategy Agent 연계 — Stock Research에서는 생성하지 않음)
+- [ ] Grounded LLM Explanation / Presentation
+- [ ] Backtesting / calibration (RE-05 이후)
 
 ## Phase 7a — Candidate Discovery ✅ v1 완료
 
