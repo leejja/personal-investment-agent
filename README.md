@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** RE-05(Scoring & Weight Policy) Step 1(Feature → Component Score)부터 Step 2~12 → Recommendation Engine v1 구현 → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1(Event & Disclosure Intelligence Overlay) Step 1~14 전체 FROZEN**(numeric threshold/weight/calibration은 전부 RE-05로 DEFERRED, 상세는 `docs/dev-log/2026-08-29.md`)
+> **Next:** RE-05 V1 Minimum Viable Feature Set 사용자 검토/확정 → Recommendation data model 설계 착수 → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate, numeric parameter는 전부 OPEN)** + **RE-05 Data Availability Audit 완료**(상세는 `docs/dev-log/2026-08-29.md` §25)
 
 ---
 
@@ -2614,7 +2614,14 @@ RE-04 Final Recommendation Architecture   FROZEN (base + Amendment 1 전체)
     └── Amendment 1 Step 14 — Amendment v1 Scope Freeze(numeric 항목 전부 RE-05로 DEFERRED 목록화) ✓
     │
     ▼
-RE-05 — Scoring & Weight Policy, Step 1(Feature → Component Score)   ← NEXT (상세는 dev-log 2026-08-29 §23 참고)
+RE-05 Recommendation Scoring / Policy Calibration   IN PROGRESS
+    ├── Step 1~12 Policy/Contract 문서화(FROZEN candidate, numeric parameter는 OPEN) ✓ (dev-log §24)
+    ├── Calibration Protocol(AS_OF/walk-forward/bias guardrail/archetype stress test) 문서화 ✓
+    └── Data Availability Audit — Feature별 AVAILABLE_NOW/DERIVABLE_NOW/SOURCE_AVAILABLE_
+        BUT_NOT_IMPLEMENTED/NEW_SOURCE_REQUIRED/UNAVAILABLE/DEFERRED/UNKNOWN 분류 완료 ✓ (dev-log §25)
+    │
+    ▼
+RE-05 V1 Minimum Viable Feature Set 사용자 검토/확정   ← NEXT (제안 내용은 dev-log 2026-08-29 §25.8 참고)
 ```
 
 ---
@@ -2698,7 +2705,7 @@ RE-05 — Scoring & Weight Policy, Step 1(Feature → Component Score)   ← NEX
 
 ## Phase 7 — Recommendation Engine (scoring/ranking)
 
-> Stock Universe 확보와 조건 기반 후보 탐색은 Phase 7a(Candidate Discovery)로 먼저 구현했고, 종목별 구조화된 재무 feature는 Phase 6의 RE-01로 먼저 마련했다. 구현 착수 전 순수 데이터 조사(RE-02/RE-03~RE-03.4)와 architecture 설계(RE-04, Amendment 1 포함 전체 FROZEN)를 완료했다 — **아직 구현 미착수**. 다음 단계는 RE-05(Scoring & Weight Policy).
+> Stock Universe 확보와 조건 기반 후보 탐색은 Phase 7a(Candidate Discovery)로 먼저 구현했고, 종목별 구조화된 재무 feature는 Phase 6의 RE-01로 먼저 마련했다. 구현 착수 전 순수 데이터 조사(RE-02/RE-03~RE-03.4)와 architecture 설계(RE-04, Amendment 1 포함 전체 FROZEN)를 완료했다 — **아직 구현 미착수**. RE-05(Scoring & Weight Policy)의 Step 1~12 Policy/Contract와 Calibration Protocol도 문서화했다(FROZEN candidate — numeric threshold/weight/calibration parameter는 전부 OPEN, RE-05 Overall = IN PROGRESS, 상세는 `docs/dev-log/2026-08-29.md` §24). 이어서 Data Availability Audit으로 현재 repository/verified API가 RE-05 Feature Contract를 실제로 충족하는지 Feature 단위로 분류했다 — Fundamental Quality 다수는 이미 구현·검증됐지만(AVAILABLE_NOW), Forward Opportunity(consensus 수치 기반)는 여전히 제외 상태이고 Market Cap/Investor Flow/OHLCV historical/Broker Opinion 등은 API는 검증됐으나 서비스 코드가 없는 상태(SOURCE_AVAILABLE_BUT_NOT_IMPLEMENTED)다(상세는 `docs/dev-log/2026-08-29.md` §25). 다음 단계는 이 audit을 근거로 제안한 V1 Minimum Viable Feature Set의 사용자 검토/확정.
 >
 > **데이터 조사** (production code 미변경):
 >
