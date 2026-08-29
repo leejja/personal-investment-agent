@@ -1,15 +1,17 @@
-"""RE-05 CoverageEvaluator -- 첫 deterministic Coverage vertical slice
-(Fundamental only, §43).
+"""RE-05 CoverageEvaluator -- deterministic Coverage vertical slice
+(Fundamental §43, Valuation §44).
 
 `docs/dev-log/2026-08-29.md` §41(Coverage Contract FROZEN)/§42(Family-Level
-Coverage Policy FROZEN)/§43(이 구현의 설계 근거)이 이 모듈의 semantic 근거를
-담는다 -- 이 모듈은 그 두 세션이 이미 확정한 규칙을 코드로 옮길 뿐, 새로운
-policy 결정을 내리지 않는다.
+Coverage Policy FROZEN)/§43(Fundamental 구현)/§44(Valuation 구현)이 이
+모듈의 semantic 근거를 담는다 -- 이 모듈은 그 세션들이 이미 확정한 규칙을
+코드로 옮길 뿐, 새로운 policy 결정을 내리지 않는다.
 
 **입력**: 이미 실행된 `FeatureEvaluationResult`의 목록 하나뿐이다(§41.7 C
 계층 -- FeatureEvaluator는 role을 소유하지 않고, 이 모듈이 canonical
 `FeatureDefinition`과 그 role을 최종 소비한다). vendor model, `StockAnalysis`,
 LLM output, PortfolioContext는 받지 않는다 -- 전부 import하지 않는다.
+`EvaluationContext`(업종/시점 등)도 받지 않는다 -- §44.5 context audit
+결론: 아직 필요 없다(옵션 A 채택, 아래 CONTEXT_DEPENDENT 처리 참고).
 
 **feature universe는 반드시 `feature_registry.list_feature_definitions()`
 (canonical Full V1 Feature Catalog)다** -- 들어온 `feature_results`
@@ -18,6 +20,16 @@ LLM output, PortfolioContext는 받지 않는다 -- 전부 import하지 않는�
 사라지지 않는다 -- `NOT_IMPLEMENTED`(evaluator_id=None)이든
 `RESULT_MISSING`(evaluator는 있는데 이번 cycle에 결과가 없음)이든 항상
 missing 계열 bucket에 남는다.
+
+**CONTEXT_DEPENDENT family(§44.3/§44.4)**: 이 evaluator는 업종 등 runtime
+context가 없어 CONTEXT_DEPENDENT family(예: Valuation의 asset_based)가
+"이번 종목에 critical한지" 판단할 수 없다 -- **그렇다고 universal
+CRITICAL도, universal OPTIONAL도 만들지 않는다.** context-free baseline
+에서는 critical-path gate에서 제외하되(SUPPORTING과 같은 gating 동작),
+그 family가 CONTEXT_DEPENDENT라서 제외됐다는 사실을 별도 warning으로
+남긴다 -- "판단해서 안 중요하다고 결정함"과 "판단할 context가 없어서
+보류함"을 구분한다. 업종별 override는 이 모듈의 책임이 아니다(§44.5 옵션 C,
+미래의 별도 runtime resolver 몫으로 명시적으로 남긴다).
 
 **결정론적**: 동일 input(`feature_results`)이면 항상 동일 output이다.
 LLM 호출, 외부 API 호출, 시계열 계산 없음 -- 이미 평가된 evidence와
@@ -31,8 +43,7 @@ module-level static family-criticality policy(§42.13, §43.4)만 본다.
 - coverage percentage/N-of-M/minimum count/threshold/weight 같은 numeric
   policy(existence-based OR는 counting이 아니라 "존재 여부"만 판단한다,
   §42.1/§43 지시사항 §22).
-- Valuation/Forward/Flow/Market Confirmation coverage(§43.14, 다음 slice로
-  분리).
+- Forward/Flow/Market Confirmation coverage(§44.12, 다음 slice로 분리).
 """
 
 from collections.abc import Mapping, Sequence
@@ -70,9 +81,9 @@ class FamilyCriticality(str, Enum):
     NOT_DECISION_GATING = "not_decision_gating"
 
 
-# §42.4가 확정한 Fundamental 5-family 판정을 그대로 옮긴다 -- 여기서 새로
-# 판단하지 않는다. Valuation/Forward/Flow/Market은 아직 채우지 않는다
-# (§43.14, 다음 slice에서 각 component의 §42 판정을 옮긴다).
+# §42.4/§42.5가 확정한 family 판정을 그대로 옮긴다 -- 여기서 새로 판단하지
+# 않는다. Forward/Flow/Market은 아직 채우지 않는다(§44.12, 다음 slice에서
+# 각 component의 §42 판정을 옮긴다).
 _FAMILY_CRITICALITY: Mapping[tuple[Component, str], FamilyCriticality] = MappingProxyType(
     {
         (Component.FUNDAMENTAL, "profitability"): FamilyCriticality.CRITICAL,
@@ -80,6 +91,19 @@ _FAMILY_CRITICALITY: Mapping[tuple[Component, str], FamilyCriticality] = Mapping
         (Component.FUNDAMENTAL, "cash_earnings_quality"): FamilyCriticality.CURRENTLY_UNSUPPORTED,
         (Component.FUNDAMENTAL, "financial_resilience"): FamilyCriticality.CRITICAL,
         (Component.FUNDAMENTAL, "capital_efficiency"): FamilyCriticality.SUPPORTING,
+        # §42.5 Valuation family policy 그대로.
+        (Component.VALUATION, "earnings_based"): FamilyCriticality.CRITICAL,
+        (Component.VALUATION, "asset_based"): FamilyCriticality.CONTEXT_DEPENDENT,
+        # ev_based/cash_flow_based/relative_context는 등록된 feature가 없다
+        # (§39.5 cascade 종속/미해결) -- cash_earnings_quality와 동일한
+        # 이유로 canonical family 목록에는 포함하되(§44.2, false-completeness
+        # 일관성) 코드 어디에도 이 정확한 문자열로 등록된 FeatureDefinition은
+        # 아직 없다. 향후 실제로 feature가 등록될 때 family 이름이 이
+        # snake_case 관례(earnings_based/asset_based와 동일 변환)와 다르면
+        # 이 key도 함께 갱신해야 한다.
+        (Component.VALUATION, "ev_based"): FamilyCriticality.CURRENTLY_UNSUPPORTED,
+        (Component.VALUATION, "cash_flow_based"): FamilyCriticality.CURRENTLY_UNSUPPORTED,
+        (Component.VALUATION, "relative_context"): FamilyCriticality.CURRENTLY_UNSUPPORTED,
     }
 )
 
@@ -93,6 +117,18 @@ _FUNDAMENTAL_FAMILIES: tuple[str, ...] = (
     "cash_earnings_quality",
     "financial_resilience",
     "capital_efficiency",
+)
+
+# §42.2/§42.5가 재확인한 Valuation 5-family 목록(원 §24.2 canonical 목록
+# 그대로) -- earnings_based/asset_based만 실제로 등록된 feature가 있고
+# 나머지 3개는 Fundamental의 cash_earnings_quality와 동일한 이유로
+# CURRENTLY_UNSUPPORTED로 포함한다(§44.2).
+_VALUATION_FAMILIES: tuple[str, ...] = (
+    "earnings_based",
+    "asset_based",
+    "ev_based",
+    "cash_flow_based",
+    "relative_context",
 )
 
 
@@ -353,24 +389,39 @@ def evaluate_family_coverage(
     )
 
 
-# ============================== Component-level coverage (Fundamental only, §43.14) ==============================
+# ============================== Component-level coverage (§42.14 propagation) ==============================
 
 
-def evaluate_fundamental_coverage(
+def _context_dependent_note(component: Component, family: str) -> str:
+    return (
+        f"{family}: family criticality is CONTEXT_DEPENDENT (component={component.value}) "
+        "-- this evaluator has no runtime context (e.g. industry/sector), so it is "
+        "excluded from the critical-path gate in this context-free baseline. This is "
+        "NOT a judgment that the family is unimportant -- a future runtime policy "
+        "resolver may promote it per stock (§42.5/§44.4, not implemented here)."
+    )
+
+
+def _evaluate_component_coverage(
+    component: Component,
+    families: Sequence[str],
     feature_results: Sequence[FeatureEvaluationResult],
 ) -> CoverageAssessment:
-    """§42.14 component propagation rule의 Fundamental 적용.
+    """§42.14 component propagation rule의 component-agnostic 구현.
 
-    Fundamental critical-path = Profitability(CRITICAL) sufficient AND
-    Financial Resilience(CRITICAL) sufficient. Observed Growth Quality/
-    Capital Efficiency(SUPPORTING)와 Cash/Earnings Quality
-    (CURRENTLY_UNSUPPORTED)는 단독으로 critical-path를 막지 않는다 --
-    다만 그 feature들의 상태도 component-level bucket에서 전부 보인다
-    (§42.4/§42.20 §9: "구현 부족을 숨기기 위해 family를 sufficient
-    처리하지 않는다" -- family를 건너뛰지 않고 전부 평가한 뒤 합친다)."""
+    `evaluate_fundamental_coverage`/`evaluate_valuation_coverage` 둘 다 이
+    함수를 그대로 재사용한다(§44.6: Valuation 때문에 generic 함수를
+    복잡하게 만들지 않는다 -- family 목록만 다르고 로직은 동일하다).
+
+    critical-path = 그 component의 CRITICAL family 전부가 satisfied.
+    SUPPORTING/CURRENTLY_UNSUPPORTED family는 단독으로 critical-path를
+    막지 않는다(§42.14, 기존 Fundamental 동작 그대로). CONTEXT_DEPENDENT
+    family도 이 context-free baseline에서는 동일하게 critical-path 게이트에
+    포함되지 않지만(§44.3), SUPPORTING과 달리 그 이유를 설명하는 warning이
+    항상 추가된다(§44 모듈 docstring 참고) -- "판단 결과 안 중요함"과
+    "판단할 context가 없어 보류함"을 구분한다."""
     family_results = {
-        family: evaluate_family_coverage(Component.FUNDAMENTAL, family, feature_results)
-        for family in _FUNDAMENTAL_FAMILIES
+        family: evaluate_family_coverage(component, family, feature_results) for family in families
     }
 
     # component-level list bucket = 전체 family bucket의 union(순서
@@ -386,20 +437,41 @@ def evaluate_fundamental_coverage(
         "not_applicable": [],
     }
     warnings: list[str] = []
-    for family in _FUNDAMENTAL_FAMILIES:
+    for family in families:
         assessment = family_results[family]
         for key, values in merged.items():
             values.extend(getattr(assessment, key))
         warnings.extend(assessment.warnings)
 
+    context_dependent_families = [
+        family
+        for family in families
+        if get_family_criticality(component, family) is FamilyCriticality.CONTEXT_DEPENDENT
+    ]
+    for family in context_dependent_families:
+        warnings.append(_context_dependent_note(component, family))
+
     critical_families = [
         family
-        for family in _FUNDAMENTAL_FAMILIES
-        if get_family_criticality(Component.FUNDAMENTAL, family) is FamilyCriticality.CRITICAL
+        for family in families
+        if get_family_criticality(component, family) is FamilyCriticality.CRITICAL
     ]
     critical_assessments = [family_results[family] for family in critical_families]
 
-    critical_path_satisfied = all(a.critical_path_satisfied for a in critical_assessments)
+    # §42.14 원문: "그 Component에 속한 CRITICAL family 전부가 coverage_status
+    # SUFFICIENT 또는 PARTIAL(INSUFFICIENT/UNKNOWN이 아님)" -- family의
+    # coverage_status를 기준으로 판단한다(family의 critical_path_satisfied
+    # 불리언이 아니다). §44 구현 중 재확인 결과 이 둘이 다른 개념임을
+    # 발견했다: family-level critical_path_satisfied는 "이 family 자체의
+    # Tier-1 요구가 완전히 충족됐는가"(PARTIAL이면 False)를 뜻하지만,
+    # §42.14의 component propagation은 PARTIAL도 "critical-path를 막지
+    # 않는 정도의 evidence"로 취급하기로 이미 결정했었다 -- 두 개념을
+    # 혼동해 family.critical_path_satisfied를 그대로 재사용하면 PARTIAL
+    # critical family가 component 전체를 부당하게 block한다(§44.7 correction).
+    non_gating_statuses = (CoverageStatus.SUFFICIENT, CoverageStatus.PARTIAL)
+    critical_path_satisfied = all(
+        a.coverage_status in non_gating_statuses for a in critical_assessments
+    )
     if all(a.coverage_status is CoverageStatus.SUFFICIENT for a in critical_assessments):
         coverage_status = CoverageStatus.SUFFICIENT
     elif any(a.coverage_status is CoverageStatus.INSUFFICIENT for a in critical_assessments):
@@ -421,3 +493,41 @@ def evaluate_fundamental_coverage(
         source_failures=(),
         warnings=tuple(warnings),
     )
+
+
+def evaluate_fundamental_coverage(
+    feature_results: Sequence[FeatureEvaluationResult],
+) -> CoverageAssessment:
+    """§42.14 component propagation rule의 Fundamental 적용.
+
+    Fundamental critical-path = Profitability(CRITICAL) sufficient AND
+    Financial Resilience(CRITICAL) sufficient. Observed Growth Quality/
+    Capital Efficiency(SUPPORTING)와 Cash/Earnings Quality
+    (CURRENTLY_UNSUPPORTED)는 단독으로 critical-path를 막지 않는다 --
+    다만 그 feature들의 상태도 component-level bucket에서 전부 보인다
+    (§42.4/§42.20 §9: "구현 부족을 숨기기 위해 family를 sufficient
+    처리하지 않는다" -- family를 건너뛰지 않고 전부 평가한 뒤 합친다)."""
+    return _evaluate_component_coverage(
+        Component.FUNDAMENTAL, _FUNDAMENTAL_FAMILIES, feature_results
+    )
+
+
+def evaluate_valuation_coverage(
+    feature_results: Sequence[FeatureEvaluationResult],
+) -> CoverageAssessment:
+    """§42.14 component propagation rule의 Valuation 적용(§44).
+
+    Valuation critical-path = Earnings-based(CRITICAL) sufficient. PER와
+    Earnings Yield는 같은 economic signal의 변환 관계라(§39.5/§42.5)
+    `evaluate_family_coverage`의 existence-based OR(개수를 세지 않고
+    "하나라도 있다"만 판단)가 이미 double-counting을 구조적으로 막는다 --
+    이 함수는 그 로직을 다시 구현하지 않는다.
+
+    Asset-based(CONTEXT_DEPENDENT)는 PBR이 유일한 등록 feature이지만,
+    이 evaluator에는 업종 context가 없어 critical-path 게이트에 넣지
+    않는다(§44.3/§44.4) -- 그렇다고 PBR 부재를 조용히 SUFFICIENT로
+    가장하지도 않는다: family 자체의 coverage_status는 그대로 계산되고
+    (PBR 없으면 INSUFFICIENT), warning으로 "context 없어 게이트 제외"임을
+    명시한다. EV based/Cash-flow based/Relative Context는 등록된 feature가
+    없어 CURRENTLY_UNSUPPORTED(§44.2)."""
+    return _evaluate_component_coverage(Component.VALUATION, _VALUATION_FAMILIES, feature_results)

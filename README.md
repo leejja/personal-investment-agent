@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** Valuation CoverageEvaluator(추천 — §43이 만든 `evaluate_family_coverage`/family-criticality mapping 패턴 재사용) + 병행 candidate: Market Confirmation/Flow용 `NormalizedResearchData` model-wiring → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin, 변경 없음) + **RE-05 Feature Registry semantic role = FULL V1 CATALOG, completeness = PARTIAL(14 entries, evaluator 2개 구현, default_requirement_role 전부 확정)** + **RE-05 Coverage Contract = FROZEN** + **RE-05 Family-Level Coverage Policy = FROZEN** + **RE-05 CoverageEvaluator = Fundamental IMPLEMENTED(§43, `app/evaluation/coverage_evaluator.py` 신규 — deterministic feature→family→component coverage, false-completeness regression 통과), Valuation/Forward/Flow/Market NOT STARTED**(numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§43)
+> **Next:** Flow CoverageEvaluator(추천 — Fundamental/Valuation과 동일한 일반 propagation 규칙만으로 충분, CRITICAL family 없어 예외 불필요) + 병행 candidate: Market Confirmation/Flow용 `NormalizedResearchData` model-wiring → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin, 변경 없음) + **RE-05 Feature Registry semantic role = FULL V1 CATALOG, completeness = PARTIAL(14 entries, evaluator 2개 구현, default_requirement_role 전부 확정)** + **RE-05 Coverage Contract = FROZEN** + **RE-05 Family-Level Coverage Policy = FROZEN** + **RE-05 CoverageEvaluator = Fundamental + Valuation IMPLEMENTED**(§43/§44, `app/evaluation/coverage_evaluator.py` — deterministic feature→family→component coverage, PER/Earnings Yield double-counting 구조적 방지, CONTEXT_DEPENDENT family(PBR) 정직한 non-gating 처리, component propagation 버그 수정(§44.7) 포함), **Forward/Flow/Market NOT STARTED**(numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§44)
 
 ---
 
@@ -2850,11 +2850,28 @@ Slice(§43)   완료(Fundamental only)
     └── 신규 테스트 26건, 전체 533 passed, ruff clean ✓ (dev-log §43)
     │
     ▼
-Valuation CoverageEvaluator(추천, §43.20 A) — 동일 패턴(evaluate_family_
-coverage/_FAMILY_CRITICALITY) 재사용, Earnings-based=CRITICAL/Asset-based
-=CONTEXT_DEPENDENT 구체화. 병행 candidate: Market Confirmation/Flow
-normalized-data wiring   ← NEXT
-    (dev-log 2026-08-29 §43.20 참고)
+RE-05 CoverageEvaluator Implementation — Valuation Slice(§44)   완료
+    ├── evaluate_family_coverage() 무수정 재사용 — PER/Earnings Yield
+    │   existence-based OR가 double-counting을 구조적으로 방지함을 실증 ✓
+    ├── Asset-based(CONTEXT_DEPENDENT, PBR) 처리 — context 없는 baseline에서
+    │   비차단 처리하되 "판단 보류" warning으로 명시(universal CRITICAL도
+    │   universal OPTIONAL도 만들지 않음) ✓
+    ├── Context requirement audit — 옵션 A 채택(아직 API에 context 불필요,
+    │   업종 분류 데이터 자체가 없음), 옵션 C를 미래 확장점으로 명시만 함 ✓
+    ├── **버그 발견 및 수정**: component-level critical_path_satisfied가
+    │   family의 critical_path_satisfied 불리언을 잘못 재사용해 PARTIAL
+    │   critical family를 §42.14보다 과도하게 엄격히 차단하던 문제 —
+    │   family.coverage_status 기준으로 correction(Fundamental도 함께 수정) ✓
+    ├── evaluate_fundamental_coverage를 component-agnostic
+    │   _evaluate_component_coverage로 리팩터링, 기존 26개 테스트 무수정 통과(회귀 없음) ✓
+    └── 신규 테스트 18건(전체 44), 전체 551 passed, ruff clean ✓ (dev-log §44)
+    │
+    ▼
+Flow CoverageEvaluator(추천, §44.14 A) — Fundamental/Valuation과 동일한
+일반 propagation 규칙만으로 충분(CRITICAL family 없음, 예외 불필요).
+Forward는 top-level alternative path 처리가 별도로 필요해 후순위 권장.
+병행 candidate: Market Confirmation/Flow normalized-data wiring   ← NEXT
+    (dev-log 2026-08-29 §44.14 참고)
 ```
 
 ---

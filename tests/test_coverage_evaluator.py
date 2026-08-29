@@ -1,7 +1,7 @@
-"""RE-05 CoverageEvaluator 첫 deterministic Coverage vertical slice
-(Fundamental only) 테스트.
+"""RE-05 CoverageEvaluator deterministic Coverage vertical slice 테스트
+(Fundamental §43, Valuation §44).
 
-`docs/dev-log/2026-08-29.md` §43이 이 구현의 설계 근거를 담는다. numeric
+`docs/dev-log/2026-08-29.md` §43/§44가 이 구현의 설계 근거를 담는다. numeric
 threshold/weight/window/percentage/count 테스트는 만들지 않는다(그런 필드
 자체가 존재하지 않는다는 것만 검증한다).
 """
@@ -14,6 +14,7 @@ from app.evaluation.coverage_evaluator import (
     FamilyCriticality,
     evaluate_family_coverage,
     evaluate_fundamental_coverage,
+    evaluate_valuation_coverage,
     get_family_criticality,
 )
 from app.evaluation.feature_registry import get_feature_definition
@@ -48,6 +49,9 @@ _NET_MARGIN_ID = "fundamental.profitability.net_margin"
 _REVENUE_GROWTH_ID = "fundamental.observed_growth_quality.revenue_growth"
 _ASSET_TURNOVER_ID = "fundamental.capital_efficiency.asset_turnover"
 _ROIC_ID = "fundamental.capital_efficiency.roic"
+_PER_ID = "valuation.earnings_based.trailing_per"
+_EARNINGS_YIELD_ID = "valuation.earnings_based.earnings_yield"
+_PBR_ID = "valuation.asset_based.pbr"
 
 
 def _module_code_body() -> str:
@@ -502,3 +506,224 @@ def test_coverage_evaluator_module_has_no_vendor_llm_or_portfolio_dependency():
         "openai",
     ):
         assert forbidden not in body
+
+
+# ============================== §44.7 correction: PARTIAL critical family should not block component ==============================
+
+
+def test_partial_critical_family_does_not_block_component_critical_path():
+    """§44.7 bug fix regression: 이전 구현은 component-level
+    critical_path_satisfied를 family의 critical_path_satisfied 불리언으로
+    계산해, CRITICAL family가 PARTIAL(REQUIRED 2개 중 1개만 AVAILABLE)일
+    때도 component 전체를 부당하게 block했다. §42.14 원문("SUFFICIENT
+    또는 PARTIAL 모두 비차단")대로 family.coverage_status를 기준으로
+    correction했다 -- Profitability가 PARTIAL(ROE AVAILABLE, Operating
+    Margin UNAVAILABLE)이어도, Financial Resilience까지 SUFFICIENT면
+    component critical-path는 이제 True다."""
+    roe_result = _hypothetical_result(_ROE_ID, AvailabilityStatus.AVAILABLE)
+    om_result = _hypothetical_result(_OM_ID, AvailabilityStatus.UNAVAILABLE)
+    debt_ratio_result = _hypothetical_result(_DEBT_RATIO_ID, AvailabilityStatus.AVAILABLE)
+
+    profitability = evaluate_family_coverage(
+        Component.FUNDAMENTAL, "profitability", [roe_result, om_result]
+    )
+    assert profitability.coverage_status == CoverageStatus.PARTIAL
+    assert profitability.critical_path_satisfied is False  # family 자체는 여전히 False(정확)
+
+    component_coverage = evaluate_fundamental_coverage([roe_result, om_result, debt_ratio_result])
+    assert component_coverage.critical_path_satisfied is True  # PARTIAL도 component는 비차단
+
+
+# ============================== §44: Valuation Coverage ==============================
+
+
+def test_per_available_makes_earnings_based_sufficient():
+    """§10 case 1."""
+    per_result = _hypothetical_result(_PER_ID, AvailabilityStatus.AVAILABLE)
+    coverage = evaluate_valuation_coverage([per_result])
+    assert coverage.coverage_status == CoverageStatus.SUFFICIENT
+    assert coverage.critical_path_satisfied is True
+    assert _PER_ID in coverage.optional_available
+
+
+def test_earnings_yield_available_makes_earnings_based_sufficient():
+    """§10 case 2."""
+    ey_result = _hypothetical_result(_EARNINGS_YIELD_ID, AvailabilityStatus.AVAILABLE)
+    coverage = evaluate_valuation_coverage([ey_result])
+    assert coverage.coverage_status == CoverageStatus.SUFFICIENT
+    assert coverage.critical_path_satisfied is True
+
+
+def test_per_and_earnings_yield_both_available_not_double_counted():
+    """§10 case 3 + §2/§8 double-counting 금지: 둘 다 AVAILABLE이어도
+    existence-based OR는 "하나라도 있다"만 판단한다 -- coverage_status는
+    둘 다 있을 때와 하나만 있을 때 동일(SUFFICIENT)하다, 더 강한 상태가
+    없다(예: 그런 상태 자체가 CoverageStatus enum에 존재하지 않는다)."""
+    per_result = _hypothetical_result(_PER_ID, AvailabilityStatus.AVAILABLE)
+    ey_result = _hypothetical_result(_EARNINGS_YIELD_ID, AvailabilityStatus.AVAILABLE)
+
+    both_available = evaluate_family_coverage(
+        Component.VALUATION, "earnings_based", [per_result, ey_result]
+    )
+    only_per = evaluate_family_coverage(Component.VALUATION, "earnings_based", [per_result])
+
+    assert both_available.coverage_status == only_per.coverage_status == CoverageStatus.SUFFICIENT
+    assert both_available.critical_path_satisfied == only_per.critical_path_satisfied is True
+    # bucket에는 둘 다 보인다(투명성) -- 다만 "판정"은 동일하다는 것이 핵심.
+    assert set(both_available.optional_available) == {_PER_ID, _EARNINGS_YIELD_ID}
+    assert set(only_per.optional_available) == {_PER_ID}
+
+
+def test_per_and_earnings_yield_both_missing_earnings_based_insufficient():
+    """§10 case 4."""
+    coverage = evaluate_family_coverage(Component.VALUATION, "earnings_based", [])
+    assert coverage.coverage_status == CoverageStatus.INSUFFICIENT
+    assert _PER_ID in coverage.optional_missing
+    assert _EARNINGS_YIELD_ID in coverage.optional_missing
+
+
+def test_per_not_applicable_excluded_from_missing():
+    """§10 case 5."""
+    per_result = _hypothetical_result(_PER_ID, AvailabilityStatus.NOT_APPLICABLE)
+    coverage = evaluate_family_coverage(Component.VALUATION, "earnings_based", [per_result])
+    assert _PER_ID in coverage.not_applicable
+    assert _PER_ID not in coverage.optional_missing
+
+
+def test_catalog_only_unimplemented_valuation_feature_visible():
+    """§10 case 6: 아무 result도 안 줘도 PER/Earnings Yield/PBR 전부
+    NOT_IMPLEMENTED로 표시된다(catalog-only)."""
+    coverage = evaluate_valuation_coverage([])
+    assert any(_PER_ID in w and "NOT_IMPLEMENTED" in w for w in coverage.warnings)
+    assert any(_EARNINGS_YIELD_ID in w and "NOT_IMPLEMENTED" in w for w in coverage.warnings)
+    assert any(_PBR_ID in w and "NOT_IMPLEMENTED" in w for w in coverage.warnings)
+
+
+def test_pbr_available():
+    """§10 case 7."""
+    pbr_result = _hypothetical_result(_PBR_ID, AvailabilityStatus.AVAILABLE)
+    coverage = evaluate_family_coverage(Component.VALUATION, "asset_based", [pbr_result])
+    assert coverage.coverage_status == CoverageStatus.SUFFICIENT
+    assert _PBR_ID in coverage.optional_available
+
+
+def test_pbr_missing():
+    """§10 case 8."""
+    coverage = evaluate_family_coverage(Component.VALUATION, "asset_based", [])
+    assert coverage.coverage_status == CoverageStatus.INSUFFICIENT
+    assert _PBR_ID in coverage.optional_missing
+
+
+def test_asset_based_context_dependent_not_a_universal_blocker():
+    """§10 case 9: PBR이 완전히 없어도(asset_based INSUFFICIENT) Valuation
+    critical-path는 이것만으로 막히지 않는다(CONTEXT_DEPENDENT는
+    context-free baseline에서 gate에 포함되지 않는다, §44.3/§44.4) --
+    다만 PBR 부재가 SUFFICIENT로 위장되지도 않는다(family 자체는
+    INSUFFICIENT로 정직하게 남는다)."""
+    per_result = _hypothetical_result(_PER_ID, AvailabilityStatus.AVAILABLE)
+    coverage = evaluate_valuation_coverage([per_result])
+
+    assert _PBR_ID in coverage.optional_missing
+    assert coverage.critical_path_satisfied is True  # Earnings-based만으로 satisfied
+    assert any("CONTEXT_DEPENDENT" in w and "asset_based" in w for w in coverage.warnings)
+
+
+def test_earnings_based_insufficient_makes_valuation_critical_path_insufficient():
+    """§10 case 10: Earnings-based(CRITICAL)가 완전히 비어 있으면 PBR이
+    있어도 Valuation critical-path는 satisfied가 아니다(CONTEXT_DEPENDENT
+    family가 CRITICAL family의 부재를 대신 메꾸지 않는다)."""
+    pbr_result = _hypothetical_result(_PBR_ID, AvailabilityStatus.AVAILABLE)
+    coverage = evaluate_valuation_coverage([pbr_result])
+    assert coverage.critical_path_satisfied is False
+    assert coverage.coverage_status == CoverageStatus.INSUFFICIENT
+
+
+def test_valuation_uses_full_catalog_not_just_results_given():
+    """§10 case 12 + false-completeness 재확인: PER 하나만 AVAILABLE인
+    result를 줘도, Earnings Yield/PBR이 catalog에 있다는 사실이 그대로
+    보인다(NOT_IMPLEMENTED로 missing 계열에 남는다) -- "PER 하나 있으니
+    다 됐다"고 오판하지 않는다."""
+    per_result = _hypothetical_result(_PER_ID, AvailabilityStatus.AVAILABLE)
+    coverage = evaluate_valuation_coverage([per_result])
+    all_ids = (
+        coverage.optional_available
+        + coverage.optional_missing
+        + coverage.available_required
+        + coverage.missing_required
+        + coverage.not_applicable
+    )
+    assert {_PER_ID, _EARNINGS_YIELD_ID, _PBR_ID} <= set(all_ids)
+
+
+def test_valuation_not_implemented_distinct_from_unavailable():
+    """§10 case 13."""
+    not_implemented_coverage = evaluate_family_coverage(Component.VALUATION, "asset_based", [])
+    unavailable_result = _hypothetical_result(_PBR_ID, AvailabilityStatus.UNAVAILABLE)
+    unavailable_coverage = evaluate_family_coverage(
+        Component.VALUATION, "asset_based", [unavailable_result]
+    )
+    not_implemented_text = next(w for w in not_implemented_coverage.warnings if _PBR_ID in w)
+    unavailable_text = next(w for w in unavailable_coverage.warnings if _PBR_ID in w)
+    assert "NOT_IMPLEMENTED" in not_implemented_text
+    assert "UNAVAILABLE" in unavailable_text
+    assert not_implemented_text != unavailable_text
+
+
+def test_fundamental_evaluator_unaffected_by_valuation_addition():
+    """§10 case 14: Valuation 추가로 Fundamental 결과가 바뀌지 않는다."""
+    results = _real_roe_and_operating_margin_results(roe=12.3, operating_margin=15.0)
+    debt_ratio = _hypothetical_result(_DEBT_RATIO_ID, AvailabilityStatus.AVAILABLE)
+    coverage = evaluate_fundamental_coverage([*results, debt_ratio])
+    assert coverage.coverage_status == CoverageStatus.SUFFICIENT
+    assert coverage.critical_path_satisfied is True
+
+
+def test_valuation_output_is_deterministic():
+    """§10 case 15."""
+    per_result = _hypothetical_result(_PER_ID, AvailabilityStatus.AVAILABLE)
+    first = evaluate_valuation_coverage([per_result])
+    second = evaluate_valuation_coverage([per_result])
+    assert first == second
+
+
+def test_valuation_coverage_has_no_numeric_fields():
+    """§10 case 16."""
+    coverage = evaluate_valuation_coverage([])
+    assert coverage.coverage_percentage is None
+
+
+def test_valuation_family_criticality_matches_42_freeze():
+    assert (
+        get_family_criticality(Component.VALUATION, "earnings_based") == FamilyCriticality.CRITICAL
+    )
+    assert (
+        get_family_criticality(Component.VALUATION, "asset_based")
+        == FamilyCriticality.CONTEXT_DEPENDENT
+    )
+    assert (
+        get_family_criticality(Component.VALUATION, "ev_based")
+        == FamilyCriticality.CURRENTLY_UNSUPPORTED
+    )
+    assert (
+        get_family_criticality(Component.VALUATION, "cash_flow_based")
+        == FamilyCriticality.CURRENTLY_UNSUPPORTED
+    )
+    assert (
+        get_family_criticality(Component.VALUATION, "relative_context")
+        == FamilyCriticality.CURRENTLY_UNSUPPORTED
+    )
+
+
+def test_valuation_coverage_public_api_has_no_context_parameter():
+    """§44.5 context audit 결론(옵션 A) 재확인: public API 어디에도
+    EvaluationContext 파라미터가 없다(signature 자체로 확인, 문자열
+    검색이 아니다 -- CONTEXT_DEPENDENT 같은 정당한 이름과 혼동하지 않음)."""
+    import app.evaluation.coverage_evaluator as module
+
+    fundamental_params = set(inspect.signature(module.evaluate_fundamental_coverage).parameters)
+    valuation_params = set(inspect.signature(module.evaluate_valuation_coverage).parameters)
+    family_params = set(inspect.signature(module.evaluate_family_coverage).parameters)
+
+    assert fundamental_params == {"feature_results"}
+    assert valuation_params == {"feature_results"}
+    assert family_params == {"component", "feature_family", "feature_results"}
