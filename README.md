@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** RecommendationEvaluationState Full Orchestration(추천 — Coverage/Assembly/FutureOpportunityEvidence 3개 산출물 전부 준비 완료, 이를 정해진 순서로 호출해 완성된 State를 만드는 코드만 남음) + 병행 candidate: Valuation/Forward/Flow/Market raw feature evaluator 구현 → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin, 변경 없음) + **RE-05 Feature Registry semantic role = FULL V1 CATALOG, completeness = PARTIAL(14 entries, evaluator 2개 구현, default_requirement_role 전부 확정)** + **RE-05 Coverage Contract = FROZEN** + **RE-05 Family-Level Coverage Policy = FROZEN** + **RE-05 Coverage Layer = IMPLEMENTATION COMPLETE**(§43~§46) + **RE-05 Assembly Layer = IMPLEMENTATION COMPLETE**(§47~§49, `app/evaluation/assembly.py` — 5개 component(Fundamental/Valuation/Forward/Flow/Market) 전부 FeatureEvaluationResult + precomputed CoverageAssessment → FeatureFamilyAssessment → ComponentAssessment deterministic 조립 완료; §48 boundary correction 이후 §49에서 production 코드 변경 없이 4개 component 전부로 확장 검증 성공(이미 component-agnostic), CoverageAssessment identity 보존/score=None/signal=UNKNOWN/confidence=UNKNOWN/FutureOpportunityEvidence top-level 분리 전부 5개 component에서 재확인), orchestration/raw feature evaluator/scoring(FeatureFamilyEvaluator/ComponentEvaluator)/confidence evaluator는 여전히 NOT STARTED(numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§49)
+> **Next:** RE-05 RecommendationEvaluationState Full Orchestration — First Deterministic Pipeline Slice(추천 — `DeterministicAnalysisResult → NormalizedResearchData → FeatureEvaluationResult → Coverage → Assembly → RecommendationEvaluationState`를 하나의 deterministic execution pipeline으로 연결; Coverage/Assembly/FutureOpportunityEvidence 3개 산출물 전부 준비 완료, orchestrator 코드만 남음, Scoring/Recommendation Policy는 범위 밖 유지) + 병행 candidate: Valuation/Forward/Flow/Market raw feature evaluator 구현 → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification PARTIAL(유지)** + **RE-05 V1 Feature Set FROZEN** + **RE-05 Recommendation/Scoring Data Model DESIGN COMPLETE + Contract Audit PASSED** + **RE-05 Evaluation Boundary/Input Contract FROZEN** + **RE-05 Fundamental Evaluator Count = 2**(ROE + Operating Margin, 변경 없음) + **RE-05 Feature Registry semantic role = FULL V1 CATALOG, completeness = PARTIAL(14 entries, evaluator 2개 구현, default_requirement_role 전부 확정)** + **RE-05 Coverage Contract = FROZEN** + **RE-05 Family-Level Coverage Policy = FROZEN** + **RE-05 Coverage Layer = IMPLEMENTATION COMPLETE**(§43~§46) + **RE-05 Assembly Layer = IMPLEMENTATION COMPLETE**(§47~§49, `app/evaluation/assembly.py` — 5개 component(Fundamental/Valuation/Forward/Flow/Market) 전부 FeatureEvaluationResult + precomputed CoverageAssessment → FeatureFamilyAssessment → ComponentAssessment deterministic 조립 완료; §48 boundary correction 이후 §49에서 production 코드 변경 없이 4개 component 전부로 확장 검증 성공(이미 component-agnostic), CoverageAssessment identity 보존/score=None/signal=UNKNOWN/confidence=UNKNOWN/FutureOpportunityEvidence top-level 분리 전부 5개 component에서 재확인), orchestration/raw feature evaluator/scoring(FeatureFamilyEvaluator/ComponentEvaluator)/confidence evaluator/Recommendation Policy는 여전히 NOT STARTED, **Numeric Calibration = OPEN**(numeric parameter 없음, 상세는 `docs/dev-log/2026-08-29.md` §25~§50)
 
 ---
 
@@ -2962,10 +2962,16 @@ Market(§49)   완료 — Assembly Layer 5개 component 전부 완료
     └── 신규 테스트 29건(전체 63), 전체 660 passed, ruff clean ✓ (dev-log §49)
     │
     ▼
-RecommendationEvaluationState Full Orchestration(추천, §49.20 A) —
-Coverage/Assembly/FutureOpportunityEvidence 3개 산출물 전부 준비 완료,
-이를 정해진 순서로 호출해 완성된 State를 만드는 코드만 남음   ← NEXT
-    (dev-log 2026-08-29 §49.20 참고)
+RE-05 RecommendationEvaluationState Full Orchestration — First
+Deterministic Pipeline Slice(추천, §49.20 A)   ← NEXT
+    DeterministicAnalysisResult → NormalizedResearchData →
+    FeatureEvaluationResult → Coverage → Assembly →
+    RecommendationEvaluationState를 하나의 deterministic execution
+    pipeline으로 연결한다. Coverage/Assembly/FutureOpportunityEvidence
+    3개 산출물은 전부 준비 완료 — 정해진 순서로 호출해 완성된 State를
+    만드는 orchestrator 코드만 남았다. Scoring/Recommendation Policy는
+    이번에도 범위 밖(Numeric Calibration = OPEN 유지).
+    (dev-log 2026-08-29 §49.20/§50 참고)
 ```
 
 ---
