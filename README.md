@@ -5,7 +5,7 @@
 단순한 종목 추천이나 자동매매 시스템이 아니라, 여러 독립적인 데이터 소스를 수집·분석하고 사용자의 실제 포트폴리오와 기존 투자 전략을 함께 고려하여 **일관되고 근거를 추적할 수 있는 투자 전략과 신규 투자 후보를 생성하는 것**을 목표로 한다.
 
 > **Current Status:** ECOS / OpenDART / Kiwoom integration + Stock Research Agent v1(다년 재무 추세 + RE-01 구조화 financial_features 포함) + Market Agent v1 + Portfolio Strategy Agent v1 + Supervisor / Router v1 + Candidate Discovery v1(Industry + Theme axis) + REST API v1 (FastAPI, `POST /analysis?view=detail|summary` + `GET /analysis/{analysis_id}?view=detail|summary` analysis snapshot lifecycle) completed  
-> **Next:** RE-05 V1 Minimum Viable Feature Set 사용자 검토/확정 → Recommendation data model 설계 착수 → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate, numeric parameter는 전부 OPEN)** + **RE-05 Data Availability Audit 완료**(상세는 `docs/dev-log/2026-08-29.md` §25)
+> **Next:** OpenDART `fnlttSinglAcntAll.json`(전체 재무제표, CF 지원 여부) 실측 + Open Design Question #3/#4(Investor Flow 일별 시계열, `ka10081` 수정주가 효과) 해결 → 그 후 V1 Feature Set FROZEN candidate 검토 → Recommendation data model 설계 착수 → UX-02(InvestorProfile persistence) — RE-01~RE-03.4 데이터 조사 전부 완료 + **RE-04 Final Recommendation Architecture(base) FROZEN**, **Amendment 1 Step 1~14 전체 FROZEN** + **RE-05 Step 1~12 Policy/Contract 문서화 완료(FROZEN candidate)** + **RE-05 Data Availability Audit 완료** + **RE-05 Data Verification 완료(PARTIAL)** + **Core 4-component 구조 유지·Forward Coverage 처리·Decision Eligibility Future-Opportunity Evidence Requirement 확정(FROZEN candidate, numeric은 OPEN)** — V1 Feature Set은 여전히 NOT READY(상세는 `docs/dev-log/2026-08-29.md` §25~§27)
 
 ---
 
@@ -2621,7 +2621,27 @@ RE-05 Recommendation Scoring / Policy Calibration   IN PROGRESS
         BUT_NOT_IMPLEMENTED/NEW_SOURCE_REQUIRED/UNAVAILABLE/DEFERRED/UNKNOWN 분류 완료 ✓ (dev-log §25)
     │
     ▼
-RE-05 V1 Minimum Viable Feature Set 사용자 검토/확정   ← NEXT (제안 내용은 dev-log 2026-08-29 §25.8 참고)
+RE-05 Data Verification & V1 Scope Resolution   PARTIAL
+    ├── OpenDART Fundamental 5종목 업종분산 실측(현금흐름표 부재 확정,
+    │   금융업/비금융 applicability 예외 확인) ✓
+    ├── Kiwoom Market Cap/Free Float 실제 응답 산술 교차검증 ✓
+    ├── Kiwoom OHLCV(ka10081) 메커니즘 확인(최대 depth·수정주가 diff는 미완료) ✓
+    ├── Investor Flow(ka10061) 기간합산 확인(일별 series 여부는 미확정) ✓
+    └── V1 Feature Set = NOT READY — dev-log §26
+    │
+    ▼
+RE-05 Design Resolution — Fundamental scope 정정 + Forward Coverage/Core 구조 확정
+    ├── OpenDART fnlttSinglAcnt는 "주요계정"뿐 — OCF/FCF/CAPEX/ROIC는 이 endpoint
+    │   기준 UNAVAILABLE, OpenDART 전체 기준은 VERIFICATION_REQUIRED로 정정 ✓
+    ├── Core Attractiveness는 v1도 Fundamental/Valuation/Forward/Flow 4-component 유지 ✓
+    ├── Forward unavailable → score=unavailable/signal=UNKNOWN/coverage=insufficient ✓
+    ├── Decision Eligibility에 Future-Opportunity Evidence Requirement(Forward evidence
+    │   OR qualifying future-facing Event) 신설(numeric은 OPEN) ✓
+    ├── Open Design Question #1/#2 RESOLVED, #3/#4는 여전히 OPEN
+    └── Broker Opinion/Target Price = Supplemental Research Context로 최종 확정 ✓ (dev-log §27)
+    │
+    ▼
+fnlttSinglAcntAll.json 실측 + Open Design Question #3/#4 해결   ← NEXT (dev-log 2026-08-29 §27.5 참고)
 ```
 
 ---
@@ -2705,7 +2725,7 @@ RE-05 V1 Minimum Viable Feature Set 사용자 검토/확정   ← NEXT (제안 �
 
 ## Phase 7 — Recommendation Engine (scoring/ranking)
 
-> Stock Universe 확보와 조건 기반 후보 탐색은 Phase 7a(Candidate Discovery)로 먼저 구현했고, 종목별 구조화된 재무 feature는 Phase 6의 RE-01로 먼저 마련했다. 구현 착수 전 순수 데이터 조사(RE-02/RE-03~RE-03.4)와 architecture 설계(RE-04, Amendment 1 포함 전체 FROZEN)를 완료했다 — **아직 구현 미착수**. RE-05(Scoring & Weight Policy)의 Step 1~12 Policy/Contract와 Calibration Protocol도 문서화했다(FROZEN candidate — numeric threshold/weight/calibration parameter는 전부 OPEN, RE-05 Overall = IN PROGRESS, 상세는 `docs/dev-log/2026-08-29.md` §24). 이어서 Data Availability Audit으로 현재 repository/verified API가 RE-05 Feature Contract를 실제로 충족하는지 Feature 단위로 분류했다 — Fundamental Quality 다수는 이미 구현·검증됐지만(AVAILABLE_NOW), Forward Opportunity(consensus 수치 기반)는 여전히 제외 상태이고 Market Cap/Investor Flow/OHLCV historical/Broker Opinion 등은 API는 검증됐으나 서비스 코드가 없는 상태(SOURCE_AVAILABLE_BUT_NOT_IMPLEMENTED)다(상세는 `docs/dev-log/2026-08-29.md` §25). 다음 단계는 이 audit을 근거로 제안한 V1 Minimum Viable Feature Set의 사용자 검토/확정.
+> Stock Universe 확보와 조건 기반 후보 탐색은 Phase 7a(Candidate Discovery)로 먼저 구현했고, 종목별 구조화된 재무 feature는 Phase 6의 RE-01로 먼저 마련했다. 구현 착수 전 순수 데이터 조사(RE-02/RE-03~RE-03.4)와 architecture 설계(RE-04, Amendment 1 포함 전체 FROZEN)를 완료했다 — **아직 구현 미착수**. RE-05(Scoring & Weight Policy)의 Step 1~12 Policy/Contract와 Calibration Protocol도 문서화했다(FROZEN candidate — numeric threshold/weight/calibration parameter는 전부 OPEN, RE-05 Overall = IN PROGRESS, 상세는 `docs/dev-log/2026-08-29.md` §24). 이어서 Data Availability Audit으로 현재 repository/verified API가 RE-05 Feature Contract를 실제로 충족하는지 Feature 단위로 분류했다 — Fundamental Quality 다수는 이미 구현·검증됐지만(AVAILABLE_NOW), Forward Opportunity(consensus 수치 기반)는 여전히 제외 상태이고 Market Cap/Investor Flow/OHLCV historical/Broker Opinion 등은 API는 검증됐으나 서비스 코드가 없는 상태(SOURCE_AVAILABLE_BUT_NOT_IMPLEMENTED)다(상세는 `docs/dev-log/2026-08-29.md` §25). 이어서 핵심 항목을 실제 API 호출로 검증했다(`app/services/opendart.py`/`kiwoom.py`를 읽기 전용으로 import한 `/tmp` scratch 스크립트, production 코드 미변경) — OpenDART 5개 업종 분산 종목 실측으로 **`fnlttSinglAcnt.json`(주요계정) 하나에는 현금흐름표 계정이 구조적으로 전혀 없음을 확인**했고(OCF/FCF/CFO÷NI는 **이 endpoint 기준**으로만 UNAVAILABLE — OpenDART에는 별도의 전체 재무제표 endpoint `fnlttSinglAcntAll.json`이 존재해 아직 미검증인 채로 남아 있어, source 전체 기준 판정은 `VERIFICATION_REQUIRED`로 되돌렸다, 상세는 `docs/dev-log/2026-08-29.md` §27.0) 금융업/비금융 업종별로 확보 가능한 계정이 다름을 실측했다. Kiwoom `ka10001`의 `mac`(시가총액)은 `flo_stk × 현재가`와 산술적으로 일치함을 교차검증했고, `ka10081`(일봉차트)이 실제로 작동하며 거래대금까지 매일 제공함을 확인했다(최대 depth·수정주가 효과는 미확인). Investor Flow(`ka10061`)는 기간 합산 값만 확인했고 일별 시계열 확보 가능 여부는 미확정이다. 이 검증 결과 Broker Opinion/Target Price를 Forward Component input이 아니라 Supplemental Research Context로 재분류하며 v1 Forward Opportunity Component가 사용 가능한 input을 하나도 갖지 못한다는 사실이 드러났는데, 이에 대해 **Core Attractiveness는 v1에서도 Fundamental/Valuation/Forward/Flow 4-component 구조를 그대로 유지하고(3-component로 축소하지 않음), Forward가 unavailable이면 score=unavailable/signal=UNKNOWN/coverage=insufficient로만 표현하며(missing을 neutral/0으로 바꾸지 않음), Decision Eligibility에 "reliable Forward evidence 또는 검증된 future-facing Event 근거" 중 하나로 충족 가능한 Future-Opportunity Evidence Requirement를 신설**하기로 확정했다(numeric boundary는 여전히 OPEN, 상세는 `docs/dev-log/2026-08-29.md` §27.1~§27.3). **V1 Feature Set은 아직 FROZEN하지 않았다(NOT READY)** — `fnlttSinglAcntAll.json` 실측과 Investor Flow 일별 시계열 확인이 남아 있다. 상세는 `docs/dev-log/2026-08-29.md` §26~§27.
 >
 > **데이터 조사** (production code 미변경):
 >
