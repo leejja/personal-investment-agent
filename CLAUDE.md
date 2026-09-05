@@ -2,11 +2,14 @@
 
 ## Mandatory Session Start Protocol
 
-이 protocol은 **모든 새로운 Claude Code session의 첫 번째 substantive turn**에 적용된다.
+이 protocol은 **모든 새로운 Claude Code session의 첫 번째 user turn**에 적용된다 — 그 turn의
+내용, 중요도, substantive 여부를 판단해서 실행 여부를 결정하지 않는다.
 
-"substantive"는 사용자의 첫 요청이 다음 중 무엇이든 전부 포함한다 — 목록 중 하나가 아니라고 해서
-protocol을 건너뛸 근거가 되지 않는다:
+첫 번째 user turn이 다음 중 무엇이든 — 목록 중 하나가 아니라고 해서 protocol을 건너뛸 근거가
+되지 않으며, 아래에 없는 형태라도 마찬가지다:
 
+- `hi`, `hello` 등 단순 인사
+- casual message
 - implementation / code modification
 - architecture·design review
 - planning
@@ -15,10 +18,11 @@ protocol을 건너뛸 근거가 되지 않는다:
 - 단순 discussion
 - meta-level question (예: "이 프로젝트 뭐하는 거야?")
 
-즉, **implementation/modification 요청이 들어올 때까지 이 protocol을 미뤄서는 안 된다.**
-"아직 구현 작업을 시작하지 않았기 때문에 읽지 않았다"는 해석은 허용되지 않는다.
+즉, **첫 user turn이 "substantive"한지 판단해서 protocol 실행 여부를 결정하지 않는다.**
+"인사만 했으니 아직 읽지 않았다"거나 "아직 구현 작업을 시작하지 않았기 때문에 읽지 않았다"는
+해석은 허용되지 않는다.
 
-첫 번째 substantive request에 **답하거나 행동하기 전에**, 반드시 다음 순서로 현재 repository
+첫 번째 user turn에 **답하거나 행동하기 전에**, 반드시 다음 순서로 현재 repository
 state를 실제로 복원한다 (memory나 이전 conversation context로 대체하지 않는다):
 
 1. `README.md`를 읽는다 (상단 "Current Status" / "Next" 요약 포함).
@@ -46,15 +50,16 @@ state를 실제로 복원한다 (memory나 이전 conversation context로 대체
   확인한다 — documentation만 믿고 넘어가지 않는다.
 - README/dev-log와 실제 repository state 사이에 의미 있는 conflict가 발견되면, 임의로 해석하거나
   조용히 수정하지 말고 먼저 사용자에게 보고한다.
-- 첫 요청이 implementation이 아니라는 이유로 이 protocol을 skip하지 않는다.
-- 이 protocol은 **사용자의 첫 substantive request가 들어온 뒤**, 그 request를 처리하는 과정의
+- 첫 user turn이 substantive가 아니라는 이유로(예: `hi`/`hello`뿐이라는 이유로) 이 protocol을
+  skip하지 않는다.
+- 이 protocol은 **사용자의 첫 user turn이 들어온 뒤**, 그 turn을 처리하는 과정의
   일부로 수행한다 — 세션이 시작되자마자 사용자 입력 없이 선제적으로 tool을 실행하라는 뜻이 아니다.
-- Session Start Protocol 완료 후에만 사용자의 첫 substantive request를 실제로 처리(답변/작업)한다.
+- Session Start Protocol 완료 후에만 사용자의 첫 user turn을 실제로 처리(답변/작업)한다.
 
 ```text
 Claude Code 새 세션
         ↓
-사용자의 첫 substantive request
+사용자의 첫 user turn (내용 무관 — hi 포함)
         ↓
 CLAUDE.md Session Start Protocol
         ↓
