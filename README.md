@@ -274,8 +274,8 @@ StrategyResult   (v1 실제 출력)
 | | |
 |---|---|
 | **Phase** | RE-05 — Recommendation Evaluation Pipeline |
-| **Current Task** | `RecommendationEvaluationState` Full Orchestration |
-| **Status** | Final Contract Review `DONE` · Architecture Boundary Resolution `DONE / ARCHITECTURE READY` · Implementation `NEXT` |
+| **Current Task** | RE-05 Post-Orchestration Architecture Review — 다음 deterministic implementation slice 결정 |
+| **Status** | Coverage Layer `IMPLEMENTATION COMPLETE` · Assembly Layer `IMPLEMENTATION COMPLETE` · Evaluation Orchestration `FIRST DETERMINISTIC PIPELINE SLICE COMPLETE / FROZEN` |
 | **Recommendation Policy** | `NOT IMPLEMENTED` |
 | **Numeric Calibration** | `OPEN` |
 
@@ -288,18 +288,18 @@ DONE / FROZEN
 RE-05 Recommendation Evaluation Pipeline
         │
         ▼
-Coverage Layer                                DONE
+Coverage Layer                                IMPLEMENTATION COMPLETE
         │
         ▼
-Assembly Layer                                DONE
+Assembly Layer                                IMPLEMENTATION COMPLETE
         │
         ▼
-Full Orchestration                            CURRENT
+Evaluation Orchestration
     ├─ Final Contract Review                  DONE
     ├─ Architecture Boundary Resolution       DONE (ARCHITECTURE READY)
-    ├─ Implementation                         NEXT
-    ├─ Tests                                  -
-    └─ Freeze                                 -
+    ├─ First Deterministic Pipeline Slice     COMPLETE / FROZEN
+    ├─ Tests                                  677 PASSED
+    └─ Freeze                                 DONE
         │
         ▼
 Recommendation Policy                         NOT IMPLEMENTED
@@ -308,7 +308,9 @@ Recommendation Policy                         NOT IMPLEMENTED
 Numeric Calibration                           OPEN
 ```
 
-**NEXT**: `app/evaluation/orchestrator.py` 구현 — 이미 개별 완성된 `DeterministicAnalysisResult → NormalizedResearchData → FeatureEvaluationResult[] → Coverage → Assembly → FutureOpportunityEvidence` 5개 building block을 하나의 deterministic 실행 경로로 연결해 `RecommendationEvaluationState`를 만든다. Scoring/Recommendation Policy는 범위 밖(`Numeric Calibration = OPEN` 유지).
+**연결 완료된 canonical path**(`app/evaluation/orchestrator.py::run_first_deterministic_pipeline`): `DeterministicAnalysisResult → NormalizedResearchData → FeatureEvaluationResult[] → Coverage → Assembly → FutureOpportunityEvidence → RecommendationEvaluationState`. Scoring/Recommendation Policy는 이번 slice 범위 밖(`Numeric Calibration = OPEN` 유지).
+
+**NEXT**: RE-05 Post-Orchestration Architecture Review — 다음 deterministic implementation slice를 이 review에서 결정한다(candidate: Valuation/Forward/Flow/Market raw feature evaluator 확장, Core Attractiveness producer, Market Confirmation producer, Risk/Coverage/Confidence producer, Recommendation Policy — 순서는 아직 FROZEN되지 않음, 이 목록이 곧 확정된 순서를 의미하지 않는다).
 
 상세 architecture 경계(확정된 First Deterministic Pipeline Slice decision)는 `docs/ARCHITECTURE.md` §7 참고. 이 자리에서 다시 설명하지 않는다.
 
@@ -329,7 +331,7 @@ Numeric Calibration                           OPEN
 | Kiwoom 통합 | 완료 |
 | KIS(한국투자증권) | **research / empirical verification only — production 코드에 통합되지 않음**(`app/config.py`에 설정 항목만 존재) |
 | MCP boundary | 노출 경계로 구현 완료 — 현재 어떤 Agent도 이 경로를 실행에 사용하지 않음(in-process 직접 호출) |
-| **Recommendation Evaluation** | Coverage Layer `DONE` · Assembly Layer `DONE` · Full Orchestration `CURRENT`(implementation NEXT) · Recommendation Policy `NOT IMPLEMENTED` · Numeric Calibration `OPEN` |
+| **Recommendation Evaluation** | Coverage Layer `DONE` · Assembly Layer `DONE` · `RecommendationEvaluationState` First Deterministic Pipeline Slice `COMPLETE / FROZEN` · Recommendation Policy `NOT IMPLEMENTED` · Numeric Calibration `OPEN` |
 
 ---
 
@@ -337,11 +339,10 @@ Numeric Calibration                           OPEN
 
 | | |
 |---|---|
-| **DONE** | Foundation · Model Layer v1 · ECOS/OpenDART/Kiwoom Integration · Market/Stock Research/Portfolio Strategy Agent v1 · Supervisor/Router v1 · Candidate Discovery v1(Theme Axis 포함) · REST API v1 · Analysis Snapshot Lifecycle · RE-01~RE-04 Architecture/Research/Contracts(FROZEN) · RE-05 Coverage Layer · RE-05 Assembly Layer |
-| **CURRENT** | RE-05 `RecommendationEvaluationState` Full Orchestration — First Deterministic Pipeline Slice |
-| **NEXT** | Full Orchestration Implementation → Tests → Freeze |
-| **AFTER** *(scope/order to be reviewed — 아직 확정 아님)* | Recommendation Policy Architecture/Contract → Numeric Calibration(`OPEN`) |
-| **LATER** | Portfolio Strategy Agent가 `StockOpportunityAssessment`를 입력으로 받도록 확장 · Event & Disclosure Intelligence Overlay(Amendment 1) · 자연어 조건 기반 후보 필터링 확장(시가총액/거래대금 상위, 관심종목 등) · Classification Coverage Gap(UX-05) 보완 · 자동매매 확장(`docs/AUTOMATED_TRADING_ROADMAP.md`) |
+| **DONE** | Foundation · Model Layer v1 · ECOS/OpenDART/Kiwoom Integration · Market/Stock Research/Portfolio Strategy Agent v1 · Supervisor/Router v1 · Candidate Discovery v1(Theme Axis 포함) · REST API v1 · Analysis Snapshot Lifecycle · RE-01~RE-04 Architecture/Research/Contracts(FROZEN) · RE-05 Coverage Layer · RE-05 Assembly Layer · RE-05 `RecommendationEvaluationState` First Deterministic Pipeline Slice(Evaluation Orchestration) |
+| **CURRENT** | RE-05 Post-Orchestration Architecture Review — 다음 deterministic implementation slice 결정 |
+| **NEXT** *(review 결과로 확정 예정 — 아래는 candidate이지 확정된 순서 아님)* | Valuation/Forward/Flow/Market raw feature evaluator 확장 · Core Attractiveness producer · Market Confirmation producer · Risk/Coverage/Confidence producer · Recommendation Policy |
+| **LATER** | Numeric Calibration(`OPEN`) · Portfolio Strategy Agent가 `StockOpportunityAssessment`를 입력으로 받도록 확장 · Event & Disclosure Intelligence Overlay(Amendment 1) · 자연어 조건 기반 후보 필터링 확장(시가총액/거래대금 상위, 관심종목 등) · Classification Coverage Gap(UX-05) 보완 · 자동매매 확장(`docs/AUTOMATED_TRADING_ROADMAP.md`) |
 
 각 항목의 세부 구현 단계(session별 변경 이력, test 개수, 버그 수정 서사)는 README에 담지 않는다 — `docs/dev-log/`가 canonical이다.
 

@@ -205,16 +205,20 @@ FutureOpportunityEvidence             app/evaluation/coverage_evaluator.py::
 RecommendationEvaluationState          app/models/research_context.py (model 존재, IMPLEMENTED)
 ```
 
-**이 5개 building block은 각각 개별적으로 구현·테스트 완료 상태이지만,
-이들을 하나의 실행 경로로 연결하는 orchestrator는 아직 존재하지 않는다**
-(`app/evaluation/orchestrator.py`는 아직 생성되지 않았다 — repository에
-실재 확인함). 즉 위 파이프라인은 "따로따로는 동작이 검증된 부품들의 도면"
-이지 "실제로 실행되는 하나의 흐름"이 아직 아니다.
+**이 building block들은 `app/evaluation/orchestrator.py`의
+`run_first_deterministic_pipeline()`을 통해 First Deterministic Pipeline
+Slice로 연결됐다(FROZEN, §7.2 참고)** — repository에 실재 확인함. 위
+파이프라인은 이제 "따로따로는 동작이 검증된 부품들의 도면"이 아니라 실제로
+실행되는 하나의 흐름이다. 단, `Recommendation Policy`는 여전히 구현되지
+않았고 `StockOpportunityAssessment`는 아직 이 pipeline의 output이 아니다 —
+`Core Attractiveness`/`Market Confirmation`/`Risk`/top-level
+`Coverage`·`Confidence` aggregation도 이 First Slice 범위 밖으로 그대로
+남아 있다(§7.2).
 
 ### 7.2 First Deterministic Pipeline Slice — 확정된 architecture 경계
 
-Orchestrator 구현(NEXT, 아직 미착수)이 따라야 할 architecture 경계는
-확정됐다:
+Orchestrator 구현은 First Deterministic Pipeline Slice로 완료/FROZEN됐고,
+그 구현이 따르는 architecture 경계는 다음과 같다:
 
 - **`family_assessments`(top-level)**: 각 component assembly가 만든
   `FeatureFamilyAssessment`를 재계산 없이, canonical component/family
@@ -239,7 +243,8 @@ Orchestrator 구현(NEXT, 아직 미착수)이 따라야 할 architecture 경계
 Coverage Layer                = IMPLEMENTATION COMPLETE
 Assembly Layer                = IMPLEMENTATION COMPLETE
 Future Opportunity Evidence   = IMPLEMENTED
-Evaluation Orchestration      = ARCHITECTURE READY, NOT IMPLEMENTED (NEXT)
+Evaluation Orchestration      = FIRST DETERMINISTIC PIPELINE SLICE COMPLETE / FROZEN
+                                 NEXT = RE-05 Post-Orchestration Architecture Review
 Recommendation Policy         = NOT IMPLEMENTED
 Numeric Calibration           = OPEN
 ```

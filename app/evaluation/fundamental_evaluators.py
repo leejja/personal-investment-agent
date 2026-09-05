@@ -37,7 +37,11 @@ from app.models.recommendation import (
     FeatureValue,
     Provenance,
 )
-from app.models.research_context import EvaluationContext, NormalizedResearchData
+from app.models.research_context import (
+    EvaluationContext,
+    FeatureEvaluator,
+    NormalizedResearchData,
+)
 
 # RE-02 조사(README Phase 7)에서 이미 확인된 known quality issue를 재인용한
 # 것뿐이다 -- 이번에 새로 판단한 신뢰도 평가가 아니다.
@@ -197,3 +201,22 @@ class OperatingMarginFeatureEvaluator:
             applicability_review_required=True,
             applicability_note=_OPERATING_MARGIN_APPLICABILITY_NOTE,
         )
+
+
+# ============================== Implemented Evaluator Dispatch ==============================
+#
+# §RE-05 Full Orchestration First Slice가 소비하는 explicit immutable dispatch다.
+# Feature Registry(14개 definition)를 순회해 evaluator를 동적으로 만들지 않는다 --
+# 이 모듈에 실제로 구현된 evaluator class만 이 tuple에 나열한다(§38 NOT_IMPLEMENTED
+# 원칙 그대로: registry에 있다는 사실이 곧 실행 가능하다는 뜻이 아니다). 새 evaluator
+# module(예: valuation_evaluators.py)이 생기면 그 모듈이 자신의 IMPLEMENTED_*
+# tuple을 스스로 소유하고, orchestrator가 그것들을 이어붙인다 -- 이 tuple이
+# 모든 component의 evaluator를 대표하지 않는다.
+#
+# 순서: ROE -> Operating Margin(등록 순서 그대로, dev-log §34/§37). 두 evaluator
+# 모두 상태를 갖지 않으므로(§34/§37 docstring 참고) 인스턴스를 재사용해도 안전하다
+# -- 매 evaluate() 호출마다 새로 만들 필요가 없다.
+IMPLEMENTED_FUNDAMENTAL_EVALUATORS: tuple[FeatureEvaluator, ...] = (
+    RoeFeatureEvaluator(),
+    OperatingMarginFeatureEvaluator(),
+)
