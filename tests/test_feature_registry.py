@@ -673,15 +673,54 @@ def test_all_new_catalog_entries_have_unique_feature_ids():
     assert len(_ALL_NEW_IDS) == 12
 
 
-def test_all_new_catalog_entries_have_no_evaluator_bound():
-    """§14/§18: 이번에 등록한 모든 신규 entry는 evaluator_id/version이
-    None이다 -- feature identity만 선언했을 뿐 evaluator는 구현하지
-    않았다. 가짜 evaluator id를 채우지 않았다."""
-    for feature_id in _ALL_NEW_IDS:
+# RE-05 Post-Orchestration Architecture Review Step F(READY Evaluator
+# Expansion)가 §39 신규 등록 12개 중 4개에 실제 evaluator를 구현했다 --
+# `_ALL_NEW_IDS` 자체(신규 등록 여부)는 바뀌지 않았지만 "아직 전부
+# evaluator가 없다"는 이전 가정은 더 이상 사실이 아니다. 두 상태를
+# 명시적으로 분리한다(§14/§18 원칙은 "가짜 evaluator id를 채우지 않는다"
+# 이지 "영원히 채우지 않는다"가 아니다).
+_NEW_IDS_NOW_IMPLEMENTED = {
+    "fundamental.profitability.net_margin",
+    "fundamental.financial_resilience.debt_ratio",
+    "valuation.earnings_based.trailing_per",
+    "valuation.asset_based.pbr",
+}
+
+_NEW_IDS_STILL_UNIMPLEMENTED = _ALL_NEW_IDS - _NEW_IDS_NOW_IMPLEMENTED
+
+
+def test_new_catalog_entries_still_unimplemented_have_no_evaluator_bound():
+    """§14/§18: §39 신규 등록 12개 중 아직 evaluator가 없는 8개는
+    evaluator_id/version이 여전히 None이다 -- feature identity만
+    선언됐을 뿐 evaluator는 구현되지 않았다. 가짜 evaluator id를
+    채우지 않았다."""
+    assert len(_NEW_IDS_STILL_UNIMPLEMENTED) == 8
+    for feature_id in _NEW_IDS_STILL_UNIMPLEMENTED:
         definition = get_feature_definition(feature_id)
         assert definition.evaluator_id is None
         assert definition.evaluator_version is None
         assert is_implemented(definition) is False
+
+
+def test_new_catalog_entries_now_implemented_have_exact_evaluator_metadata():
+    """RE-05 Post-Orchestration Architecture Review Step F(READY
+    Evaluator Expansion): Net Margin/Debt Ratio/Trailing PER/PBR
+    4개는 실제 evaluator가 구현됐다 -- evaluator_id는 정확한 Python
+    class name(ROE/Operating Margin과 동일 convention, §9 registry
+    metadata synchronization contract), evaluator_version은 첫
+    구현이므로 "v1"이다."""
+    expected = {
+        "fundamental.profitability.net_margin": "NetMarginFeatureEvaluator",
+        "fundamental.financial_resilience.debt_ratio": "DebtRatioFeatureEvaluator",
+        "valuation.earnings_based.trailing_per": "TrailingPerFeatureEvaluator",
+        "valuation.asset_based.pbr": "PbrFeatureEvaluator",
+    }
+    assert set(expected) == _NEW_IDS_NOW_IMPLEMENTED
+    for feature_id, evaluator_id in expected.items():
+        definition = get_feature_definition(feature_id)
+        assert definition.evaluator_id == evaluator_id
+        assert definition.evaluator_version == "v1"
+        assert is_implemented(definition) is True
 
 
 def test_existing_two_evaluators_remain_bound_after_39_population():

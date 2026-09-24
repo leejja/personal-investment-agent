@@ -302,6 +302,12 @@ _NET_MARGIN_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     # Operating Margin과 동일한 revenue-dependency 구조적 제약(§26.2/§28.5).
     applicability=FeatureApplicability.REVIEW_REQUIRED,
     required_inputs=("financial_facts.features.annual[latest].net_margin",),
+    # RE-05 Post-Orchestration Architecture Review Step F(READY Evaluator
+    # Expansion): NetMarginFeatureEvaluator(app/evaluation/
+    # fundamental_evaluators.py)가 실제로 구현됐다 -- implementation-state
+    # synchronization일 뿐 다른 어떤 필드도 변경하지 않는다.
+    evaluator_id="NetMarginFeatureEvaluator",
+    evaluator_version="v1",
 )
 
 _REVENUE_GROWTH_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
@@ -401,6 +407,11 @@ _DEBT_RATIO_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     # 여전히 OPEN.
     applicability=FeatureApplicability.REVIEW_REQUIRED,
     required_inputs=("financial_facts.features.annual[latest].debt_ratio",),
+    # RE-05 Post-Orchestration Architecture Review Step F(READY Evaluator
+    # Expansion): DebtRatioFeatureEvaluator(app/evaluation/
+    # fundamental_evaluators.py)가 실제로 구현됐다.
+    evaluator_id="DebtRatioFeatureEvaluator",
+    evaluator_version="v1",
 )
 
 _ROA_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
@@ -510,6 +521,11 @@ _TRAILING_PER_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     directionality=Directionality.CONTEXT_DEPENDENT,
     applicability=FeatureApplicability.UNIVERSAL,
     required_inputs=("financial_facts.current.per",),
+    # RE-05 Post-Orchestration Architecture Review Step F(READY Evaluator
+    # Expansion): TrailingPerFeatureEvaluator(app/evaluation/
+    # valuation_evaluators.py)가 실제로 구현됐다.
+    evaluator_id="TrailingPerFeatureEvaluator",
+    evaluator_version="v1",
 )
 
 _PBR_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
@@ -535,6 +551,11 @@ _PBR_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(
     directionality=Directionality.CONTEXT_DEPENDENT,
     applicability=FeatureApplicability.UNIVERSAL,
     required_inputs=("financial_facts.current.pbr",),
+    # RE-05 Post-Orchestration Architecture Review Step F(READY Evaluator
+    # Expansion): PbrFeatureEvaluator(app/evaluation/valuation_evaluators.py)
+    # 가 실제로 구현됐다.
+    evaluator_id="PbrFeatureEvaluator",
+    evaluator_version="v1",
 )
 
 _EARNINGS_YIELD_DEFINITION: Final[FeatureDefinition] = FeatureDefinition(

@@ -194,15 +194,29 @@ DeterministicAnalysisResult          app/agents/stock_research/analysis.py (기�
         ↓
 NormalizedResearchData                app/evaluation/research_data_builder.py (IMPLEMENTED)
         ↓
-FeatureEvaluationResult[]             app/evaluation/fundamental_evaluators.py (IMPLEMENTED —
-        ↓                             단 ROE/Operating Margin 2개 evaluator뿐)
-Coverage                              app/evaluation/coverage_evaluator.py (IMPLEMENTED)
+FeatureEvaluationResult[]             app/evaluation/fundamental_evaluators.py +
+        ↓                             app/evaluation/valuation_evaluators.py (IMPLEMENTED —
+        ↓                             14개 registry feature 중 6개 evaluator)
+Component Coverage                    app/evaluation/coverage_evaluator.py (IMPLEMENTED)
         ↓
 Assembly                              app/evaluation/assembly.py (IMPLEMENTED)
         ↓
+State Coverage (top-level)            app/evaluation/coverage_evaluator.py::
+        ↓                             evaluate_recommendation_coverage (IMPLEMENTED)
 FutureOpportunityEvidence             app/evaluation/coverage_evaluator.py::
         ↓                             evaluate_future_opportunity_evidence (IMPLEMENTED)
 RecommendationEvaluationState          app/models/research_context.py (model 존재, IMPLEMENTED)
+```
+
+State Coverage와 FutureOpportunityEvidence는 둘 다 Component Coverage에서
+파생되는 **서로 독립적인 sibling output**이다 — State Coverage는 FOE를
+입력으로 받지 않는다(orchestrator는 State Coverage를 FOE보다 먼저 계산한다).
+
+Evaluator 실행 순서(canonical, `orchestrator.py`):
+
+```text
+ROE → Operating Margin → Net Margin → Debt Ratio     (Fundamental)
+    → Trailing PER → PBR                             (Valuation)
 ```
 
 **이 building block들은 `app/evaluation/orchestrator.py`의
@@ -211,9 +225,9 @@ Slice로 연결됐다(FROZEN, §7.2 참고)** — repository에 실재 확인함
 파이프라인은 이제 "따로따로는 동작이 검증된 부품들의 도면"이 아니라 실제로
 실행되는 하나의 흐름이다. 단, `Recommendation Policy`는 여전히 구현되지
 않았고 `StockOpportunityAssessment`는 아직 이 pipeline의 output이 아니다 —
-`Core Attractiveness`/`Market Confirmation`/`Risk`/top-level
-`Coverage`·`Confidence` aggregation도 이 First Slice 범위 밖으로 그대로
-남아 있다(§7.2).
+`Core Attractiveness`/`Market Confirmation`/`Risk`/`Confidence` producer도
+아직 없다(§7.2/§7.3). top-level `coverage`(State Coverage)만 RE-05 Step J에서
+구현됐다(§7.2).
 
 ### 7.2 First Deterministic Pipeline Slice — 확정된 architecture 경계
 
@@ -228,14 +242,46 @@ Orchestrator 구현은 First Deterministic Pipeline Slice로 완료/FROZEN됐고
   slice는 이 두 aggregate/confirmation을 만들지 않는다 — 새로운 집계·판단
   semantics를 발명하지 않는다는 원칙 때문이다. 두 필드가 담을 정보는 이미
   `component_assessments`에 전부 존재하므로 정보 손실은 없다.
-- **Orchestration ownership = `app/evaluation/orchestrator.py`(예정)**:
+- **Orchestration ownership = `app/evaluation/orchestrator.py`**:
   Recommendation Evaluation Layer가 소유하며, Stock Research Agent 내부가
   아니다. vendor/service/MCP/LLM을 새로 import하지 않는다.
-- **Executable evaluator = 실제 구현된 것만 실행**: 현재 `RoeFeatureEvaluator`/
-  `OperatingMarginFeatureEvaluator`(`app/evaluation/fundamental_evaluators.py`)
-  2개뿐이다. Feature Registry(`app/evaluation/feature_registry.py`)에는 14개
-  feature identity가 등록돼 있지만 evaluator가 없는 12개는 orchestrator가
+- **Executable evaluator = 실제 구현된 것만 실행**: RE-05 Post-Orchestration
+  Architecture Review Step A~F(READY Evaluator Expansion) 이후 현재
+  `RoeFeatureEvaluator`/`OperatingMarginFeatureEvaluator`/
+  `NetMarginFeatureEvaluator`/`DebtRatioFeatureEvaluator`
+  (`app/evaluation/fundamental_evaluators.py`) +
+  `TrailingPerFeatureEvaluator`/`PbrFeatureEvaluator`
+  (`app/evaluation/valuation_evaluators.py`, 신규) 6개다. Feature Registry
+  (`app/evaluation/feature_registry.py`)에는 14개 feature identity가
+  등록돼 있지만(개수 불변) evaluator가 없는 나머지 8개는 orchestrator가
   fake result를 만들지 않는다 — catalog identity만 있는 채로 남는다.
+- **`coverage`(State Coverage) = `evaluate_recommendation_coverage()`**
+  (`app/evaluation/coverage_evaluator.py`, RE-05 Step J): 이미 계산된 5개
+  component `CoverageAssessment`만 입력으로 받는 top-level
+  **evidence-coverage summary**다. Final Decision Eligibility/Recommendation/
+  Attractiveness/Confidence/Risk가 아니다. `CoreAttractivenessAssessment
+  .coverage`(Core Coverage, 미구현)와도 별개 인스턴스다.
+  - `critical_path_satisfied` = Fundamental AND Valuation의
+    `critical_path_satisfied`(Fundamental + Valuation critical evidence
+    foundation). Forward/Flow/Market Confirmation은 참여하지 않는다 —
+    **이 bool은 Final Decision Eligibility가 아니다**(Final Decision
+    Eligibility는 미구현 Recommendation Policy의 몫).
+  - `coverage_status` = Fundamental/Valuation/Forward 3개 status만 사용:
+    전부 SUFFICIENT → SUFFICIENT, 하나라도 INSUFFICIENT/UNKNOWN →
+    INSUFFICIENT, 그 외 → PARTIAL. `coverage_percentage`는 항상 `None`.
+  - Forward: critical bool에는 non-gating, `coverage_status`에는 기여한다.
+    Forward의 alternative path(Event evidence) 판정은
+    `future_opportunity_evidence`(tri-state SATISFIED/NOT_SATISFIED/
+    UNKNOWN)에 별도로 보존된다 — Forward component coverage ≠
+    FutureOpportunityEvidence ≠ Final Decision Eligibility.
+  - Flow/Market Confirmation: 두 top-level axis 모두 non-gating이지만
+    transparency bucket에는 포함된다. State Coverage에서 non-gating이라는
+    것이 Recommendation Policy에 Market Confirmation producer가 불필요하다는
+    뜻은 아니다.
+  - bucket(`available_*`/`missing_*`/`optional_*`/`not_applicable`)/
+    `source_failures`/`warnings`는 5개 component를 `Component` enum 선언
+    순서로 이어붙이기만 한다(sort/dedup/prefix 없음). synthetic
+    architecture warning을 추가하지 않는다.
 
 ### 7.3 현재 상태 요약
 
@@ -244,13 +290,25 @@ Coverage Layer                = IMPLEMENTATION COMPLETE
 Assembly Layer                = IMPLEMENTATION COMPLETE
 Future Opportunity Evidence   = IMPLEMENTED
 Evaluation Orchestration      = FIRST DETERMINISTIC PIPELINE SLICE COMPLETE / FROZEN
-                                 NEXT = RE-05 Post-Orchestration Architecture Review
-Recommendation Policy         = NOT IMPLEMENTED
+Feature Evaluator             = 6/14 IMPLEMENTED (READY Evaluator Expansion,
+                                 RE-05 Post-Orchestration Architecture Review
+                                 Step A~F)
+Top-level Coverage            = IMPLEMENTED / VERIFIED / FROZEN (Step J)
+Core Attractiveness           = NOT IMPLEMENTED (readiness PARTIAL)
+Market Confirmation           = NOT IMPLEMENTED (readiness BLOCKED)
+Risk                          = NOT IMPLEMENTED (readiness BLOCKED)
+Confidence                    = NOT IMPLEMENTED (readiness BLOCKED)
+Final Decision Eligibility    = NOT IMPLEMENTED
+Recommendation Policy         = NOT IMPLEMENTED (NOT READY)
 Numeric Calibration           = OPEN
 ```
 
+NEXT slice는 아직 선택되지 않았다(Post-Step-J next-slice selection pending,
+별도 architecture review에서 결정).
+
 RE-04/RE-05의 상세 결정 과정, contract 확정 근거는 `docs/dev-log/
-2026-08-29.md` §1~§51과 `app/models/recommendation.py`/`research_context.py`
+2026-08-29.md` §1~§51(Post-Orchestration Review Step A~J는 `docs/dev-log/
+2026-09-07.md`)과 `app/models/recommendation.py`/`research_context.py`
 docstring이 canonical이다.
 
 ---

@@ -769,6 +769,91 @@ def evaluate_forward_coverage(
     return _evaluate_component_coverage(Component.FORWARD, _FORWARD_FAMILIES, feature_results)
 
 
+# ============================== Top-level State Coverage (RE-05 Step H/I) ==============================
+
+# Step H: top-level coverage_status tier에 참여하는 component -- Flow/Market
+# Confirmation은 제외한다(두 axis 모두 non-gating).
+_STATE_COVERAGE_STATUS_COMPONENTS: tuple[Component, ...] = (
+    Component.FUNDAMENTAL,
+    Component.VALUATION,
+    Component.FORWARD,
+)
+
+_MERGED_LIST_FIELDS: tuple[str, ...] = (
+    "available_required",
+    "missing_required",
+    "available_important",
+    "missing_important",
+    "optional_available",
+    "optional_missing",
+    "not_applicable",
+    "source_failures",
+    "warnings",
+)
+
+
+def evaluate_recommendation_coverage(
+    component_coverages: Mapping[Component, CoverageAssessment],
+) -> CoverageAssessment:
+    """`RecommendationEvaluationState.coverage`(top-level evidence-coverage
+    summary)를 이미 계산된 5개 component `CoverageAssessment`에서 조립한다
+    (`docs/dev-log/2026-09-07.md` §J Step H / §K Step I FROZEN contract).
+
+    **State Coverage != Core Coverage**: `CoreAttractivenessAssessment
+    .coverage`(Core 4-component, 미구현 producer 소관)와 별개 인스턴스다.
+    **`critical_path_satisfied` != Final Decision Eligibility** -- 그 판정은
+    미구현 Recommendation Policy Step 1의 몫이다. Coverage != Confidence/
+    Recommendation/Attractiveness.
+
+    - `critical_path_satisfied` = Fundamental AND Valuation만. Forward/Flow/
+      Market Confirmation은 참여하지 않는다.
+    - `coverage_status` = Fundamental/Valuation/Forward 3개 status만으로
+      §42.14 critical-family 규칙(§46.4 correction 포함)을 그대로 적용한다:
+      전부 SUFFICIENT -> SUFFICIENT, 하나라도 INSUFFICIENT/UNKNOWN ->
+      INSUFFICIENT, 그 외 PARTIAL.
+    - `FutureOpportunityEvidence`는 입력이 아니다 -- State Coverage와
+      independent sibling output이다.
+    - bucket/source_failures/warnings는 5개 component를 `Component` enum
+      선언 순서로 concatenate만 한다(dedup/sort 없음). synthetic
+      architecture warning은 추가하지 않는다 -- architecture semantics는
+      docs/tests가 설명한다.
+    - canonical component key가 없으면 `KeyError`를 그대로 propagate한다
+      (fail-fast, fallback 없음). canonical 밖 extra key는 읽지 않는다.
+    """
+    fundamental = component_coverages[Component.FUNDAMENTAL]
+    valuation = component_coverages[Component.VALUATION]
+    critical_path_satisfied = (
+        fundamental.critical_path_satisfied and valuation.critical_path_satisfied
+    )
+
+    critical_statuses = tuple(
+        component_coverages[component].coverage_status
+        for component in _STATE_COVERAGE_STATUS_COMPONENTS
+    )
+    if all(status is CoverageStatus.SUFFICIENT for status in critical_statuses):
+        coverage_status = CoverageStatus.SUFFICIENT
+    elif any(
+        status in (CoverageStatus.INSUFFICIENT, CoverageStatus.UNKNOWN)
+        for status in critical_statuses
+    ):
+        coverage_status = CoverageStatus.INSUFFICIENT
+    else:
+        coverage_status = CoverageStatus.PARTIAL
+
+    merged: dict[str, list[str]] = {field: [] for field in _MERGED_LIST_FIELDS}
+    for component in Component:
+        assessment = component_coverages[component]
+        for field, values in merged.items():
+            values.extend(getattr(assessment, field))
+
+    return CoverageAssessment(
+        **{field: tuple(values) for field, values in merged.items()},
+        critical_path_satisfied=critical_path_satisfied,
+        coverage_status=coverage_status,
+        coverage_percentage=None,
+    )
+
+
 def _forward_coverage_to_path_availability(
     forward_coverage: CoverageAssessment,
 ) -> EvidencePathAvailability:

@@ -7,7 +7,10 @@ threshold/weight/window/percentage/count 테스트는 만들지 않는다(그런
 """
 
 import inspect
+import itertools
 from datetime import UTC, datetime
+
+import pytest
 
 from app.agents.stock_research.analysis import DeterministicAnalysisResult
 from app.evaluation.coverage_evaluator import (
@@ -18,6 +21,7 @@ from app.evaluation.coverage_evaluator import (
     evaluate_fundamental_coverage,
     evaluate_future_opportunity_evidence,
     evaluate_market_coverage,
+    evaluate_recommendation_coverage,
     evaluate_valuation_coverage,
     get_family_criticality,
 )
@@ -31,6 +35,7 @@ from app.models.common import AnalysisConfidence, RiskLevel
 from app.models.recommendation import (
     AvailabilityStatus,
     Component,
+    CoverageAssessment,
     CoverageStatus,
     EvaluationBasis,
     EvidencePathAvailability,
@@ -184,17 +189,24 @@ def test_required_feature_runtime_unavailable_goes_to_missing_required():
     assert any("evaluated but UNAVAILABLE at runtime" in w for w in coverage.warnings)
 
 
-# ============================== §19-5: Debt Ratio catalog exists, evaluator not implemented ==============================
+# ============================== §19-5: Debt Ratio catalog exists, result not provided this cycle ==============================
 
 
-def test_debt_ratio_not_implemented_distinct_from_unavailable():
-    """§19 case 5 + §18: Debt Ratio는 evaluator_id=None(NOT_IMPLEMENTED)이지
-    실행됐다가 실패한 것(UNAVAILABLE)이 아니다 -- warning 문구가 이를
-    구분한다."""
+def test_debt_ratio_result_missing_distinct_from_unavailable():
+    """§19 case 5 + §18(RE-05 Post-Orchestration Architecture Review
+    Step F 이후 갱신): Debt Ratio는 이제 evaluator가 구현돼 있다
+    (`DebtRatioFeatureEvaluator`, evaluator_id != None) -- result 없이
+    호출하면 더 이상 NOT_IMPLEMENTED가 아니라 RESULT_MISSING(execution/
+    result gap)으로 분류된다. 이는 실행됐다가 실패한 것(UNAVAILABLE)과도
+    여전히 다르다 -- warning 문구가 세 경우를 계속 구분한다."""
     coverage = evaluate_family_coverage(Component.FUNDAMENTAL, "financial_resilience", [])
     assert _DEBT_RATIO_ID in coverage.missing_required
-    assert any("NOT_IMPLEMENTED" in w and _DEBT_RATIO_ID in w for w in coverage.warnings)
+    assert any(
+        "evaluator implemented but no result provided this cycle" in w and _DEBT_RATIO_ID in w
+        for w in coverage.warnings
+    )
     assert not any("UNAVAILABLE at runtime" in w and _DEBT_RATIO_ID in w for w in coverage.warnings)
+    assert not any("NOT_IMPLEMENTED" in w and _DEBT_RATIO_ID in w for w in coverage.warnings)
 
 
 # ============================== §19-6/7: Growth family existence-based OR ==============================
@@ -287,18 +299,22 @@ def test_all_fourteen_fundamental_and_valuation_features_never_silently_vanish()
 
 
 def test_not_implemented_and_unavailable_produce_different_warning_text():
-    """Debt Ratio(evaluator_id=None, result 없음)는 NOT_IMPLEMENTED로,
+    """Revenue Growth(evaluator_id=None, result 없음)는 NOT_IMPLEMENTED로,
     Operating Margin(evaluator 있음, runtime UNAVAILABLE인 결과)은
     UNAVAILABLE로 -- 같은 "missing" 부류여도 코드가 두 원인을 구분해서
-    다른 문구를 남긴다."""
+    다른 문구를 남긴다. (RE-05 Post-Orchestration Architecture Review
+    Step F 이후 Debt Ratio는 구현됐으므로 예시를 Revenue Growth로
+    교체했다 -- `coverage_evaluator.py`의 동작 자체는 변경되지 않았다.)"""
     not_implemented_coverage = evaluate_family_coverage(
-        Component.FUNDAMENTAL, "financial_resilience", []
+        Component.FUNDAMENTAL, "observed_growth_quality", []
     )
     om_result = _hypothetical_result(_OM_ID, AvailabilityStatus.UNAVAILABLE)
     unavailable_coverage = evaluate_family_coverage(
         Component.FUNDAMENTAL, "profitability", [om_result]
     )
-    not_implemented_text = next(w for w in not_implemented_coverage.warnings if _DEBT_RATIO_ID in w)
+    not_implemented_text = next(
+        w for w in not_implemented_coverage.warnings if _REVENUE_GROWTH_ID in w
+    )
     unavailable_text = next(w for w in unavailable_coverage.warnings if _OM_ID in w)
     assert not_implemented_text != unavailable_text
     assert "NOT_IMPLEMENTED" in not_implemented_text
@@ -597,12 +613,23 @@ def test_per_not_applicable_excluded_from_missing():
 
 
 def test_catalog_only_unimplemented_valuation_feature_visible():
-    """§10 case 6: 아무 result도 안 줘도 PER/Earnings Yield/PBR 전부
-    NOT_IMPLEMENTED로 표시된다(catalog-only)."""
+    """§10 case 6(RE-05 Post-Orchestration Architecture Review Step F
+    이후 갱신): 아무 result도 안 줘도 catalog 전체가 그대로 보인다 --
+    Earnings Yield는 여전히 evaluator가 없어 NOT_IMPLEMENTED, Trailing
+    PER/PBR은 이제 evaluator가 구현됐으므로 RESULT_MISSING(execution/
+    result gap)으로 분류된다. catalog identity 자체가 구현 여부와
+    무관하게 사라지지 않는다는 원 취지(false-completeness 방지)는
+    그대로 유지된다."""
     coverage = evaluate_valuation_coverage([])
-    assert any(_PER_ID in w and "NOT_IMPLEMENTED" in w for w in coverage.warnings)
+    assert any(
+        _PER_ID in w and "evaluator implemented but no result provided this cycle" in w
+        for w in coverage.warnings
+    )
     assert any(_EARNINGS_YIELD_ID in w and "NOT_IMPLEMENTED" in w for w in coverage.warnings)
-    assert any(_PBR_ID in w and "NOT_IMPLEMENTED" in w for w in coverage.warnings)
+    assert any(
+        _PBR_ID in w and "evaluator implemented but no result provided this cycle" in w
+        for w in coverage.warnings
+    )
 
 
 def test_pbr_available():
@@ -661,8 +688,12 @@ def test_valuation_uses_full_catalog_not_just_results_given():
     assert {_PER_ID, _EARNINGS_YIELD_ID, _PBR_ID} <= set(all_ids)
 
 
-def test_valuation_not_implemented_distinct_from_unavailable():
-    """§10 case 13."""
+def test_valuation_result_missing_distinct_from_unavailable():
+    """§10 case 13(RE-05 Post-Orchestration Architecture Review Step F
+    이후 갱신): PBR은 이제 evaluator가 구현돼 있다 -- result 없이
+    호출하면 NOT_IMPLEMENTED가 아니라 RESULT_MISSING으로 분류된다.
+    UNAVAILABLE(runtime 결과는 있지만 값이 없음)과는 여전히 다른
+    문구다."""
     not_implemented_coverage = evaluate_family_coverage(Component.VALUATION, "asset_based", [])
     unavailable_result = _hypothetical_result(_PBR_ID, AvailabilityStatus.UNAVAILABLE)
     unavailable_coverage = evaluate_family_coverage(
@@ -670,7 +701,7 @@ def test_valuation_not_implemented_distinct_from_unavailable():
     )
     not_implemented_text = next(w for w in not_implemented_coverage.warnings if _PBR_ID in w)
     unavailable_text = next(w for w in unavailable_coverage.warnings if _PBR_ID in w)
-    assert "NOT_IMPLEMENTED" in not_implemented_text
+    assert "evaluator implemented but no result provided this cycle" in not_implemented_text
     assert "UNAVAILABLE" in unavailable_text
     assert not_implemented_text != unavailable_text
 
@@ -1268,3 +1299,345 @@ def test_recommendation_evaluation_state_can_hold_forward_and_future_opportunity
     assert (
         state.future_opportunity_evidence.requirement_satisfied == RequirementSatisfaction.UNKNOWN
     )
+
+
+# ============================== Top-level State Coverage (RE-05 Step J) ==============================
+#
+# `evaluate_recommendation_coverage()` -- Step H/I FROZEN contract
+# (`docs/dev-log/2026-09-07.md` §J/§K). State Coverage는 evidence-coverage
+# summary일 뿐 Final Decision Eligibility가 아니다.
+
+_S = CoverageStatus.SUFFICIENT
+_P = CoverageStatus.PARTIAL
+_I = CoverageStatus.INSUFFICIENT
+_U = CoverageStatus.UNKNOWN
+
+
+def _cov(
+    status: CoverageStatus,
+    critical: bool = True,
+    *,
+    tag: str | None = None,
+) -> CoverageAssessment:
+    """`tag`가 주어지면 모든 list field에 그 component 고유의 dummy 값을 넣어
+    merge 순서를 추적할 수 있게 한다."""
+    if tag is None:
+        return CoverageAssessment(critical_path_satisfied=critical, coverage_status=status)
+    return CoverageAssessment(
+        available_required=[f"{tag}.ar"],
+        missing_required=[f"{tag}.mr"],
+        available_important=[f"{tag}.ai"],
+        missing_important=[f"{tag}.mi"],
+        optional_available=[f"{tag}.oa"],
+        optional_missing=[f"{tag}.om"],
+        not_applicable=[f"{tag}.na"],
+        critical_path_satisfied=critical,
+        coverage_status=status,
+        source_failures=[f"{tag}.sf1", f"{tag}.sf2"],
+        warnings=[f"{tag}.w1", f"{tag}.w2"],
+    )
+
+
+def _coverages(
+    fundamental: CoverageAssessment | None = None,
+    valuation: CoverageAssessment | None = None,
+    forward: CoverageAssessment | None = None,
+    flow: CoverageAssessment | None = None,
+    market: CoverageAssessment | None = None,
+) -> dict[Component, CoverageAssessment]:
+    # 기본값 = 현재 실제 pipeline shape(F/V SUFFICIENT+True, Forward
+    # INSUFFICIENT+False, Flow/Market UNKNOWN+True).
+    return {
+        Component.FUNDAMENTAL: fundamental or _cov(_S, True),
+        Component.VALUATION: valuation or _cov(_S, True),
+        Component.FORWARD: forward or _cov(_I, False),
+        Component.FLOW: flow or _cov(_U, True),
+        Component.MARKET_CONFIRMATION: market or _cov(_U, True),
+    }
+
+
+_TAGS = {
+    Component.FUNDAMENTAL: "fund",
+    Component.VALUATION: "val",
+    Component.FORWARD: "fwd",
+    Component.FLOW: "flow",
+    Component.MARKET_CONFIRMATION: "mkt",
+}
+
+
+def _tagged_coverages() -> dict[Component, CoverageAssessment]:
+    return _coverages(
+        fundamental=_cov(_S, True, tag=_TAGS[Component.FUNDAMENTAL]),
+        valuation=_cov(_S, True, tag=_TAGS[Component.VALUATION]),
+        forward=_cov(_I, False, tag=_TAGS[Component.FORWARD]),
+        flow=_cov(_U, True, tag=_TAGS[Component.FLOW]),
+        market=_cov(_U, True, tag=_TAGS[Component.MARKET_CONFIRMATION]),
+    )
+
+
+_CANONICAL_TAG_ORDER = ("fund", "val", "fwd", "flow", "mkt")
+
+
+# A.
+def test_state_coverage_fully_sufficient():
+    result = evaluate_recommendation_coverage(_coverages(forward=_cov(_S, True)))
+
+    assert result.critical_path_satisfied is True
+    assert result.coverage_status is CoverageStatus.SUFFICIENT
+
+
+# B.
+def test_state_coverage_current_semantic_case_critical_true_status_insufficient():
+    result = evaluate_recommendation_coverage(_coverages())
+
+    assert result.critical_path_satisfied is True
+    assert result.coverage_status is CoverageStatus.INSUFFICIENT
+    assert result.coverage_percentage is None
+
+
+# C.
+def test_state_coverage_fundamental_critical_failure():
+    result = evaluate_recommendation_coverage(_coverages(fundamental=_cov(_I, False)))
+
+    assert result.critical_path_satisfied is False
+
+
+# D.
+def test_state_coverage_valuation_critical_failure():
+    result = evaluate_recommendation_coverage(_coverages(valuation=_cov(_I, False)))
+
+    assert result.critical_path_satisfied is False
+
+
+def test_state_coverage_critical_bool_is_exact_fundamental_and_valuation():
+    for fund_critical in (True, False):
+        for val_critical in (True, False):
+            result = evaluate_recommendation_coverage(
+                _coverages(
+                    fundamental=_cov(_S, fund_critical),
+                    valuation=_cov(_S, val_critical),
+                    forward=_cov(_S, True),
+                )
+            )
+            assert result.critical_path_satisfied is (fund_critical and val_critical)
+
+
+# E.
+def test_state_coverage_forward_does_not_gate_critical_bool():
+    for forward_status in CoverageStatus:
+        result = evaluate_recommendation_coverage(
+            _coverages(forward=_cov(forward_status, False))
+        )
+        assert result.critical_path_satisfied is True
+
+
+# F.
+def test_state_coverage_flow_is_non_gating_on_both_axes():
+    baseline = evaluate_recommendation_coverage(_coverages())
+    for flow_status in CoverageStatus:
+        for flow_critical in (True, False):
+            result = evaluate_recommendation_coverage(
+                _coverages(flow=_cov(flow_status, flow_critical))
+            )
+            assert result.critical_path_satisfied is baseline.critical_path_satisfied
+            assert result.coverage_status is baseline.coverage_status
+
+
+# G.
+def test_state_coverage_market_confirmation_is_non_gating_on_both_axes():
+    baseline = evaluate_recommendation_coverage(_coverages())
+    for market_status in CoverageStatus:
+        for market_critical in (True, False):
+            result = evaluate_recommendation_coverage(
+                _coverages(market=_cov(market_status, market_critical))
+            )
+            assert result.critical_path_satisfied is baseline.critical_path_satisfied
+            assert result.coverage_status is baseline.coverage_status
+
+
+def test_state_coverage_non_gating_also_holds_when_critical_components_sufficient():
+    # baseline이 INSUFFICIENT가 아닌 경우(F/V/Forward 전부 SUFFICIENT)에도
+    # Flow/Market이 status를 끌어내리지 않는다.
+    for status in CoverageStatus:
+        result = evaluate_recommendation_coverage(
+            _coverages(
+                forward=_cov(_S, True),
+                flow=_cov(status, False),
+                market=_cov(status, False),
+            )
+        )
+        assert result.critical_path_satisfied is True
+        assert result.coverage_status is CoverageStatus.SUFFICIENT
+
+
+# H.
+def test_state_coverage_forward_partial_gives_partial():
+    result = evaluate_recommendation_coverage(_coverages(forward=_cov(_P, False)))
+
+    assert result.coverage_status is CoverageStatus.PARTIAL
+    assert result.critical_path_satisfied is True
+
+
+# I.
+def test_state_coverage_forward_unknown_gives_insufficient():
+    result = evaluate_recommendation_coverage(_coverages(forward=_cov(_U, False)))
+
+    assert result.coverage_status is CoverageStatus.INSUFFICIENT
+    assert result.critical_path_satisfied is True
+
+
+def test_state_coverage_status_truth_table():
+    """F/V/Forward 64개 조합 전부: S S S -> SUFFICIENT, 하나라도
+    INSUFFICIENT/UNKNOWN -> INSUFFICIENT, 그 외(S/P만, P 포함) -> PARTIAL."""
+    for f, v, fw in itertools.product(CoverageStatus, repeat=3):
+        statuses = (f, v, fw)
+        if statuses == (_S, _S, _S):
+            expected = _S
+        elif _I in statuses or _U in statuses:
+            expected = _I
+        else:
+            expected = _P
+        result = evaluate_recommendation_coverage(
+            _coverages(
+                fundamental=_cov(f, True),
+                valuation=_cov(v, True),
+                forward=_cov(fw, True),
+            )
+        )
+        assert result.coverage_status is expected, statuses
+
+
+# J.
+def test_state_coverage_bucket_merge_follows_canonical_component_order():
+    result = evaluate_recommendation_coverage(_tagged_coverages())
+
+    suffix_by_field = {
+        "available_required": "ar",
+        "missing_required": "mr",
+        "available_important": "ai",
+        "missing_important": "mi",
+        "optional_available": "oa",
+        "optional_missing": "om",
+        "not_applicable": "na",
+    }
+    for field, suffix in suffix_by_field.items():
+        assert getattr(result, field) == [f"{tag}.{suffix}" for tag in _CANONICAL_TAG_ORDER]
+
+
+def test_state_coverage_merge_order_is_independent_of_mapping_insertion_order():
+    tagged = _tagged_coverages()
+    reversed_mapping = dict(reversed(list(tagged.items())))
+
+    assert evaluate_recommendation_coverage(reversed_mapping) == evaluate_recommendation_coverage(
+        tagged
+    )
+
+
+def test_state_coverage_merge_does_not_dedup():
+    shared = _cov(_S, True, tag="dup")
+    result = evaluate_recommendation_coverage(
+        _coverages(fundamental=shared, valuation=shared)
+    )
+
+    assert result.available_required == ["dup.ar", "dup.ar"]
+    assert result.warnings == ["dup.w1", "dup.w2", "dup.w1", "dup.w2"]
+
+
+# K.
+def test_state_coverage_source_failures_merge_follows_canonical_order():
+    result = evaluate_recommendation_coverage(_tagged_coverages())
+
+    assert result.source_failures == [
+        f"{tag}.sf{n}" for tag in _CANONICAL_TAG_ORDER for n in (1, 2)
+    ]
+
+
+# L.
+def test_state_coverage_warnings_are_only_component_warnings_in_canonical_order():
+    result = evaluate_recommendation_coverage(_tagged_coverages())
+
+    assert result.warnings == [f"{tag}.w{n}" for tag in _CANONICAL_TAG_ORDER for n in (1, 2)]
+
+
+def test_state_coverage_adds_no_synthetic_warning():
+    # component warning이 전부 비어 있으면, critical=True + INSUFFICIENT
+    # 조합(Forward carve-out)이나 Flow/Market non-gating만을 이유로 새
+    # warning이 생기지 않는다.
+    result = evaluate_recommendation_coverage(_coverages())
+
+    assert result.critical_path_satisfied is True
+    assert result.coverage_status is CoverageStatus.INSUFFICIENT
+    assert result.warnings == []
+    assert result.source_failures == []
+
+
+# M.
+def test_state_coverage_output_is_new_instance():
+    coverages = _tagged_coverages()
+    result = evaluate_recommendation_coverage(coverages)
+
+    for component in Component:
+        assert result is not coverages[component]
+
+
+# N.
+def test_state_coverage_does_not_mutate_inputs():
+    coverages = _tagged_coverages()
+    snapshot = {component: cov.model_copy(deep=True) for component, cov in coverages.items()}
+    list_ids = {
+        component: {field: id(value) for field, value in cov if isinstance(value, list)}
+        for component, cov in coverages.items()
+    }
+    keys_before = list(coverages)
+
+    result = evaluate_recommendation_coverage(coverages)
+
+    assert list(coverages) == keys_before
+    for component, cov in coverages.items():
+        assert cov == snapshot[component]
+        for field, value in cov:
+            if isinstance(value, list):
+                assert id(value) == list_ids[component][field]
+                assert getattr(result, field) is not value
+
+
+# O.
+def test_state_coverage_missing_component_raises_key_error():
+    for missing in Component:
+        coverages = _coverages()
+        del coverages[missing]
+        with pytest.raises(KeyError):
+            evaluate_recommendation_coverage(coverages)
+
+
+def test_state_coverage_signature_accepts_only_component_coverages():
+    params = list(inspect.signature(evaluate_recommendation_coverage).parameters)
+
+    assert params == ["component_coverages"]
+
+
+def test_state_coverage_from_real_component_evaluators():
+    """실제 5개 component evaluator 출력(ROE/OM/Debt Ratio/Trailing PER가 있는
+    feature_results)으로 조립해도 current semantic case(True/INSUFFICIENT)가
+    나온다."""
+    feature_results = [
+        _hypothetical_result(feature_id, AvailabilityStatus.AVAILABLE)
+        for feature_id in (_ROE_ID, _OM_ID, _NET_MARGIN_ID, _DEBT_RATIO_ID, _PER_ID, _PBR_ID)
+    ]
+    coverages = {
+        Component.FUNDAMENTAL: evaluate_fundamental_coverage(feature_results),
+        Component.VALUATION: evaluate_valuation_coverage(feature_results),
+        Component.FORWARD: evaluate_forward_coverage(feature_results),
+        Component.FLOW: evaluate_flow_coverage(feature_results),
+        Component.MARKET_CONFIRMATION: evaluate_market_coverage(feature_results),
+    }
+    result = evaluate_recommendation_coverage(coverages)
+
+    assert coverages[Component.FUNDAMENTAL].critical_path_satisfied is True
+    assert coverages[Component.VALUATION].critical_path_satisfied is True
+    assert coverages[Component.FORWARD].critical_path_satisfied is False
+    assert result.critical_path_satisfied is True
+    assert result.coverage_status is CoverageStatus.INSUFFICIENT
+    assert result.coverage_percentage is None
+    expected_warnings = [w for component in Component for w in coverages[component].warnings]
+    assert result.warnings == expected_warnings

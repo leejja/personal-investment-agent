@@ -18,9 +18,10 @@ architecture, 새 semantics를 만들지 않는다.
 - `CoreAttractivenessAssessment`/`MarketConfirmationAssessment` aggregate
   생성 -- `RecommendationEvaluationState.core_attractiveness`/
   `market_confirmation`은 이 슬라이스에서 항상 `None`이다.
-- `RiskAssessment`/`ConfidenceAssessment` producer, top-level `coverage`
-  aggregation -- 전부 `None`으로 남긴다(aggregation 정책이 아직 없다는
-  기존 원칙을 top-level 단일 필드에도 동일하게 적용한다).
+- `RiskAssessment`/`ConfidenceAssessment` producer -- `None`으로 남긴다.
+  top-level `coverage`는 RE-05 Step J부터 `evaluate_recommendation_coverage()`
+  가 채운다(evidence-coverage summary일 뿐 Final Decision Eligibility가
+  아니다).
 - 새 Event Overlay/Event Intelligence semantics -- `event_path_availability`
   는 항상 기존 default(`UNKNOWN`)를 그대로 쓴다.
 - Feature Registry를 순회해 evaluator를 동적으로 만드는 것, 또는 registry에
@@ -43,11 +44,13 @@ from app.evaluation.coverage_evaluator import (
     evaluate_fundamental_coverage,
     evaluate_future_opportunity_evidence,
     evaluate_market_coverage,
+    evaluate_recommendation_coverage,
     evaluate_valuation_coverage,
     get_component_families,
 )
 from app.evaluation.fundamental_evaluators import IMPLEMENTED_FUNDAMENTAL_EVALUATORS
 from app.evaluation.research_data_builder import build_normalized_research_data
+from app.evaluation.valuation_evaluators import IMPLEMENTED_VALUATION_EVALUATORS
 from app.models.recommendation import (
     Component,
     ComponentAssessment,
@@ -79,11 +82,15 @@ _COMPONENT_COVERAGE_EVALUATORS = {
     Component.MARKET_CONFIRMATION: evaluate_market_coverage,
 }
 
-# 현재는 Fundamental evaluator 2개(ROE/Operating Margin)뿐이다. 향후
-# Valuation/Forward/Flow/Market evaluator module이 생기면 그 모듈이 자신의
-# IMPLEMENTED_* tuple을 소유하고 여기서 이어붙인다(§2 사용자 지시) --
-# registry를 순회해 동적으로 만들지 않는다.
-_IMPLEMENTED_EVALUATORS = IMPLEMENTED_FUNDAMENTAL_EVALUATORS
+# Fundamental evaluator 4개(ROE/Operating Margin/Net Margin/Debt Ratio) +
+# Valuation evaluator 2개(Trailing PER/PBR) -- RE-05 Post-Orchestration
+# Architecture Review Step A~F(READY Evaluator Expansion)가 각 module이
+# 소유한 IMPLEMENTED_* tuple을 그대로 이어붙인 것이다(§2 사용자 지시 그대로
+# 유지) -- registry를 순회해 동적으로 만들지 않는다. 향후 Forward/Flow/
+# Market evaluator module이 생기면 동일한 방식으로 이어붙인다.
+_IMPLEMENTED_EVALUATORS = (
+    IMPLEMENTED_FUNDAMENTAL_EVALUATORS + IMPLEMENTED_VALUATION_EVALUATORS
+)
 
 
 def run_first_deterministic_pipeline(
@@ -129,6 +136,11 @@ def run_first_deterministic_pipeline(
         flattened_family_assessments.extend(family_assessments)
         component_assessments.append(component_assessment)
 
+    # Step J: top-level State Coverage는 component coverage만으로 계산한다 --
+    # FutureOpportunityEvidence보다 먼저 호출해 FOE에 의존하지 않음을 순서로도
+    # 드러낸다.
+    state_coverage = evaluate_recommendation_coverage(component_coverages)
+
     # §8: Forward의 이미 계산된 component coverage를 그대로 재사용한다 --
     # 재계산하지 않는다. event_path_availability는 기본값(UNKNOWN)을 그대로
     # 쓴다 -- Event Intelligence가 아직 없으므로 임의로 값을 지정하지 않는다.
@@ -142,8 +154,9 @@ def run_first_deterministic_pipeline(
         feature_results=feature_results,
         family_assessments=flattened_family_assessments,
         component_assessments=component_assessments,
+        coverage=state_coverage,
         future_opportunity_evidence=future_opportunity_evidence,
-        # core_attractiveness / market_confirmation / risk / coverage /
+        # core_attractiveness / market_confirmation / risk /
         # confidence / event_overlay / correlation_metadata / warnings는
         # 전부 model default(None 또는 빈 리스트)를 그대로 둔다 -- §9 사용자
         # 지시: aggregation/scoring/policy 이전 단계이므로 이 슬라이스가
