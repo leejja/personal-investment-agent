@@ -282,10 +282,57 @@ StrategyResult   (v1 실제 출력)
 | | |
 |---|---|
 | **Phase** | RE-05 — Recommendation Evaluation Pipeline |
-| **Current Task** | RE-05 Final Decision Eligibility(Policy Step 1 primitive) 완료 — Post-Decision-Eligibility readiness review / next-slice selection pending |
-| **Status** | Coverage Layer `IMPLEMENTATION COMPLETE` · Assembly Layer `IMPLEMENTATION COMPLETE` · Evaluation Orchestration `FIRST DETERMINISTIC PIPELINE SLICE COMPLETE / FROZEN` · READY Evaluator Expansion `IMPLEMENTED`(6/14 evaluator) · Producer Readiness Re-evaluation(Step G) `FROZEN` · Top-level Coverage Aggregation/Implementation Contract(Step H/I) `FROZEN` · Top-level Coverage(Step J) `IMPLEMENTED / VERIFIED / FROZEN` · Decision Eligibility(Policy Step 1 primitive) `IMPLEMENTED / VERIFIED / FROZEN` |
-| **Recommendation Policy** | `NOT IMPLEMENTED` — Step 1 primitive만 존재, Step 2~8과 policy consumer 없음 |
-| **Numeric Calibration** | `OPEN` |
+| **Current Task** | Post-Decision-Eligibility readiness review / next-slice selection pending |
+
+### Project Completion Overview
+
+**프로젝트 전체**의 구현 완료 상태를 한눈에 보여준다 — RE-05는 이 중 현재 active workstream 하나다. 이 표는 기존 status를 모아 보여주는 요약일 뿐이며, 각 영역의 세부 semantics는 위 [Architecture](#architecture) 각 section과 `docs/ARCHITECTURE.md`가 canonical이다.
+
+> **Status:** ✅ `DONE` · 🟡 `PARTIAL` · 🔵 `OPEN` · ⛔ `BLOCKED` · ⬜ `NOT IMPLEMENTED` · ⚪ `LATER / RESEARCH ONLY`
+>
+> `FROZEN`(architecture/contract 안정성)과 `VERIFIED`(검증 상태)는 implementation completion과 별개인 보조 qualifier다 — `FROZEN`만으로 완료를 뜻하지 않는다.
+
+| Area | Status | Remaining / Notes |
+|---|---|---|
+| **Foundation / Infrastructure** | | |
+| Foundation / Model Layer | ✅ `DONE` | Model Layer v1 |
+| ECOS Integration | ✅ `DONE` | |
+| OpenDART Integration | ✅ `DONE` | |
+| Kiwoom Integration | ✅ `DONE` | |
+| MCP Boundary | ✅ `DONE` | 외부 노출 경계 — Agent 실행 경로에는 사용되지 않음 |
+| KIS(한국투자증권) | ⚪ `RESEARCH ONLY` | production 미통합 — config 항목만 존재 |
+| **Application / Agent Layer** | | |
+| Supervisor / Router | ✅ `v1 DONE` | |
+| Market Agent | ✅ `v1 DONE` | |
+| Stock Research Agent | ✅ `v1 DONE` | |
+| Candidate Discovery | ✅ `v1 DONE` | Industry + Theme axis |
+| REST API (FastAPI) | ✅ `v1 DONE` | Analysis Snapshot Lifecycle 포함 |
+| Portfolio Strategy Agent | 🟡 `v1 DONE / FINAL PENDING` | v1은 `StrategyResult` 출력 — final `StockOpportunityAssessment` 입력 경로 미연결 |
+| **Recommendation Evaluation (RE-05)** | 🟡 `PARTIAL` | **현재 active workstream** (RE-01~RE-04 architecture/contracts는 `DONE / FROZEN`) |
+| ↳ Coverage Layer | ✅ `DONE` | |
+| ↳ Assembly Layer | ✅ `DONE` | |
+| ↳ Evaluation Orchestration | ✅ `FIRST SLICE DONE / FROZEN` | First Deterministic Pipeline Slice |
+| ↳ Feature Evaluators | 🟡 `6 / 14` | ROE/Operating Margin/Net Margin/Debt Ratio/Trailing PER/PBR |
+| ↳ Top-level State Coverage | ✅ `DONE / VERIFIED / FROZEN` | Step J |
+| ↳ Future Opportunity Evidence | ✅ `DONE` | State Coverage와 sibling output |
+| ↳ Decision Eligibility | ✅ `STEP 1 PRIMITIVE / VERIFIED / FROZEN` | Policy Step 1 primitive만 — orchestrator 미연결, 결과 비저장, policy consumer 없음 |
+| ↳ Core Attractiveness | ⬜ `NOT IMPLEMENTED` | readiness `PARTIAL` — Numeric Calibration 선행 필요 |
+| ↳ Market Confirmation | ⛔ `BLOCKED` | NOT IMPLEMENTED — 입력 evidence/data integration 부재 |
+| ↳ Risk | ⛔ `BLOCKED` | NOT IMPLEMENTED |
+| ↳ Confidence | ⛔ `BLOCKED` | NOT IMPLEMENTED |
+| ↳ Recommendation Policy | ⬜ `NOT IMPLEMENTED` | Step 2~8 + 실제 policy consumer 없음 (Step 1 primitive만 존재) |
+| ↳ Final AssessmentStatus production | ⬜ `NOT IMPLEMENTED` | |
+| ↳ Numeric Calibration | 🔵 `OPEN` | |
+| **Final Decision Path** | | |
+| `StockOpportunityAssessment` production | ⬜ `NOT IMPLEMENTED` | contract(RE-04 FROZEN)만 존재 — Recommendation Policy 선행 필요 |
+| Final Portfolio Decision Flow (`PortfolioActionRecommendation`) | ⬜ `NOT IMPLEMENTED` | SOA + PortfolioContext + InvestorProfile → BUY/ADD/HOLD/REDUCE/EXIT |
+| **Long-term Scope** | | |
+| Event & Disclosure Intelligence Overlay | ⚪ `LATER` | Amendment 1 |
+| Automated Trading | ⚪ `LATER` | `docs/AUTOMATED_TRADING_ROADMAP.md` |
+
+### Detailed Development Position
+
+현재 위치까지 **어떻게 진행돼 왔는가**(RE-01~RE-05 development progression)를 보여준다.
 
 ```text
 RE-01 ~ RE-04
