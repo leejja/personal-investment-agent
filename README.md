@@ -188,13 +188,13 @@ Component Coverage
         ↓
 Assembly
         ↓
-State Coverage (top-level)      FutureOpportunityEvidence와 독립적인 sibling
-        ↓
-FutureOpportunityEvidence
-        ↓
 RecommendationEvaluationState
+  ├─ State Coverage (top-level)     ─┐ 서로 독립적인 sibling producer output
+  └─ FutureOpportunityEvidence      ─┘ (현재 orchestrator가 채우는 범위는 여기까지)
         ↓
-Recommendation Policy
+[미래 Recommendation Policy consumer — 아직 없음]
+  Step 1 Decision Eligibility projection   (primitive만 구현, orchestrator 미연결)
+  Step 2~8                                 NOT IMPLEMENTED
 ```
 
 ```text
@@ -203,11 +203,13 @@ Assembly                DONE
 Full Orchestration      FIRST DETERMINISTIC PIPELINE SLICE COMPLETE / FROZEN
 READY Evaluator Expansion   IMPLEMENTED (Net Margin/Debt Ratio/Trailing PER/PBR)
 Top-level Coverage      IMPLEMENTED / VERIFIED / FROZEN (Step J)
-Recommendation Policy   NOT IMPLEMENTED
+Decision Eligibility    Policy Step 1 primitive IMPLEMENTED / VERIFIED / FROZEN
+                        (orchestrator 미연결, 결과 비저장)
+Recommendation Policy   NOT IMPLEMENTED (Step 2~8 + 실제 policy consumer 없음)
 Numeric Calibration     OPEN
 ```
 
-**연결 완료된 canonical path**(`app/evaluation/orchestrator.py::run_first_deterministic_pipeline`)가 위 building block을 순서대로 호출해 `RecommendationEvaluationState`를 만든다 — "연결될 설계"가 아니라 실제로 실행되는 하나의 흐름이다. Net Margin/Debt Ratio evaluator가 추가되면서 Fundamental component의 `critical_path_satisfied`가, Trailing PER evaluator가 추가되면서 Valuation component의 `critical_path_satisfied`가 각각 evidence가 있을 때 `True`로 계산된다(coverage_evaluator.py는 이번 확장에서 수정하지 않았다 — 기존 FROZEN Tier 판정 로직이 evaluator 확장에 자연스럽게 반응한 것이다). Step J 이후 `RecommendationEvaluationState.coverage`(top-level evidence-coverage summary)도 `evaluate_recommendation_coverage()`가 채운다 — `critical_path_satisfied`는 Fundamental + Valuation critical evidence foundation일 뿐 **Final Decision Eligibility가 아니다**(세부 semantics는 `docs/ARCHITECTURE.md` §7.2). **이것이 Numeric Calibration/Producer(Core Attractiveness/Market Confirmation/Risk/Confidence)/Final Decision Eligibility/Recommendation Policy 완료를 의미하지 않는다** — 전부 여전히 OPEN/NOT IMPLEMENTED다.
+**연결 완료된 canonical path**(`app/evaluation/orchestrator.py::run_first_deterministic_pipeline`)가 위 building block을 순서대로 호출해 `RecommendationEvaluationState`를 만든다 — "연결될 설계"가 아니라 실제로 실행되는 하나의 흐름이다. Net Margin/Debt Ratio evaluator가 추가되면서 Fundamental component의 `critical_path_satisfied`가, Trailing PER evaluator가 추가되면서 Valuation component의 `critical_path_satisfied`가 각각 evidence가 있을 때 `True`로 계산된다(coverage_evaluator.py는 이번 확장에서 수정하지 않았다 — 기존 FROZEN Tier 판정 로직이 evaluator 확장에 자연스럽게 반응한 것이다). Step J 이후 `RecommendationEvaluationState.coverage`(top-level evidence-coverage summary)도 `evaluate_recommendation_coverage()`가 채운다 — `critical_path_satisfied`는 Fundamental + Valuation critical evidence foundation일 뿐 **그 자체가 Final Decision Eligibility는 아니다**(세부 semantics는 `docs/ARCHITECTURE.md` §7.2). Recommendation Policy Step 1의 deterministic primitive `evaluate_decision_eligibility()`(`app/evaluation/decision_eligibility.py`)는 이 두 sibling output을 **나중에** 소비하는 projection이다 — `policy_may_proceed = coverage.critical_path_satisfied`, `forward_requirement = FOE tri-state 그대로`이며 `coverage_status`는 입력이 아니다(세부 경계는 `docs/ARCHITECTURE.md` §7.4). **이것이 Numeric Calibration/Producer(Core Attractiveness/Market Confirmation/Risk/Confidence)/Recommendation Policy 완료를 의미하지 않는다** — 전부 여전히 OPEN/NOT IMPLEMENTED다.
 
 ### Domain / Data Access
 
@@ -280,9 +282,9 @@ StrategyResult   (v1 실제 출력)
 | | |
 |---|---|
 | **Phase** | RE-05 — Recommendation Evaluation Pipeline |
-| **Current Task** | RE-05 Post-Orchestration Architecture Review Step A~J 완료 — Post-Step-J checkpoint / next-slice selection pending |
-| **Status** | Coverage Layer `IMPLEMENTATION COMPLETE` · Assembly Layer `IMPLEMENTATION COMPLETE` · Evaluation Orchestration `FIRST DETERMINISTIC PIPELINE SLICE COMPLETE / FROZEN` · READY Evaluator Expansion `IMPLEMENTED`(6/14 evaluator) · Producer Readiness Re-evaluation(Step G) `FROZEN` · Top-level Coverage Aggregation/Implementation Contract(Step H/I) `FROZEN` · Top-level Coverage(Step J) `IMPLEMENTED / VERIFIED / FROZEN` |
-| **Recommendation Policy** | `NOT IMPLEMENTED` |
+| **Current Task** | RE-05 Final Decision Eligibility(Policy Step 1 primitive) 완료 — Post-Decision-Eligibility readiness review / next-slice selection pending |
+| **Status** | Coverage Layer `IMPLEMENTATION COMPLETE` · Assembly Layer `IMPLEMENTATION COMPLETE` · Evaluation Orchestration `FIRST DETERMINISTIC PIPELINE SLICE COMPLETE / FROZEN` · READY Evaluator Expansion `IMPLEMENTED`(6/14 evaluator) · Producer Readiness Re-evaluation(Step G) `FROZEN` · Top-level Coverage Aggregation/Implementation Contract(Step H/I) `FROZEN` · Top-level Coverage(Step J) `IMPLEMENTED / VERIFIED / FROZEN` · Decision Eligibility(Policy Step 1 primitive) `IMPLEMENTED / VERIFIED / FROZEN` |
+| **Recommendation Policy** | `NOT IMPLEMENTED` — Step 1 primitive만 존재, Step 2~8과 policy consumer 없음 |
 | **Numeric Calibration** | `OPEN` |
 
 ```text
@@ -339,23 +341,36 @@ Top-level Coverage Implementation(Step J)     IMPLEMENTED / VERIFIED / FROZEN
     └─ Tests                                  738 PASSED
         │
         ▼
-Current producer status(Step J 이후)
+Post-Step-J Next Slice Selection              FROZEN (→ Final Decision Eligibility)
+        │
+        ▼
+Final Decision Eligibility(Policy Step 1)
+    ├─ Design Contract                        FROZEN
+    ├─ Implementation Contract                FROZEN
+    ├─ Implementation + Tests                 IMPLEMENTED / VERIFIED / FROZEN
+    │                                          (orchestrator 미연결, 결과 비저장)
+    └─ Tests                                  766 PASSED
+        │
+        ▼
+Current producer / policy status
     ├─ Top-level Coverage                     IMPLEMENTED
+    ├─ Future Opportunity Evidence            IMPLEMENTED
+    ├─ Decision Eligibility primitive         IMPLEMENTED
     ├─ Core Attractiveness                    NOT IMPLEMENTED (PARTIAL)
     ├─ Market Confirmation / Risk /
     │  Confidence                             NOT IMPLEMENTED (BLOCKED)
-    └─ Final Decision Eligibility             NOT IMPLEMENTED
+    └─ Final AssessmentStatus production      NOT IMPLEMENTED
         │
         ▼
-Recommendation Policy                         NOT IMPLEMENTED
+Recommendation Policy Step 2~8                NOT IMPLEMENTED
         │
         ▼
 Numeric Calibration                           OPEN
 ```
 
-**연결 완료된 canonical path**(`app/evaluation/orchestrator.py::run_first_deterministic_pipeline`): `DeterministicAnalysisResult → NormalizedResearchData → FeatureEvaluationResult[](ROE/Operating Margin/Net Margin/Debt Ratio/Trailing PER/PBR, 6개) → Component Coverage → Assembly → State Coverage → FutureOpportunityEvidence → RecommendationEvaluationState`. Scoring/Recommendation Policy는 이번 slice 범위 밖(`Numeric Calibration = OPEN` 유지) — evaluator가 6개로 늘어난 것은 raw evidence 확보 범위의 확장이지, "저평가/고평가 판단"이나 "상승 가능성 예측"이 아니다(`normalized_value`는 6개 evaluator 전부 항상 `None`).
+**연결 완료된 canonical path**(`app/evaluation/orchestrator.py::run_first_deterministic_pipeline`): `DeterministicAnalysisResult → NormalizedResearchData → FeatureEvaluationResult[](ROE/Operating Margin/Net Margin/Debt Ratio/Trailing PER/PBR, 6개) → Component Coverage → Assembly → {State Coverage, FutureOpportunityEvidence} → RecommendationEvaluationState` (State Coverage와 FOE는 서로 독립적인 sibling output이며, orchestrator 호출 순서만 State Coverage → FOE다). Scoring/Recommendation Policy는 이번 slice 범위 밖(`Numeric Calibration = OPEN` 유지) — evaluator가 6개로 늘어난 것은 raw evidence 확보 범위의 확장이지, "저평가/고평가 판단"이나 "상승 가능성 예측"이 아니다(`normalized_value`는 6개 evaluator 전부 항상 `None`).
 
-**NEXT**: `Post-Step-J checkpoint / next-slice selection pending`. Step J까지 구현은 FROZEN됐지만 다음 RE-05 slice는 아직 선택되지 않았다 — 별도 architecture review에서 결정한다. Step C가 SECOND 후보로 Market Confirmation Feature Identity Design을 식별했던 이력은 유효하지만, 자동으로 NEXT가 되지 않는다(Numeric Calibration도 마찬가지).
+**NEXT**: `Post-Decision-Eligibility readiness review / next-slice selection pending`. 다음 RE-05 slice는 새 dependency/readiness 검토에서 결정한다. 이전 선택들의 SECOND 후보(Step C: Market Confirmation Feature Identity Design, Post-Step-J: Derived Feature Value Ownership Contract)는 이력으로만 남으며 자동으로 NEXT가 되지 않는다(Numeric Calibration도 마찬가지).
 
 상세 architecture 경계(확정된 First Deterministic Pipeline Slice decision)는 `docs/ARCHITECTURE.md` §7 참고. 이 자리에서 다시 설명하지 않는다.
 
@@ -376,7 +391,7 @@ Numeric Calibration                           OPEN
 | Kiwoom 통합 | 완료 |
 | KIS(한국투자증권) | **research / empirical verification only — production 코드에 통합되지 않음**(`app/config.py`에 설정 항목만 존재) |
 | MCP boundary | 노출 경계로 구현 완료 — 현재 어떤 Agent도 이 경로를 실행에 사용하지 않음(in-process 직접 호출) |
-| **Recommendation Evaluation** | Coverage Layer `DONE` · Assembly Layer `DONE` · `RecommendationEvaluationState` First Deterministic Pipeline Slice `COMPLETE / FROZEN` · Feature Evaluator `6/14`(ROE/Operating Margin/Net Margin/Debt Ratio/Trailing PER/PBR) · Top-level Coverage(Step H/I contract + Step J 구현) `IMPLEMENTED / FROZEN` · Core Attractiveness/Market Confirmation/Risk/Confidence producer `NOT IMPLEMENTED` · Final Decision Eligibility `NOT IMPLEMENTED` · Recommendation Policy `NOT IMPLEMENTED` · Numeric Calibration `OPEN` |
+| **Recommendation Evaluation** | Coverage Layer `DONE` · Assembly Layer `DONE` · `RecommendationEvaluationState` First Deterministic Pipeline Slice `COMPLETE / FROZEN` · Feature Evaluator `6/14`(ROE/Operating Margin/Net Margin/Debt Ratio/Trailing PER/PBR) · Top-level Coverage(Step H/I contract + Step J 구현) `IMPLEMENTED / FROZEN` · Decision Eligibility(Policy Step 1 primitive) `IMPLEMENTED / FROZEN`(orchestrator 미연결) · Core Attractiveness/Market Confirmation/Risk/Confidence producer `NOT IMPLEMENTED` · Recommendation Policy Step 2~8 `NOT IMPLEMENTED` · Numeric Calibration `OPEN` |
 
 ---
 
@@ -384,9 +399,9 @@ Numeric Calibration                           OPEN
 
 | | |
 |---|---|
-| **DONE** | Foundation · Model Layer v1 · ECOS/OpenDART/Kiwoom Integration · Market/Stock Research/Portfolio Strategy Agent v1 · Supervisor/Router v1 · Candidate Discovery v1(Theme Axis 포함) · REST API v1 · Analysis Snapshot Lifecycle · RE-01~RE-04 Architecture/Research/Contracts(FROZEN) · RE-05 Coverage Layer · RE-05 Assembly Layer · RE-05 `RecommendationEvaluationState` First Deterministic Pipeline Slice(Evaluation Orchestration) · RE-05 Post-Orchestration Architecture Review Step A~F(READY Evaluator Expansion: Net Margin/Debt Ratio/Trailing PER/PBR evaluator + registry metadata sync) · Step G(Producer Readiness Re-evaluation) · Step H(Top-level Coverage Aggregation Contract) · Step I(Top-level Coverage Implementation Contract)(G~I는 architecture/design review, 구현 아님) · Step J(Top-level Coverage Implementation + Tests) |
-| **CURRENT** | Post-Step-J checkpoint / next-slice selection pending(별도 architecture review에서 결정) |
-| **NEXT 후보** *(선택되지 않음, 확정된 순서 아님)* | Step C SECOND(Market Confirmation Feature Identity Design) · Growth representation contract(Revenue/Operating Profit/Net Income Growth) · ROA/Asset Turnover calculation-ownership contract · Earnings Yield derivation contract · Forward/Flow upstream workstream · Core Attractiveness/Market Confirmation/Risk/Confidence producer(Numeric Calibration 선행 필요) · Recommendation Policy |
+| **DONE** | Foundation · Model Layer v1 · ECOS/OpenDART/Kiwoom Integration · Market/Stock Research/Portfolio Strategy Agent v1 · Supervisor/Router v1 · Candidate Discovery v1(Theme Axis 포함) · REST API v1 · Analysis Snapshot Lifecycle · RE-01~RE-04 Architecture/Research/Contracts(FROZEN) · RE-05 Coverage Layer · RE-05 Assembly Layer · RE-05 `RecommendationEvaluationState` First Deterministic Pipeline Slice(Evaluation Orchestration) · RE-05 Post-Orchestration Architecture Review Step A~F(READY Evaluator Expansion: Net Margin/Debt Ratio/Trailing PER/PBR evaluator + registry metadata sync) · Step G(Producer Readiness Re-evaluation) · Step H(Top-level Coverage Aggregation Contract) · Step I(Top-level Coverage Implementation Contract)(G~I는 architecture/design review, 구현 아님) · Step J(Top-level Coverage Implementation + Tests) · Post-Step-J Next Slice Selection · Final Decision Eligibility(Policy Step 1 primitive: Design/Implementation Contract + Implementation + Tests) |
+| **CURRENT** | Post-Decision-Eligibility readiness review / next-slice selection pending(별도 architecture review에서 결정) |
+| **NEXT 후보** *(선택되지 않음, 확정된 순서 아님)* | Derived Feature Value Ownership Contract(ROA/Asset Turnover/Earnings Yield 공통, Post-Step-J SECOND 이력) · Market Confirmation Feature Identity Design(Step C SECOND 이력) · Growth representation contract(Revenue/Operating Profit/Net Income Growth) · Forward/Flow upstream workstream · Core Attractiveness/Market Confirmation/Risk/Confidence producer(Numeric Calibration 선행 필요) · Recommendation Policy Step 2~8 |
 | **LATER** | Numeric Calibration(`OPEN`) · Portfolio Strategy Agent가 `StockOpportunityAssessment`를 입력으로 받도록 확장 · Event & Disclosure Intelligence Overlay(Amendment 1) · 자연어 조건 기반 후보 필터링 확장(시가총액/거래대금 상위, 관심종목 등) · Classification Coverage Gap(UX-05) 보완 · 자동매매 확장(`docs/AUTOMATED_TRADING_ROADMAP.md`) |
 
 각 항목의 세부 구현 단계(session별 변경 이력, test 개수, 버그 수정 서사)는 README에 담지 않는다 — `docs/dev-log/`가 canonical이다.

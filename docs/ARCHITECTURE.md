@@ -78,7 +78,7 @@ RecommendationEvaluationState (app/models/research_context.py)
 | MCP Server | Domain Tool을 MCP protocol로 외부에 노출(프로세스 경계) | `app/mcp/server.py` |
 | Service | 외부 API 호출, parsing, normalization, 에러 처리 | `app/services/` |
 | Model / Contract | 시스템 전체가 공유하는 data contract | `app/models/` |
-| Evaluation | Recommendation Evaluation pipeline의 deterministic building block(Coverage/Assembly/FeatureEvaluator) | `app/evaluation/` |
+| Evaluation | Recommendation Evaluation pipeline의 deterministic building block(Coverage/Assembly/FeatureEvaluator) + Recommendation Policy Step 1 Decision Eligibility primitive(§7.4) | `app/evaluation/` |
 
 **Agent → Domain Tool 호출은 in-process direct call이며 MCP protocol을
 쓰지 않는다.** `Market Agent`/`Stock Research Agent`는 `app/mcp/*_tools.py`의
@@ -224,7 +224,8 @@ ROE → Operating Margin → Net Margin → Debt Ratio     (Fundamental)
 Slice로 연결됐다(FROZEN, §7.2 참고)** — repository에 실재 확인함. 위
 파이프라인은 이제 "따로따로는 동작이 검증된 부품들의 도면"이 아니라 실제로
 실행되는 하나의 흐름이다. 단, `Recommendation Policy`는 여전히 구현되지
-않았고 `StockOpportunityAssessment`는 아직 이 pipeline의 output이 아니다 —
+않았고(Step 1 Decision Eligibility primitive만 존재하며 orchestrator에 연결되지
+않음, §7.4) `StockOpportunityAssessment`는 아직 이 pipeline의 output이 아니다 —
 `Core Attractiveness`/`Market Confirmation`/`Risk`/`Confidence` producer도
 아직 없다(§7.2/§7.3). top-level `coverage`(State Coverage)만 RE-05 Step J에서
 구현됐다(§7.2).
@@ -264,8 +265,9 @@ Orchestrator 구현은 First Deterministic Pipeline Slice로 완료/FROZEN됐고
   - `critical_path_satisfied` = Fundamental AND Valuation의
     `critical_path_satisfied`(Fundamental + Valuation critical evidence
     foundation). Forward/Flow/Market Confirmation은 참여하지 않는다 —
-    **이 bool은 Final Decision Eligibility가 아니다**(Final Decision
-    Eligibility는 미구현 Recommendation Policy의 몫).
+    **이 bool 자체는 Final Decision Eligibility가 아니다** — Decision
+    Eligibility(§7.4)는 이 bool을 `policy_may_proceed`로 투영하고 FOE
+    forward axis를 함께 담는 별도 policy-layer projection이다.
   - `coverage_status` = Fundamental/Valuation/Forward 3개 status만 사용:
     전부 SUFFICIENT → SUFFICIENT, 하나라도 INSUFFICIENT/UNKNOWN →
     INSUFFICIENT, 그 외 → PARTIAL. `coverage_percentage`는 항상 `None`.
@@ -294,22 +296,74 @@ Feature Evaluator             = 6/14 IMPLEMENTED (READY Evaluator Expansion,
                                  RE-05 Post-Orchestration Architecture Review
                                  Step A~F)
 Top-level Coverage            = IMPLEMENTED / VERIFIED / FROZEN (Step J)
+Decision Eligibility          = Policy Step 1 primitive IMPLEMENTED / VERIFIED / FROZEN
+                                 (orchestrator 미연결, 결과 비저장, §7.4)
 Core Attractiveness           = NOT IMPLEMENTED (readiness PARTIAL)
 Market Confirmation           = NOT IMPLEMENTED (readiness BLOCKED)
 Risk                          = NOT IMPLEMENTED (readiness BLOCKED)
 Confidence                    = NOT IMPLEMENTED (readiness BLOCKED)
-Final Decision Eligibility    = NOT IMPLEMENTED
-Recommendation Policy         = NOT IMPLEMENTED (NOT READY)
+Final AssessmentStatus        = NOT IMPLEMENTED
+Recommendation Policy Step 2~8 = NOT IMPLEMENTED (policy consumer 없음)
 Numeric Calibration           = OPEN
 ```
 
-NEXT slice는 아직 선택되지 않았다(Post-Step-J next-slice selection pending,
-별도 architecture review에서 결정).
+NEXT slice는 아직 선택되지 않았다(Post-Decision-Eligibility readiness review /
+next-slice selection pending, 별도 architecture review에서 결정).
 
 RE-04/RE-05의 상세 결정 과정, contract 확정 근거는 `docs/dev-log/
 2026-08-29.md` §1~§51(Post-Orchestration Review Step A~J는 `docs/dev-log/
-2026-09-07.md`)과 `app/models/recommendation.py`/`research_context.py`
-docstring이 canonical이다.
+2026-09-07.md`, Final Decision Eligibility는 `docs/dev-log/2026-09-25.md`)과
+`app/models/recommendation.py`/`research_context.py` docstring이 canonical이다.
+
+### 7.4 Recommendation Policy Step 1 — Decision Eligibility (primitive)
+
+```text
+First Deterministic Pipeline (orchestrator.py)
+        ↓
+RecommendationEvaluationState
+  ├─ coverage                     (State Coverage)            ─┐ upstream sibling
+  └─ future_opportunity_evidence  (FOE, tri-state)            ─┘ producer outputs
+
+[미래 Recommendation Policy consumer — 아직 없음]
+        ↓
+evaluate_decision_eligibility(coverage, future_opportunity_evidence)
+        ↓
+DecisionEligibility(policy_may_proceed, forward_requirement)   transient
+```
+
+- **소유**: `app/evaluation/decision_eligibility.py`. orchestrator는 이 함수를
+  호출하지 않는다 — 결과를 저장할 곳이 없고 policy consumer가 아직 없으므로
+  계산 후 버리는 wiring을 만들지 않는다.
+- **입력**: 정확히 `coverage.critical_path_satisfied`와
+  `future_opportunity_evidence.requirement_satisfied` 두 개.
+- **projection**:
+  - `policy_may_proceed = coverage.critical_path_satisfied`
+    (Fundamental + Valuation critical evidence foundation만으로 결정)
+  - `forward_requirement = future_opportunity_evidence.requirement_satisfied`
+    (SATISFIED/NOT_SATISFIED/UNKNOWN을 동일 enum member로 그대로 전달,
+    `forward_path_availability`/`event_path_availability`로 재계산하지 않음)
+- **`coverage_status`는 입력이 아니다**: State Coverage status에는 Forward가
+  포함되므로 이를 gate로 쓰면 Forward가 간접 universal hard gate가 된다.
+  현재 대표 runtime(`critical_path_satisfied=True`, `coverage_status=INSUFFICIENT`,
+  FOE `UNKNOWN`)의 결과는 `policy_may_proceed=True`, `forward_requirement=UNKNOWN`
+  이다 — evidence completeness(`coverage_status`)와 critical foundation은
+  별개 semantics다.
+- **FOE tri-state 보존**: UNKNOWN은 SATISFIED도 NOT_SATISFIED도 아니다.
+  FOE `NOT_SATISFIED`/`UNKNOWN`은 progression을 막지 않는다 — 이후
+  forward-dependent policy path가 참조할 독립 axis로 남는다(해당 path 목록은
+  미설계).
+- **None != UNKNOWN**: `coverage` 또는 `future_opportunity_evidence`가 `None`
+  (producer 미실행 = pipeline/programming error)이면 `ValueError`로 fail-fast한다.
+  UNKNOWN은 정당한 FOE evidence 상태다.
+- **AssessmentStatus와 분리**: 이 함수는 `AssessmentStatus`(ACTIONABLE/
+  INSUFFICIENT_EVIDENCE)/`StockOpportunityAssessment`/`OpportunityClassification`
+  을 만들지 않는다. `policy_may_proceed=False`가 최종 status에 어떻게 반영되는지는
+  아직 정의/구현되지 않은 downstream policy의 몫이다.
+- **비영속**: `DecisionEligibility`는 module-local frozen dataclass(Pydantic
+  아님)이며 `RecommendationEvaluationState`/`StockOpportunityAssessment`에
+  저장되지 않는다 — schema 변경 없음. 두 입력이 이미 state에 있으므로
+  `policy_version`이 고정되면 재현 가능하다.
+- Recommendation Policy Step 2~8은 설계/구현되지 않았다.
 
 ---
 
