@@ -305,8 +305,9 @@ Confidence                    = NOT IMPLEMENTED (readiness BLOCKED)
 Final AssessmentStatus        = NOT IMPLEMENTED
 Recommendation Policy Step 2~8 = NOT IMPLEMENTED (policy consumer 없음)
 Feature Normalization         = Ownership & Representation Contract FROZEN (§7.5)
-                                 / implementation NOT STARTED
-Numeric Calibration           = OPEN
+                                 / implementation NOT STARTED (readiness NO, §7.6)
+Calibration Readiness Audit   = COMPLETE / INDEPENDENT REVIEW PASS (§7.6)
+Numeric Calibration           = OPEN (workflow) / readiness BLOCKED (§7.6)
 ```
 
 Post-Decision-Eligibility Next Slice Selection(FROZEN):
@@ -324,14 +325,15 @@ NEXT는 raw feature → normalized feature 경계(`FeatureEvaluationResult
 representation/PolicyConfig boundary를 정하는 structural contract다 —
 Numeric Calibration을 시작하지 않으며 numeric parameter/threshold/weight를
 정하지 않는다(`Numeric Calibration = OPEN` 유지). contract(rev.1)는 §7.5에
-FROZEN됐고 구현은 시작하지 않았다. 현재 NEXT는 Calibration Data &
-Parameter Provenance Readiness Audit(read-only, selected / NOT STARTED —
-직전 selection의 SECOND)이고, SECOND는 NOT SELECTED다.
+FROZEN됐고 구현은 시작하지 않았다. 이어서 SECOND였던 Calibration Data &
+Parameter Provenance Readiness Audit이 COMPLETE됐다(§7.6) — 현재 NEXT/SECOND는
+§7.6의 post-audit selection이다.
 
 RE-04/RE-05의 상세 결정 과정, contract 확정 근거는 `docs/dev-log/
 2026-08-29.md` §1~§51(Post-Orchestration Review Step A~J는 `docs/dev-log/
 2026-09-07.md`, Final Decision Eligibility는 `docs/dev-log/2026-09-25.md`,
-Post-Decision-Eligibility Next Slice Selection은 `docs/dev-log/2026-09-26.md`)과
+Post-Decision-Eligibility Next Slice Selection / Feature Normalization Contract /
+Calibration Readiness Audit은 `docs/dev-log/2026-09-26.md`)과
 `app/models/recommendation.py`/`research_context.py` docstring이 canonical이다.
 
 ### 7.4 Recommendation Policy Step 1 — Decision Eligibility (primitive)
@@ -448,7 +450,7 @@ Aggregation (family / component, 미구현)
 ```text
 Feature Normalization Contract (FROZEN)
         ↓
-Calibration Data & Parameter Provenance Readiness Audit (NEXT, NOT STARTED)
+Calibration Data & Parameter Provenance Readiness Audit (COMPLETE — readiness BLOCKED, §7.6)
         ↓
 Numeric Calibration (OPEN)
         ↓
@@ -493,6 +495,81 @@ Traceability      normalization provenance representation, structured None reaso
 ```
 
 설계 대안 비교/review 이력은 `docs/dev-log/2026-09-26.md` §H~§I가 canonical이다.
+
+### 7.6 Calibration Readiness (audit result)
+
+```text
+Calibration Data & Parameter Provenance Readiness Audit   COMPLETE / INDEPENDENT REVIEW PASS
+Numeric Calibration                 workflow OPEN / readiness BLOCKED
+Feature Normalization implementation NOT STARTED / readiness NO
+```
+
+`OPEN`은 workflow 상태이고 `BLOCKED`는 readiness 판정이다 — 둘은 다른 축이다.
+Feature Normalization 구현 readiness가 NO인 이유: 의미 있는 PolicyConfig/parameter
+source가 없고, §7.5가 implicit normalization default를 금지하므로 지금 구현하면
+모든 입력에 `None`만 생산한다.
+
+**Readiness findings (stable)**:
+
+```text
+runtime data availability      != calibration data readiness
+historical value availability  != point-in-time-safe historical evidence
+```
+
+- **Point-in-time (OpenDART)**: `rcept_no`는 source account level
+  (`OpenDartFinancialAccount`)에 존재하지만 normalized financial evidence
+  (`KeyFinancials`/`FinancialSnapshot`) 이전에 버려진다. history helper
+  (`get_key_financials_history`)는 전기/전전기 값을 **나중 보고서의 비교 컬럼**에서
+  가져온다 → restatement/look-ahead leakage 가능. 정정공시 이후 API 동작과
+  `rcept_no` 접수일 prefix 관례는 **UNVERIFIED**다.
+- **Valuation**: 현재 PER/PBR snapshot은 available, historical PER/PBR calibration
+  evidence는 NOT READY — direct source 부재, 재구성에 필요한 historical shares
+  evidence / 검증된 adjusted-price semantics / point-in-time fundamental availability가
+  없다. Valuation calibration path = **BLOCKED**(Valuation critical path 병목).
+- **Bounded subset**: 14개 feature 전부가 준비돼야 calibration을 시작할 수 있는
+  것은 아니다(missing-aware / UNKNOWN 허용 architecture). Operating Margin / Net
+  Margin / Debt Ratio는 PIT/provenance prerequisite가 해결되면 bounded candidate
+  subset이 될 **가능성**이 있다 — subset NOT SELECTED, calibration NOT STARTED.
+  이 subset만으로 Decision/Core path가 열리지 않는다(Valuation 병목).
+
+**Hard blockers**:
+
+```text
+H1 OBJECTIVE           calibration objective / label / acceptance criterion undefined
+H2 TEMPORAL_SEMANTICS  OpenDART rcept_no / available_at propagation missing;
+                       comparative-column historical path has restatement leakage risk
+H3 EXTERNAL_SOURCE     corrected-filing behavior UNVERIFIED
+H4 DATA                historical valuation reconstruction unavailable
+H5 INFRASTRUCTURE      no persistent calibration dataset snapshot
+H6 PROVENANCE          dataset / parameter-set / revision identity incomplete;
+                       actual PolicyConfig / store absent
+H7 SURVIVORSHIP        historical universe / delisted evidence absent —
+                       hard only for historical / outcome-based calibration
+```
+
+Soft blockers(현재 bounded slice를 논리적으로 막지 않음): peer taxonomy, sector
+benchmark, Forward, Flow, macro vintage, quarterly/TTM, financial-sector
+applicability, growth representation, derived ownership(feature-specific).
+
+**Post-audit selection (FROZEN)**:
+
+```text
+NEXT    Calibration Objective & Scope Contract — design-only, NOT STARTED
+SECOND  Point-in-Time Financial Evidence Contract — NOT STARTED
+THIRD   not selected
+```
+
+- selection만 FROZEN이며 두 contract의 내용은 설계되지 않았다.
+- NEXT는 투자 outcome label(수익률/초과수익/drawdown/Sharpe/ACTIONABLE success
+  등)을 고르는 작업이 아니다 — 먼저 Semantic Calibration vs Recommendation
+  Calibration의 objective/scope boundary와 "Semantic Calibration이 future outcome
+  label을 요구하는가"를 결정한다.
+- 선택되지 않은 candidate slice(Calibration Dataset Identity & Persistence,
+  Parameter Provenance / PolicyConfig, Historical Valuation Reconstruction,
+  Corporate Action / Adjusted Price)는 audit finding으로만 남는다.
+
+evidence 표/14-feature matrix/review 이력은 `docs/dev-log/2026-09-26.md` §J가
+canonical이다.
 
 ## 8. Dependency Boundaries / Invariants
 
