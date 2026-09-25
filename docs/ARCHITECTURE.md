@@ -78,7 +78,7 @@ RecommendationEvaluationState (app/models/research_context.py)
 | MCP Server | Domain Tool을 MCP protocol로 외부에 노출(프로세스 경계) | `app/mcp/server.py` |
 | Service | 외부 API 호출, parsing, normalization, 에러 처리 | `app/services/` |
 | Model / Contract | 시스템 전체가 공유하는 data contract | `app/models/` |
-| Evaluation | Recommendation Evaluation pipeline의 deterministic building block(Coverage/Assembly/FeatureEvaluator) + Recommendation Policy Step 1 Decision Eligibility primitive(§7.4) | `app/evaluation/` |
+| Evaluation | Recommendation Evaluation pipeline의 deterministic building block(Coverage/Assembly/FeatureEvaluator) + Recommendation Policy Step 1 Decision Eligibility primitive(§7.4) + Feature Normalization stage(contract FROZEN, 미구현, §7.5) | `app/evaluation/` |
 
 **Agent → Domain Tool 호출은 in-process direct call이며 MCP protocol을
 쓰지 않는다.** `Market Agent`/`Stock Research Agent`는 `app/mcp/*_tools.py`의
@@ -304,6 +304,8 @@ Risk                          = NOT IMPLEMENTED (readiness BLOCKED)
 Confidence                    = NOT IMPLEMENTED (readiness BLOCKED)
 Final AssessmentStatus        = NOT IMPLEMENTED
 Recommendation Policy Step 2~8 = NOT IMPLEMENTED (policy consumer 없음)
+Feature Normalization         = Ownership & Representation Contract FROZEN (§7.5)
+                                 / implementation NOT STARTED
 Numeric Calibration           = OPEN
 ```
 
@@ -311,7 +313,8 @@ Post-Decision-Eligibility Next Slice Selection(FROZEN):
 
 ```text
 NEXT    Feature Normalization Ownership & Representation Contract
-        — pre-calibration structural prerequisite (design pending)
+        — pre-calibration structural prerequisite
+          (DESIGN COMPLETE / INDEPENDENT REVIEW PASS / FROZEN, §7.5)
 SECOND  Calibration Data & Parameter Provenance Readiness Audit
         — read-only calibration-readiness audit
 ```
@@ -320,8 +323,10 @@ NEXT는 raw feature → normalized feature 경계(`FeatureEvaluationResult
 .normalized_value`, 현재 6개 evaluator 전부 `None`)의 ownership/
 representation/PolicyConfig boundary를 정하는 structural contract다 —
 Numeric Calibration을 시작하지 않으며 numeric parameter/threshold/weight를
-정하지 않는다(`Numeric Calibration = OPEN` 유지). contract 내용은 아직
-설계되지 않았다 — 이 문서에 추가된 architecture 변경은 없다.
+정하지 않는다(`Numeric Calibration = OPEN` 유지). contract(rev.1)는 §7.5에
+FROZEN됐고 구현은 시작하지 않았다. 현재 NEXT는 Calibration Data &
+Parameter Provenance Readiness Audit(read-only, selected / NOT STARTED —
+직전 selection의 SECOND)이고, SECOND는 NOT SELECTED다.
 
 RE-04/RE-05의 상세 결정 과정, contract 확정 근거는 `docs/dev-log/
 2026-08-29.md` §1~§51(Post-Orchestration Review Step A~J는 `docs/dev-log/
@@ -380,6 +385,114 @@ DecisionEligibility(policy_may_proceed, forward_requirement)   transient
 - Recommendation Policy Step 2~8은 설계/구현되지 않았다.
 
 ---
+
+### 7.5 Feature Normalization — Ownership & Representation Contract (FROZEN, 미구현)
+
+```text
+Status  DESIGN COMPLETE / INDEPENDENT REVIEW PASS / FROZEN (rev.1)
+        implementation NOT STARTED — 현재 모든 normalized_value는 None
+```
+
+**용어**: 여기서 "normalization"은 **feature normalization**(feature value →
+`normalized_value`)만 뜻한다. `NormalizedResearchData`의 source normalization
+(vendor → canonical facts), feature derivation, calibration, aggregation,
+classification과 구별한다.
+
+```text
+FeatureEvaluator
+    ↓
+Feature Normalization Stage     canonical owner — normalized_value의 유일한 writer
+    ↓
+Aggregation (family / component, 미구현)
+```
+
+- **Owner**: Evaluation layer 안의 전용 Feature Normalization stage.
+  module/class 조직은 정하지 않는다. Assembly는 feature를 normalize하지 않고,
+  FeatureEvaluator는 normalization을 위해 PolicyConfig를 소비하지 않는다.
+- **DOES**: canonical feature input 소비, registry directionality 소비,
+  명시적으로 선택된 evaluation basis 소비, versioned normalization policy
+  (`EvaluationContext.policy_config_ref`로 식별) 소비, 해당될 때 필요한
+  reference data 소비, `normalized_value` 또는 `None` 생산, directionality 1회
+  적용, 기존 evidence/status field 보존(입력을 mutate하지 않고 새
+  `FeatureEvaluationResult`를 만든다).
+- **DOES NOT**: feature value derivation, vendor data fetch, basis silent
+  substitution, missing evidence 생성, aggregation, component signal 생산,
+  investment opportunity classification, numeric parameter calibration.
+- **Derived feature**: `derivation ≠ feature normalization`. stage는 derived
+  value를 계산하지 않으며, derived value가 존재하면 input candidate로 소비할 수
+  있다. derived value의 canonical producer/공식/ownership architecture는 이
+  contract가 정하지 않는다(OPEN).
+- **Evaluation basis**: 적용 basis는 명시적이어야 하고, 지원되지 않는 basis는
+  적용하지 않으며, reference data 부재 시 다른 basis로 silent fallback하지
+  않는다. 적용 basis 선택은 PolicyConfig가 식별하는 normalization policy가
+  명시적으로 지원되는 입력 안에서 소유한다. 현재 evaluator의
+  `evaluation_basis = [ABSOLUTE]` 출력은 구현 사실일 뿐 architecture
+  invariant가 아니다.
+- **`normalized_value` 최소 semantics**: canonical raw/derived feature input에
+  명시적으로 선택된 evaluation basis + versioned normalization policy + 해당
+  reference data를 적용한 **direction-aware evaluative representation**. signal/
+  classification/probability/raw 단위 변환이 아니다. 공통 codomain, feature 간
+  직접 비교 가능성, aggregation compatibility, boundedness, center, range는
+  정하지 않는다(OPEN).
+- **Directionality**: 정의는 registry, 적용은 이 stage에서 정확히 1회.
+  Aggregation/Signal/Policy는 재해석하지 않는다. `CONTEXT_DEPENDENT` feature에
+  default mapping을 만들지 않는다 — 명시적 policy semantics가 없으면
+  `normalized_value = None`.
+- **Missing / Invalid / N/A**: `UNAVAILABLE → 0`, `INVALID → negative`,
+  `NOT_APPLICABLE → missing/zero` 변환 금지. 0은 유효한 입력 후보이고 음수는
+  자동으로 INVALID가 아니다. normalization은 availability를 바꾸지 않으므로
+  Coverage도 바꾸지 않는다. implicit normalization default 금지 — policy/
+  method/basis/reference가 없으면 `None`.
+- **Calibration 분리**:
+
+```text
+Feature Normalization Contract (FROZEN)
+        ↓
+Calibration Data & Parameter Provenance Readiness Audit (NEXT, NOT STARTED)
+        ↓
+Numeric Calibration (OPEN)
+        ↓
+versioned normalization policy / parameters
+        ↓
+runtime Feature Normalization Stage (미구현)
+```
+
+**Invariants (N1–N11)**:
+
+```text
+N1  single owner: feature normalization stage만 normalized_value를 쓴다
+N2  raw evidence preservation: raw/derived/availability/provenance 불변, 입력 mutate 금지
+N3  no invented evidence: 값이 없거나 INVALID/NOT_APPLICABLE이면 normalized_value=None
+N4  UNAVAILABLE → 0 금지, INVALID → negative 금지, NOT_APPLICABLE → missing/zero 금지
+N5  normalization은 availability/Coverage를 바꾸지 않는다 (Coverage ≠ Confidence 유지)
+N6  directionality는 이 stage에서 한 번만 적용, downstream 재해석 금지
+N7  derivation ≠ feature normalization: stage는 derived value를 계산하지 않는다
+    (derived value의 canonical producer는 이 contract가 정하지 않는다)
+N8  normalization ≠ aggregation ≠ classification: family/component score·signal 생산 금지
+N9  calibrated parameter는 versioned PolicyConfig로만 식별, code constant 금지, implicit default 금지
+N10 determinism: same FeatureEvaluationResult + same PolicyConfig version
+    + same applied basis + same basis reference snapshot → same normalized_value
+N11 applied basis는 명시적이어야 하며, 허용되지 않은 basis를 조용히 적용하지 않고,
+    relative reference 부재 시 silent fallback하지 않는다
+    (허용 basis의 canonical declaration source는 OPEN)
+```
+
+**OPEN (이 contract가 해소하지 않음)**:
+
+```text
+Derived/input     derived-value canonical ownership/formulas, canonical raw-vs-derived input-slot rule,
+                  growth representation
+Basis             evaluation_basis final semantics, applicable-basis declaration owner,
+                  multi-basis representation
+Representation    common normalized codomain, cross-feature direct comparability,
+                  aggregation compatibility, scale/range/center
+Policy / numeric  feature×basis normalization method, numeric parameters, thresholds, weights,
+                  context-dependent mappings, ESTIMATED 허용 policy, peer construction,
+                  historical reference, calibration dataset
+Traceability      normalization provenance representation, structured None reason
+```
+
+설계 대안 비교/review 이력은 `docs/dev-log/2026-09-26.md` §H~§I가 canonical이다.
 
 ## 8. Dependency Boundaries / Invariants
 
