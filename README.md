@@ -282,7 +282,7 @@ StrategyResult   (v1 실제 출력)
 | | |
 |---|---|
 | **Phase** | RE-05 — Recommendation Evaluation Pipeline |
-| **Current Task** | NEXT — Calibration Objective & Scope Contract(design-only) selected / NOT STARTED · 직전: Calibration Data & Parameter Provenance Readiness Audit COMPLETE / REVIEW PASS(Numeric Calibration readiness BLOCKED) |
+| **Current Task** | NEXT — Point-in-Time Financial Evidence Contract selected / design NOT STARTED · 직전: Calibration Objective & Scope Contract FROZEN(Numeric Calibration은 여전히 OPEN / readiness BLOCKED) |
 
 ### Project Completion Overview
 
@@ -322,7 +322,7 @@ StrategyResult   (v1 실제 출력)
 | ↳ Confidence | ⛔ `BLOCKED` | NOT IMPLEMENTED |
 | ↳ Recommendation Policy | ⬜ `NOT IMPLEMENTED` | Step 2~8 + 실제 policy consumer 없음 (Step 1 primitive만 존재) |
 | ↳ Final AssessmentStatus production | ⬜ `NOT IMPLEMENTED` | |
-| ↳ Numeric Calibration | 🔵 `OPEN` | readiness `BLOCKED`(Calibration Readiness Audit, `docs/ARCHITECTURE.md` §7.6) |
+| ↳ Numeric Calibration | 🔵 `OPEN` | readiness `BLOCKED`(Calibration Readiness Audit, `docs/ARCHITECTURE.md` §7.6) · Calibration Objective & Scope Contract `FROZEN`(§7.7) — calibration NOT STARTED |
 | **Final Decision Path** | | |
 | `StockOpportunityAssessment` production | ⬜ `NOT IMPLEMENTED` | contract(RE-04 FROZEN)만 존재 — Recommendation Policy 선행 필요 |
 | Final Portfolio Decision Flow (`PortfolioActionRecommendation`) | ⬜ `NOT IMPLEMENTED` | SOA + PortfolioContext + InvestorProfile → BUY/ADD/HOLD/REDUCE/EXIT |
@@ -415,9 +415,16 @@ Calibration Data & Parameter Provenance Readiness Audit
                                               COMPLETE / REVIEW PASS
     ├─ Numeric Calibration readiness          BLOCKED (H1~H7)
     ├─ NEXT    Calibration Objective & Scope Contract
-    │          (design-only, selected / NOT STARTED)
+    │          (design-only)
     └─ SECOND  Point-in-Time Financial Evidence Contract
-               (selected / NOT STARTED)
+        │
+        ▼
+Calibration Objective & Scope Contract        FROZEN (rev.1)
+    ├─ Semantic Calibration ≠ Recommendation Calibration (Strong Separation)
+    ├─ Numeric Calibration                    OPEN / readiness BLOCKED / NOT STARTED
+    ├─ NEXT    Point-in-Time Financial Evidence Contract
+    │          (selected / design NOT STARTED)
+    └─ SECOND  NOT SELECTED
         │
         ▼
 Current producer / policy status
@@ -438,7 +445,7 @@ Numeric Calibration                           OPEN (readiness BLOCKED)
 
 **연결 완료된 canonical path**(`app/evaluation/orchestrator.py::run_first_deterministic_pipeline`): `DeterministicAnalysisResult → NormalizedResearchData → FeatureEvaluationResult[](ROE/Operating Margin/Net Margin/Debt Ratio/Trailing PER/PBR, 6개) → Component Coverage → Assembly → {State Coverage, FutureOpportunityEvidence} → RecommendationEvaluationState` (State Coverage와 FOE는 서로 독립적인 sibling output이며, orchestrator 호출 순서만 State Coverage → FOE다). Scoring/Recommendation Policy는 이번 slice 범위 밖(`Numeric Calibration = OPEN` 유지) — evaluator가 6개로 늘어난 것은 raw evidence 확보 범위의 확장이지, "저평가/고평가 판단"이나 "상승 가능성 예측"이 아니다(`normalized_value`는 6개 evaluator 전부 항상 `None`).
 
-**Feature Normalization Ownership & Representation Contract**(Post-Decision-Eligibility NEXT) — **FROZEN**(rev.1, canonical contract는 `docs/ARCHITECTURE.md` §7.5, 구현 미착수). raw feature → normalized feature 경계(`normalized_value` 생산 ownership / input·output representation semantics / PolicyConfig boundary)를 정하는 **pre-calibration structural prerequisite**다 — Numeric Calibration의 시작이 아니며 numeric parameter/threshold/weight를 정하지 않는다(`Numeric Calibration = OPEN` 유지). 이어서 **Calibration Data & Parameter Provenance Readiness Audit** — COMPLETE / REVIEW PASS(read-only): Numeric Calibration은 workflow `OPEN`이지만 readiness `BLOCKED`다(objective 미정의, OpenDART point-in-time/restatement leakage, historical valuation 부재, dataset/parameter provenance·persistence 부재 등 H1~H7, `docs/ARCHITECTURE.md` §7.6). Feature Normalization 구현 readiness도 NO다. **NEXT**: `Calibration Objective & Scope Contract` — design-only, **selected / NOT STARTED**(Semantic vs Recommendation Calibration 경계와 outcome label 필요 여부를 정하는 작업이지 투자 outcome label을 고르는 작업이 아니다). **SECOND**: `Point-in-Time Financial Evidence Contract` — **selected / NOT STARTED**. THIRD는 선택하지 않았다. 선택 근거는 `docs/dev-log/2026-09-26.md`. 이전 선택들의 SECOND 후보(Step C: Market Confirmation Feature Identity Design, Post-Step-J: Derived Feature Value Ownership Contract)는 이력으로만 남는다.
+**Feature Normalization Ownership & Representation Contract**(Post-Decision-Eligibility NEXT) — **FROZEN**(rev.1, canonical contract는 `docs/ARCHITECTURE.md` §7.5, 구현 미착수). raw feature → normalized feature 경계(`normalized_value` 생산 ownership / input·output representation semantics / PolicyConfig boundary)를 정하는 **pre-calibration structural prerequisite**다 — Numeric Calibration의 시작이 아니며 numeric parameter/threshold/weight를 정하지 않는다(`Numeric Calibration = OPEN` 유지). 이어서 **Calibration Data & Parameter Provenance Readiness Audit** — COMPLETE / REVIEW PASS(read-only): Numeric Calibration은 workflow `OPEN`이지만 readiness `BLOCKED`다(objective 미정의, OpenDART point-in-time/restatement leakage, historical valuation 부재, dataset/parameter provenance·persistence 부재 등 H1~H7, `docs/ARCHITECTURE.md` §7.6). Feature Normalization 구현 readiness도 NO다. 이어서 **Calibration Objective & Scope Contract** — **FROZEN**(rev.1, `docs/ARCHITECTURE.md` §7.7): Semantic Calibration ≠ Recommendation Calibration(Strong Separation). Semantic Calibration은 future outcome label을 요구하지 않고 future outcome을 optimization/fitting/primary selection에 쓰지 않으며, 기존 freeze-acceptance 요구(historical/temporal validation)를 면제하지 않는다. Recommendation Calibration은 별도 objective/outcome semantics가 필요하다(objective/label/horizon/benchmark OPEN). 이 freeze로 해소된 blocker(H1~H7)는 없고 calibration은 시작되지 않았다. **NEXT**: `Point-in-Time Financial Evidence Contract` — **selected / design NOT STARTED**. **SECOND**: NOT SELECTED. 선택 근거는 `docs/dev-log/2026-09-26.md`. 이전 선택들의 SECOND 후보(Step C: Market Confirmation Feature Identity Design, Post-Step-J: Derived Feature Value Ownership Contract)는 이력으로만 남는다.
 
 상세 architecture 경계(확정된 First Deterministic Pipeline Slice decision)는 `docs/ARCHITECTURE.md` §7 참고. 이 자리에서 다시 설명하지 않는다.
 
@@ -467,9 +474,9 @@ Numeric Calibration                           OPEN (readiness BLOCKED)
 
 | | |
 |---|---|
-| **DONE** | Foundation · Model Layer v1 · ECOS/OpenDART/Kiwoom Integration · Market/Stock Research/Portfolio Strategy Agent v1 · Supervisor/Router v1 · Candidate Discovery v1(Theme Axis 포함) · REST API v1 · Analysis Snapshot Lifecycle · RE-01~RE-04 Architecture/Research/Contracts(FROZEN) · RE-05 Coverage Layer · RE-05 Assembly Layer · RE-05 `RecommendationEvaluationState` First Deterministic Pipeline Slice(Evaluation Orchestration) · RE-05 Post-Orchestration Architecture Review Step A~F(READY Evaluator Expansion: Net Margin/Debt Ratio/Trailing PER/PBR evaluator + registry metadata sync) · Step G(Producer Readiness Re-evaluation) · Step H(Top-level Coverage Aggregation Contract) · Step I(Top-level Coverage Implementation Contract)(G~I는 architecture/design review, 구현 아님) · Step J(Top-level Coverage Implementation + Tests) · Post-Step-J Next Slice Selection · Final Decision Eligibility(Policy Step 1 primitive: Design/Implementation Contract + Implementation + Tests) · Post-Decision-Eligibility Readiness Review / Next Slice Selection · Feature Normalization Ownership & Representation Contract(FROZEN, design only — 구현 아님) · Calibration Data & Parameter Provenance Readiness Audit(read-only, readiness BLOCKED 판정) |
-| **NEXT** | Calibration Objective & Scope Contract — selected / NOT STARTED(design-only, Numeric Calibration 아님) |
-| **SECOND** | Point-in-Time Financial Evidence Contract — selected / NOT STARTED |
+| **DONE** | Foundation · Model Layer v1 · ECOS/OpenDART/Kiwoom Integration · Market/Stock Research/Portfolio Strategy Agent v1 · Supervisor/Router v1 · Candidate Discovery v1(Theme Axis 포함) · REST API v1 · Analysis Snapshot Lifecycle · RE-01~RE-04 Architecture/Research/Contracts(FROZEN) · RE-05 Coverage Layer · RE-05 Assembly Layer · RE-05 `RecommendationEvaluationState` First Deterministic Pipeline Slice(Evaluation Orchestration) · RE-05 Post-Orchestration Architecture Review Step A~F(READY Evaluator Expansion: Net Margin/Debt Ratio/Trailing PER/PBR evaluator + registry metadata sync) · Step G(Producer Readiness Re-evaluation) · Step H(Top-level Coverage Aggregation Contract) · Step I(Top-level Coverage Implementation Contract)(G~I는 architecture/design review, 구현 아님) · Step J(Top-level Coverage Implementation + Tests) · Post-Step-J Next Slice Selection · Final Decision Eligibility(Policy Step 1 primitive: Design/Implementation Contract + Implementation + Tests) · Post-Decision-Eligibility Readiness Review / Next Slice Selection · Feature Normalization Ownership & Representation Contract(FROZEN, design only — 구현 아님) · Calibration Data & Parameter Provenance Readiness Audit(read-only, readiness BLOCKED 판정) · Calibration Objective & Scope Contract(FROZEN, design only — calibration 아님) |
+| **NEXT** | Point-in-Time Financial Evidence Contract — selected / design NOT STARTED |
+| **SECOND** | NOT SELECTED |
 | **그 외 후보** *(선택되지 않음, 확정된 순서 아님)* | Derived Feature Value Ownership Contract(ROA/Asset Turnover/Earnings Yield 공통) · Growth representation contract(Revenue/Operating Profit/Net Income Growth) · Market Confirmation Feature Identity Design · Forward/Flow upstream workstream · Core Attractiveness/Market Confirmation/Risk/Confidence producer · Recommendation Policy Step 2~8 — 현재 readiness snapshot은 `docs/dev-log/2026-09-26.md` |
 | **LATER** | Numeric Calibration(`OPEN`) · Portfolio Strategy Agent가 `StockOpportunityAssessment`를 입력으로 받도록 확장 · Event & Disclosure Intelligence Overlay(Amendment 1) · 자연어 조건 기반 후보 필터링 확장(시가총액/거래대금 상위, 관심종목 등) · Classification Coverage Gap(UX-05) 보완 · 자동매매 확장(`docs/AUTOMATED_TRADING_ROADMAP.md`) |
 

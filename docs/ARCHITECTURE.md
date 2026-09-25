@@ -307,7 +307,9 @@ Recommendation Policy Step 2~8 = NOT IMPLEMENTED (policy consumer 없음)
 Feature Normalization         = Ownership & Representation Contract FROZEN (§7.5)
                                  / implementation NOT STARTED (readiness NO, §7.6)
 Calibration Readiness Audit   = COMPLETE / INDEPENDENT REVIEW PASS (§7.6)
+Calibration Objective & Scope = Contract FROZEN (§7.7)
 Numeric Calibration           = OPEN (workflow) / readiness BLOCKED (§7.6)
+                                 / calibration NOT STARTED
 ```
 
 Post-Decision-Eligibility Next Slice Selection(FROZEN):
@@ -326,14 +328,17 @@ representation/PolicyConfig boundary를 정하는 structural contract다 —
 Numeric Calibration을 시작하지 않으며 numeric parameter/threshold/weight를
 정하지 않는다(`Numeric Calibration = OPEN` 유지). contract(rev.1)는 §7.5에
 FROZEN됐고 구현은 시작하지 않았다. 이어서 SECOND였던 Calibration Data &
-Parameter Provenance Readiness Audit이 COMPLETE됐다(§7.6) — 현재 NEXT/SECOND는
-§7.6의 post-audit selection이다.
+Parameter Provenance Readiness Audit이 COMPLETE됐고(§7.6), post-audit NEXT였던
+Calibration Objective & Scope Contract가 FROZEN됐다(§7.7). 현재 NEXT는
+Point-in-Time Financial Evidence Contract(selection FROZEN, design NOT STARTED),
+SECOND는 NOT SELECTED다.
 
 RE-04/RE-05의 상세 결정 과정, contract 확정 근거는 `docs/dev-log/
 2026-08-29.md` §1~§51(Post-Orchestration Review Step A~J는 `docs/dev-log/
 2026-09-07.md`, Final Decision Eligibility는 `docs/dev-log/2026-09-25.md`,
 Post-Decision-Eligibility Next Slice Selection / Feature Normalization Contract /
-Calibration Readiness Audit은 `docs/dev-log/2026-09-26.md`)과
+Calibration Readiness Audit / Calibration Objective & Scope Contract는
+`docs/dev-log/2026-09-26.md`)과
 `app/models/recommendation.py`/`research_context.py` docstring이 canonical이다.
 
 ### 7.4 Recommendation Policy Step 1 — Decision Eligibility (primitive)
@@ -559,7 +564,9 @@ SECOND  Point-in-Time Financial Evidence Contract — NOT STARTED
 THIRD   not selected
 ```
 
-- selection만 FROZEN이며 두 contract의 내용은 설계되지 않았다.
+(이후 진행: NEXT는 §7.7로 FROZEN됐고, SECOND가 현재 NEXT가 됐다 — §7.3 참고.)
+
+- selection 시점에는 selection만 FROZEN이었으며 두 contract의 내용은 설계되지 않았다.
 - NEXT는 투자 outcome label(수익률/초과수익/drawdown/Sharpe/ACTIONABLE success
   등)을 고르는 작업이 아니다 — 먼저 Semantic Calibration vs Recommendation
   Calibration의 objective/scope boundary와 "Semantic Calibration이 future outcome
@@ -570,6 +577,236 @@ THIRD   not selected
 
 evidence 표/14-feature matrix/review 이력은 `docs/dev-log/2026-09-26.md` §J가
 canonical이다.
+
+### 7.7 Calibration Objective & Scope Contract (FROZEN)
+
+```text
+Status  DESIGN COMPLETE / INDEPENDENT REVIEW PASS / FROZEN (rev.1)
+        Numeric Calibration: workflow OPEN / readiness BLOCKED / calibration NOT STARTED
+```
+
+이 contract는 calibration의 domain·evidence·validation·versioning 경계만 정한다.
+§7.5(N1–N11)와 dev-log 2026-08-29 §24.1 / §24.13의 기존 calibration 요구사항을
+개정·약화·재해석하지 않는다. numeric parameter / threshold / weight / formula /
+outcome label / horizon / benchmark는 정하지 않는다.
+
+**Domains (Strong Separation)**: calibration은 단일 operation이 아니다. RE-05는
+최소 다음 두 domain을 구분한다 — `Semantic Calibration ≠ Recommendation Calibration`.
+추가 domain은 두지 않는다.
+
+- **Semantic Calibration**: evidence의 경제적 의미를 보존·표현하는 것이 목적인
+  parameter를 정한다. Feature Normalization 같은 feature-level semantic calibration을
+  포함하며, canonical architecture가 명시적으로 뒷받침하는 다른 semantic parameter
+  class(현재 evidence: §24.13 event-materiality 예시)를 포함할 수 있다.
+- **Recommendation Calibration**: 이미 평가된 evidence / decision behavior와 downstream
+  investment-decision semantics의 관계를 다룬다. 해당 policy 구조가 허용하는 범위에서
+  aggregation / family / component weight, Opportunity State boundary, classification
+  boundary를 포함할 수 있다. future investment outcome에 대해 independent /
+  out-of-sample semantics로 평가한다. objective / label / horizon / benchmark는 OPEN.
+- **Ownership OPEN**(어느 domain에도 배정하지 않음): component signal threshold,
+  risk severity, coverage/confidence gate, correlation discount.
+
+**Ownership boundaries**:
+
+- `AssessmentStatus` / `ACTIONABLE` / `INSUFFICIENT_EVIDENCE` 매핑은 policy-contract
+  책임이며 Semantic Calibration 책임이 아니다. classification 구조는 Recommendation
+  Policy contract 관심사, classification numeric boundary는 잠재적 Recommendation
+  Calibration 관심사(값은 OPEN)다.
+- `calibration ≠ derivation`: calibration은 ROA / Asset Turnover / Earnings Yield
+  formula와 growth representation을 소유하지 않는다(derived ownership OPEN).
+- Calibration은 versioned policy parameter를 생산/선택하고, runtime Feature
+  Normalization은 이미 선택된 versioned policy를 적용한다. runtime normalization은
+  개별 evaluation request로부터 policy parameter를 fit하지 않으며 §7.5 N10의
+  결정론을 따른다. reference statistic이 policy parameter인지 runtime/reference
+  evidence인지는 OPEN.
+- Semantic Feature Normalization calibration은 family / component / aggregation
+  weight를 소유하지 않는다. `normalized_value ≠ component score ≠ component signal ≠
+  classification`.
+
+**Future outcome boundary (Semantic)**: Semantic Calibration은 future investment
+outcome label을 요구하지 않는다. future investment outcome은 Semantic Calibration의
+optimization target, fitting target, primary parameter-selection criterion으로 쓰이지
+않는다. strictly bounded secondary diagnostic / rejection check로 쓸 수 있는지는
+**OPEN**이다 — 나중에 허용된다면 최소한 semantic meaning을 재정의하지 않고, 같은
+policy version으로 feedback되지 않으며, selection-leakage risk가 통제돼야 한다.
+
+**Historical evidence boundary**: `Semantic parameter derivation requirement ≠
+policy freeze acceptance requirement`. Semantic parameter derivation이 historical
+evidence를 요구하는지는 선택된 basis/method에 의존하며 OPEN이다. 이 contract는
+numeric Semantic policy를 freeze하기 전에 적용되는 기존 §24.1 / §24.13의
+historical/temporal validation 요구를 **면제하지 않는다**. provisional semantic
+policy mechanism은 도입하지 않는다(존재 여부 OPEN).
+
+**Calibration vs validation**: calibration은 parameter를 선택/추정하고, validation은
+이미 선택된 parameter를 independent evidence로 평가한다. validation evidence는 parameter
+fitting/selection에 쓰인 같은 policy version으로 feedback되지 않는다.
+
+**Information boundary**: historical/as-of semantics를 주장하는 evidence는 해당
+information boundary 시점에 이용 가능했음을 확립할 temporal identity를 가져야 한다.
+개념 identity: observation period / availability(publication) time / evaluation
+as_of / reference snapshot as_of / future outcome period. 해당되는 reference snapshot은
+`reference snapshot as_of <= evaluation as_of`. future outcome period는
+Recommendation/outcome evidence에 속하며 Semantic fitting/primary-selection evidence가
+아니다. temporal schema는 정하지 않는다 — 상세는 Point-in-Time Financial Evidence
+Contract의 몫이다.
+
+**Semantic evidence classes**:
+
+```text
+economic/accounting non-numeric structure            REQUIRED
+contemporaneous cross-sectional distribution         CONDITIONAL
+historical distribution                              CONDITIONAL
+peer-relative distribution                           CONDITIONAL (peer taxonomy 현재 unavailable/deferred)
+market-relative distribution                         CONDITIONAL
+expert/policy judgment as sole basis for numbers     NOT ALLOWED
+future investment outcome                            NOT ALLOWED as optimization/fitting/primary-selection input
+outcome label                                        NOT REQUIRED
+```
+
+EvaluationBasis mapping(예: cross-sectional method를 어느 basis로 볼지)은 정하지 않는다.
+
+**Semantic acceptance classes (types only)**: REQUIRED — directionality consistency,
+semantic monotonicity, missingness behavior, basis consistency, economic
+interpretability. 기존 architecture가 요구하는 temporal/stability evidence는 freeze
+acceptance 요구로 유지된다. CONDITIONAL — cross-sectional robustness(cross-sectional
+basis 사용 시). OUT OF SCOPE as Semantic criterion — predictive power. numeric
+threshold 없음.
+
+**Recommendation readiness gates**:
+
+```text
+universal    explicit decision objective / outcome semantics
+             evidence appropriate to the selected objective
+             required information-boundary / PIT semantics
+             reproducible dataset identity
+             parameter provenance
+             independent validation / walk-forward semantics
+             explicit versioned Semantic dependency
+conditional  historical valuation — selected path/objective가 historical reconstruction이
+               필요한 valuation evidence에 의존할 때
+             survivorship-safe universe — historical universe/outcome 평가가
+               survivorship bias를 유발할 수 있을 때
+             adjusted-price evidence — selected outcome semantics가 price-return
+               reconstruction에 의존할 때
+```
+
+현재 end-to-end Recommendation path는 **BLOCKED**다(§7.6 판정 유지).
+
+**Dataset boundary**: `logical calibration input ≠ physical dataset/storage`. Semantic과
+Recommendation calibration evidence는 독립적으로 식별 가능하고 재현 가능해야 한다.
+Semantic logical calibration input은 future outcome을 optimization/fitting/
+primary-selection input으로 쓰지 않는다. 별도 physical dataset / 공유 dataset /
+overlapping snapshot / shared immutable storage 여부는 OPEN.
+
+**Versioning / provenance**: Semantic Calibration policy/provenance와 Recommendation
+Calibration policy/provenance는 독립적으로 식별·versioning 가능해야 한다.
+Recommendation Calibration은 명시적으로 식별된 Semantic policy version에 의존할 수
+있다. Semantic Calibration은 optimization/fitting/primary-selection semantics를 위해
+Recommendation Calibration parameter나 future outcome에 의존하지 않는다. 현재 단일
+`policy_version` / `PolicyConfigRef.version` 표현은 future implementation/schema
+implication일 뿐 이번에 변경하지 않는다.
+
+**PolicyConfig boundary (responsibility only)**: PolicyConfig는 선택된 policy / method /
+parameter value / version을 식별한다. Parameter Provenance는 그 policy가 어떻게
+생산됐는지를, Calibration Evidence / Dataset Identity는 사용된 evidence를, Reference
+Snapshot Identity는 해당 runtime/reference evidence를 식별한다. schema는 정하지 않는다.
+
+**Blocker status**: 이 contract의 freeze로 해소된 H1–H7 blocker는 **없다**.
+
+```text
+H1 OBJECTIVE    Semantic: 구조적으로만 명확해짐, operational acceptance 미해결
+                Recommendation: objective/outcome semantics OPEN, blocking
+H2 TEMPORAL     PIT/as-of evidence가 필요한 곳에서 blocking 유지
+H3 EXTERNAL     evidence path에 따라 conditional/blocking 유지
+H4 VALUATION    Semantic: 보편적 parameter-derivation 전제는 아님, 해당 basis 또는
+                  freeze-validation path에는 relevant/required
+                current Recommendation path: blocking 유지
+H5 INFRA        blocking 유지
+H6 PROVENANCE   blocking 유지
+H7 SURVIVORSHIP pure current-date cross-section에는 current-date라는 이유만으로 해당 없음,
+                해당 historical universe/outcome path에서는 blocking 유지
+```
+
+**Non-goals**: numeric parameter / threshold / weight / normalization formula / score
+range, outcome label / horizon / benchmark, dataset / PolicyConfig / provenance /
+reference snapshot schema, physical storage 설계, data collection, calibration,
+backtest, Feature Normalization 구현, Recommendation Policy Step 2–8 설계/구현,
+§24.1 / §24.13 개정.
+
+**Invariants (C1–C15)**:
+
+```text
+C1  Calibration은 서로 다른 Semantic / Recommendation domain을 포함한다.
+C2  Semantic Calibration은 future investment outcome label을 요구하지 않으며, future
+    outcome을 optimization / fitting / primary-selection target으로 쓰지 않는다.
+C3  Calibration ≠ Validation. validation evidence는 같은 policy version으로 feedback되지 않는다.
+C4  Semantic validation에서 bounded future-outcome diagnostic 사용 여부는 이 contract가
+    정하지 않는다(OPEN) — 허용 시 최소 조건: semantic meaning 비재정의, 같은 version
+    feedback 금지, selection-leakage 통제.
+C5  Calibration ≠ Derivation.
+C6  Runtime normalization은 개별 request로부터 policy parameter를 fit하지 않으며
+    policy/reference identity 아래 결정론적이다.
+C7  Semantic Feature Normalization calibration은 aggregation / family / component weight를
+    소유하지 않는다.
+C8  AssessmentStatus 매핑은 policy-contract 책임이다. classification numeric boundary는
+    Semantic Calibration 책임이 아니다.
+C9  Semantic / Recommendation policy·provenance domain은 독립적으로 식별·versioning
+    가능하다. Recommendation은 식별된 Semantic version에 의존할 수 있다.
+C10 logical calibration evidence identity는 physical dataset organization과 구별된다.
+C11 information boundary는 temporal ordering을 보존하며 future evidence가 Semantic
+    fitting / primary selection에 들어가지 않게 한다.
+C12 as-of evidence는 temporal identity가 필요하다. 해당 cross-sectional evidence는
+    reference snapshot identity가 필요하다.
+C13 calibration domain을 명확히 하는 것만으로 evidence blocker는 해소되지 않는다.
+C14 expert/policy judgment만으로 numeric 값을 만들어내지 않는다.
+C15 Semantic parameter derivation 요구는 policy freeze-acceptance 요구와 구별된다.
+    이 contract는 기존 freeze 요구를 면제하지 않는다.
+```
+
+**OPEN (이 contract가 해소하지 않음)**:
+
+```text
+Method / objective   exact Semantic calibration method; exact Recommendation objective,
+                     outcome label, horizon, benchmark
+Numeric              normalization formula, numeric parameters, thresholds, weights
+Semantic boundary    bounded future-outcome diagnostic for Semantic validation;
+                     basis/method-specific historical derivation requirement;
+                     provisional Semantic policy/version mechanism;
+                     operational Semantic acceptance criteria;
+                     cross-sectional method → EvaluationBasis mapping
+Evidence / storage   physical dataset organization/sharing; dataset schema,
+                     PolicyConfig schema, parameter provenance schema,
+                     reference snapshot schema
+Data                 historical valuation reconstruction; adjusted-price semantics
+Feature definition   derived feature ownership; growth representation
+Domain ownership     component signal threshold; risk severity;
+                     coverage/confidence gates; correlation discount
+Runtime              reference statistic: policy parameter vs runtime/reference evidence
+Versioning           future representation of independent Semantic / Recommendation
+                     policy versions
+```
+
+**Dependency ordering (Semantic path, 후보 slice는 선택되지 않음)**:
+
+```text
+Calibration Objective & Scope Contract (FROZEN)
+        ↓
+Point-in-Time Financial Evidence Contract (NEXT, design NOT STARTED)
+        ↓
+Calibration Evidence Identity & Persistence   (candidate, not selected)
+        ↓
+Parameter Provenance / PolicyConfig           (candidate, not selected)
+        ↓
+bounded Semantic Calibration (existing freeze-acceptance requirements apply)
+        ↓
+Feature Normalization implementation
+```
+
+Recommendation path는 별도 branch다 — Recommendation Objective & Outcome Semantics
+Contract(candidate)와 선택된 objective에 따른 conditional evidence(historical valuation /
+survivorship-safe universe / adjusted-price)가 선행한다.
+
+design rev.0 → rev.1 review 이력은 `docs/dev-log/2026-09-26.md` §K가 canonical이다.
 
 ## 8. Dependency Boundaries / Invariants
 
