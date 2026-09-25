@@ -307,12 +307,26 @@ Recommendation Policy Step 2~8 = NOT IMPLEMENTED (policy consumer 없음)
 Numeric Calibration           = OPEN
 ```
 
-NEXT slice는 아직 선택되지 않았다(Post-Decision-Eligibility readiness review /
-next-slice selection pending, 별도 architecture review에서 결정).
+Post-Decision-Eligibility Next Slice Selection(FROZEN):
+
+```text
+NEXT    Feature Normalization Ownership & Representation Contract
+        — pre-calibration structural prerequisite (design pending)
+SECOND  Calibration Data & Parameter Provenance Readiness Audit
+        — read-only calibration-readiness audit
+```
+
+NEXT는 raw feature → normalized feature 경계(`FeatureEvaluationResult
+.normalized_value`, 현재 6개 evaluator 전부 `None`)의 ownership/
+representation/PolicyConfig boundary를 정하는 structural contract다 —
+Numeric Calibration을 시작하지 않으며 numeric parameter/threshold/weight를
+정하지 않는다(`Numeric Calibration = OPEN` 유지). contract 내용은 아직
+설계되지 않았다 — 이 문서에 추가된 architecture 변경은 없다.
 
 RE-04/RE-05의 상세 결정 과정, contract 확정 근거는 `docs/dev-log/
 2026-08-29.md` §1~§51(Post-Orchestration Review Step A~J는 `docs/dev-log/
-2026-09-07.md`, Final Decision Eligibility는 `docs/dev-log/2026-09-25.md`)과
+2026-09-07.md`, Final Decision Eligibility는 `docs/dev-log/2026-09-25.md`,
+Post-Decision-Eligibility Next Slice Selection은 `docs/dev-log/2026-09-26.md`)과
 `app/models/recommendation.py`/`research_context.py` docstring이 canonical이다.
 
 ### 7.4 Recommendation Policy Step 1 — Decision Eligibility (primitive)
