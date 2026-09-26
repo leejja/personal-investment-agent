@@ -331,15 +331,89 @@ Numeric Calibration을 시작하지 않으며 numeric parameter/threshold/weight
 FROZEN됐고 구현은 시작하지 않았다. 이어서 SECOND였던 Calibration Data &
 Parameter Provenance Readiness Audit이 COMPLETE됐고(§7.6), post-audit NEXT였던
 Calibration Objective & Scope Contract가 FROZEN됐다(§7.7). 이어서 NEXT였던
-Point-in-Time Financial Evidence Contract가 FROZEN됐다(§7.8, 구현 NOT STARTED). 다음
-작업 항목은 NOT SELECTED, SECOND/THIRD도 NOT SELECTED다.
+Point-in-Time Financial Evidence Contract가 FROZEN됐다(§7.8, 구현 NOT STARTED). 이어서
+Post-PIT Critical Path Review가 COMPLETE됐고 NEXT가 선택됐다(아래). §7.8 말미의
+dependency candidate 목록은 §7.8 freeze 시점 기준이다.
+
+**Post-PIT Critical Path Review → NEXT Selection (FROZEN)** — work-selection contract이며
+새 PIT architecture contract가 아니다(§7.8 semantics 불변):
+
+```text
+Post-PIT Critical Path Review   COMPLETE / INDEPENDENT REVIEW PASS
+First unresolved blocker        H3 External Source Behavior
+NEXT    OpenDART PIT Empirical Verification — SELECTION FROZEN / EXECUTION NOT STARTED
+SECOND  NOT SELECTED
+THIRD   NOT SELECTED
+```
+
+선택 근거: §7.8은 historical PIT evidence가 만족해야 할 조건을 정했지만, 그 contract를
+운영하는 데 필요한 source-specific 사실(corrected-filing 동작, historical/original filing
+재구성, 권위 있는 publication timestamp 출처, revision identity 동작)은 repository
+evidence로 확립돼 있지 않다 — **empirical facts before architecture that depends on those
+facts**. dependency analysis(선택 아님): `OpenDART PIT Empirical Verification → (factual
+constraints) → Calibration Evidence Identity & Persistence` — 후자는 SECOND가 아니다.
+
+Purpose: 과거 point-in-time 재무 evidence를 revision / reconstruction / publication
+semantics 추측 없이 추론하는 데 필요한 OpenDART source-specific 사실을 확립한다. 산출물은
+evidence/findings이며 PIT capability가 아니다(`Empirical Verification ≠ PIT Implementation`).
+
+```text
+MUST VERIFY
+  M1  corrected-filing / revision behavior — fnlttSinglAcnt의 정정공시 전후 동작, 반환
+      rcept_no가 식별하는 filing/version, 과거/원본 version 구별·도달 가능성, 정정본과
+      이전 version의 개별 관찰 가능성 (consumer revision policy 선택 아님)
+  M2  historical/original filing retrieval or reconstruction — 이전 filing/version의 재무
+      evidence를 직접 조회 / 다른 OpenDART endpoint로 재구성 / filing metadata로 식별
+      가능한지, 또는 조사한 interface로는 재구성 불가한지. 제약 대상: historical
+      reconstruction path vs forward accumulation / immutable snapshot path
+      (persistence architecture는 이 slice에서 선택하지 않음)
+  M3  authoritative publication timestamp — 이를 노출하는 OpenDART source, field/source
+      identity, precision, date-only vs time-of-day, timezone(있다면), historical filing에
+      대한 가용성. FACT DISCOVERY만 범위이며 available_at POLICY는 범위 밖
+SHOULD VERIFY (합리적으로 확립 불가 시 slice 완료를 막지 않음)
+  S1  comparative-column equivalence samples — filing Y의 comparative(Y-1) vs filing Y-1
+      직접 보고 값. sample equality → universal equivalence 일반화 금지, 차이 미관측 →
+      restatement risk 없음 일반화 금지. 차이 검출은 유용한 positive evidence. P3는 결과와
+      무관하게 FROZEN 유지
+  S2  rcept_no structure / correction relationship — 형식, 날짜 prefix 가능성, 정정공시의
+      별도 identifier 여부, identifier 간 관계. 형식만으로 문서화되지 않은 semantics 추론 금지
+  S3  post-correction API result mutation — 정정 전 API 응답의 과거 관찰이 없으면 UNKNOWN
+      허용, 현재 응답으로 확실성을 만들어내지 않음
+  S4  period-field / reprt_code semantics — thstrm_dt / frmtrm_dt / bfefrmtrm_dt /
+      reprt_code / fs_div / sj_div를 empirical 또는 권위 있는 source evidence가 뒷받침하는
+      범위만. quarterly/half-year/TTM 계산 설계 없음
+OUT OF SCOPE
+  production source / test changes; PIT implementation / PIT schema implementation;
+  Calibration Evidence Identity & Persistence design; persistence / dataset snapshot
+  implementation; availability-policy / revision-selection policy; Feature Normalization
+  implementation; Numeric Calibration; Recommendation Calibration; historical valuation
+  reconstruction; price history integration; corporate-action semantics; Recommendation
+  Policy Step 2+; large-scale all-company sweep; providers other than OpenDART
+```
+
+Evidence standard(향후 실행 시 finding마다): Question / Method / Source·endpoint / Sample /
+Observed result / Evidence reference / Classification(`VERIFIED` / `CONTRADICTED` /
+`UNKNOWN`, sample 기반이면 `VERIFIED — sample-bounded`) / Architecture implication /
+Remaining uncertainty. 반례 부재를 universal verification으로 바꾸지 않는다.
+
+Expected unlock(보장 아님): Calibration Evidence Identity & Persistence 설계에 필요한 source
+사실, available_at policy를 위한 evidence, historical reconstruction 가능성·revision identity
+가용성에 대한 evidence, P3 관련 sample evidence. 완료가 PIT implementation / Feature
+Normalization implementation / Numeric Calibration / Recommendation Policy Step 2+를
+READY로 만들지 않는다.
+
+H1–H7 예상 영향(선택 자체는 아무것도 해소하지 않음 — newly resolved NONE): H2 may narrow ·
+H3 direct empirical target, may clarify / narrow · H5 may provide evidence toward
+persistence requirements · H6 may clarify available revision identity · H1 / H4 / H7 no
+direct effect.
 
 RE-04/RE-05의 상세 결정 과정, contract 확정 근거는 `docs/dev-log/
 2026-08-29.md` §1~§51(Post-Orchestration Review Step A~J는 `docs/dev-log/
 2026-09-07.md`, Final Decision Eligibility는 `docs/dev-log/2026-09-25.md`,
 Post-Decision-Eligibility Next Slice Selection / Feature Normalization Contract /
 Calibration Readiness Audit / Calibration Objective & Scope Contract /
-Point-in-Time Financial Evidence Contract는 `docs/dev-log/2026-09-26.md`)과
+Point-in-Time Financial Evidence Contract / Post-PIT Critical Path Review는
+`docs/dev-log/2026-09-26.md`)과
 `app/models/recommendation.py`/`research_context.py` docstring이 canonical이다.
 
 ### 7.4 Recommendation Policy Step 1 — Decision Eligibility (primitive)
