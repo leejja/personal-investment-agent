@@ -36,6 +36,7 @@ applicability 확인, source/provenance 전달, `as_of` 유지, raw value/unit
 """
 
 from app.evaluation.feature_registry import get_feature_definition
+from app.models.evidence import EvidenceReference
 from app.models.recommendation import (
     AvailabilityStatus,
     EvaluationBasis,
@@ -55,6 +56,21 @@ _ROE_RELIABILITY_WARNING = (
     "Kiwoom ROE reliability not independently verified against "
     "OpenDART-derived net income sign in all cases (RE-02)"
 )
+
+
+def _value_evidence(
+    value: float | None,
+    reference: EvidenceReference | None,
+    measure: str,
+) -> list[EvidenceReference]:
+    """평가 값의 evidence reference. 값이 None이면 reference를 요구하지 않는다. 값이
+    있는데 reference가 없으면 pipeline에서 identity가 소실된 것이므로 fail-fast한다 —
+    downstream에서 identity를 재구성하지 않는다."""
+    if value is None:
+        return []
+    if reference is None:
+        raise ValueError(f"evidence reference for '{measure}' is missing while its value is present")
+    return [reference]
 
 
 class RoeFeatureEvaluator:
@@ -86,6 +102,7 @@ class RoeFeatureEvaluator:
         provenance = Provenance(
             source="Kiwoom",
             as_of=context.as_of,
+            evidence=_value_evidence(roe, data.financial_facts.evidence.roe, "roe"),
         )
 
         if roe is None:
@@ -173,6 +190,9 @@ class OperatingMarginFeatureEvaluator:
         provenance = Provenance(
             source="OpenDART",
             as_of=context.as_of,
+            evidence=_value_evidence(
+                operating_margin, data.financial_facts.evidence.operating_margin, "operating_margin"
+            ),
         )
 
         if operating_margin is None:
@@ -195,7 +215,9 @@ class OperatingMarginFeatureEvaluator:
             feature_id=self.feature_id,
             component=self.component,
             feature_family=self.feature_family,
-            raw=FeatureValue(value=operating_margin, unit="percent"),
+            # 이 시스템이 derive한 값이다(source-reported 아님). raw/derived slot 규칙은
+            # OPEN이라 slot은 옮기지 않고 is_derived로만 구분한다.
+            raw=FeatureValue(value=operating_margin, unit="percent", is_derived=True),
             availability=AvailabilityStatus.AVAILABLE,
             requirement_role=self.definition.default_requirement_role,
             evaluation_basis=[EvaluationBasis.ABSOLUTE],
@@ -260,6 +282,9 @@ class NetMarginFeatureEvaluator:
         provenance = Provenance(
             source="OpenDART",
             as_of=context.as_of,
+            evidence=_value_evidence(
+                net_margin, data.financial_facts.evidence.net_margin, "net_margin"
+            ),
         )
 
         if net_margin is None:
@@ -282,7 +307,9 @@ class NetMarginFeatureEvaluator:
             feature_id=self.feature_id,
             component=self.component,
             feature_family=self.feature_family,
-            raw=FeatureValue(value=net_margin, unit="percent"),
+            # 이 시스템이 derive한 값이다(source-reported 아님). raw/derived slot 규칙은
+            # OPEN이라 slot은 옮기지 않고 is_derived로만 구분한다.
+            raw=FeatureValue(value=net_margin, unit="percent", is_derived=True),
             availability=AvailabilityStatus.AVAILABLE,
             requirement_role=self.definition.default_requirement_role,
             evaluation_basis=[EvaluationBasis.ABSOLUTE],
@@ -348,6 +375,9 @@ class DebtRatioFeatureEvaluator:
         provenance = Provenance(
             source="OpenDART",
             as_of=context.as_of,
+            evidence=_value_evidence(
+                debt_ratio, data.financial_facts.evidence.debt_ratio, "debt_ratio"
+            ),
         )
 
         if debt_ratio is None:
@@ -370,7 +400,9 @@ class DebtRatioFeatureEvaluator:
             feature_id=self.feature_id,
             component=self.component,
             feature_family=self.feature_family,
-            raw=FeatureValue(value=debt_ratio, unit="percent"),
+            # 이 시스템이 derive한 값이다(source-reported 아님). raw/derived slot 규칙은
+            # OPEN이라 slot은 옮기지 않고 is_derived로만 구분한다.
+            raw=FeatureValue(value=debt_ratio, unit="percent", is_derived=True),
             availability=AvailabilityStatus.AVAILABLE,
             requirement_role=self.definition.default_requirement_role,
             evaluation_basis=[EvaluationBasis.ABSOLUTE],

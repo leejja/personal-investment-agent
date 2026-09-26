@@ -21,6 +21,7 @@ from app.evaluation.fundamental_evaluators import (
 )
 from app.evaluation.research_data_builder import build_normalized_research_data
 from app.models.common import AnalysisConfidence, RiskLevel
+from app.models.evidence import FinancialFactsEvidence
 from app.models.recommendation import AvailabilityStatus, Component
 from app.models.research_context import EvaluationContext, FeatureEvaluator
 from app.models.stock import (
@@ -29,6 +30,7 @@ from app.models.stock import (
     FinancialSnapshot,
     StockPriceSnapshot,
 )
+from tests.evidence_fixtures import attach_fixture_evidence
 
 _OM_ID = "fundamental.profitability.operating_margin"
 _AS_OF = datetime(2026, 8, 29, tzinfo=UTC)
@@ -42,14 +44,14 @@ def _result_with_annual(
     annual: list[AnnualFinancialFeatures],
     roe: float | None = 12.3,
 ) -> DeterministicAnalysisResult:
-    return DeterministicAnalysisResult(
+    return attach_fixture_evidence(DeterministicAnalysisResult(
         price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=257000.0),
         financials=FinancialSnapshot(business_year="2025", roe=roe),
         financial_features=FinancialFeatures(annual=annual),
         facts=[],
         max_confidence=AnalysisConfidence.MEDIUM,
         risk_level=RiskLevel.MEDIUM,
-    )
+    ))
 
 
 # ============================== §37.1/§37.2/§37.3: financial_facts.current/features invariant ==============================
@@ -81,7 +83,12 @@ def test_financial_facts_current_and_features_remain_optional_in_schema():
     확인한다(향후 soft-fail 빌더를 위한 여지)."""
     from app.models.research_context import FinancialFacts
 
-    bundle = FinancialFacts(status=AvailabilityStatus.UNAVAILABLE, current=None, features=None)
+    bundle = FinancialFacts(
+        status=AvailabilityStatus.UNAVAILABLE,
+        current=None,
+        features=None,
+        evidence=FinancialFactsEvidence(),
+    )
     assert bundle.current is None
     assert bundle.features is None  # 스키마가 여전히 허용한다(변경 안 함)
 
@@ -104,7 +111,10 @@ def test_both_evaluators_defensively_handle_current_or_features_being_none():
     data = NormalizedResearchData(
         identity=ResearchIdentity(symbol="005930", name="삼성전자"),
         financial_facts=FinancialFacts(
-            status=AvailabilityStatus.UNAVAILABLE, current=None, features=None
+            status=AvailabilityStatus.UNAVAILABLE,
+            current=None,
+            features=None,
+            evidence=FinancialFactsEvidence(),
         ),
         valuation_facts=ValuationFacts(status=AvailabilityStatus.UNAVAILABLE),
         flow_facts=FlowFacts(status=AvailabilityStatus.UNAVAILABLE),

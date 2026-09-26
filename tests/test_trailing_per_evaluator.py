@@ -20,6 +20,7 @@ from app.models.common import AnalysisConfidence, RiskLevel
 from app.models.recommendation import AvailabilityStatus, Component, EvaluationBasis
 from app.models.research_context import EvaluationContext
 from app.models.stock import FinancialSnapshot, StockPriceSnapshot
+from tests.evidence_fixtures import attach_fixture_evidence
 
 _PER_ID = "valuation.earnings_based.trailing_per"
 _AS_OF = datetime(2026, 9, 7, tzinfo=UTC)
@@ -30,13 +31,13 @@ def _context() -> EvaluationContext:
 
 
 def _result_with_per(per: float | None) -> DeterministicAnalysisResult:
-    return DeterministicAnalysisResult(
+    return attach_fixture_evidence(DeterministicAnalysisResult(
         price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=257000.0),
         financials=FinancialSnapshot(business_year="2025", per=per),
         facts=[],
         max_confidence=AnalysisConfidence.MEDIUM,
         risk_level=RiskLevel.MEDIUM,
-    )
+    ))
 
 
 def test_registry_definition_is_implemented_with_expected_metadata():

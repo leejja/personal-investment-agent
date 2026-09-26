@@ -49,8 +49,18 @@ from datetime import datetime
 from enum import Enum
 from typing import Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
+from app.models.evidence import (
+    MEASURE_DEBT_RATIO,
+    MEASURE_NET_MARGIN,
+    MEASURE_OPERATING_MARGIN,
+    MEASURE_PBR,
+    MEASURE_PER,
+    MEASURE_ROE,
+    EvidenceOrigin,
+    FinancialFactsEvidence,
+)
 from app.models.recommendation import (
     AvailabilityStatus,
     ComponentAssessment,
@@ -66,6 +76,9 @@ from app.models.recommendation import (
     RiskAssessment,
 )
 from app.models.stock import FinancialFeatures, FinancialSnapshot, StockPriceSnapshot
+
+_SOURCE = EvidenceOrigin.SOURCE_REPORTED
+_DERIVED = EvidenceOrigin.DERIVED
 
 # ============================== Scoped Fact Bundles ==============================
 #
@@ -88,7 +101,49 @@ class FinancialFacts(BaseModel):
     # 동일 관례).
     history: list[FinancialSnapshot] = Field(default_factory=list)
     features: FinancialFeatures | None = None
+    # Evidence Identity Preservation(first slice): 6개 evaluator가 소비하는 값의 evidence
+    # reference(`current.roe/per/pbr`, `features.annual[-1]` margin/debt_ratio). history /
+    # YoY / trends의 evidence는 이 slice 범위 밖이다. 기본값 없이 명시적으로 전달한다.
+    evidence: FinancialFactsEvidence
     warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _evaluator_evidence_is_complete(self) -> "FinancialFacts":
+        """first-slice invariant: 6개 evaluator가 소비하는 non-None 값마다 그 값에 맞는
+        measure / origin의 evidence reference가 있어야 한다. 값이 None이면 reference를
+        요구하지 않는다(missing value != missing identity). 위반은 pipeline 안의 identity
+        소실이므로 fail-fast한다."""
+        current = self.current
+        annual = self.features.annual if self.features is not None else []
+        latest = annual[-1] if annual else None
+        evidence = self.evidence
+
+        slots = (
+            (MEASURE_ROE, current.roe if current else None, evidence.roe, _SOURCE),
+            (MEASURE_PER, current.per if current else None, evidence.per, _SOURCE),
+            (MEASURE_PBR, current.pbr if current else None, evidence.pbr, _SOURCE),
+            (
+                MEASURE_OPERATING_MARGIN,
+                latest.operating_margin if latest else None,
+                evidence.operating_margin,
+                _DERIVED,
+            ),
+            (MEASURE_NET_MARGIN, latest.net_margin if latest else None, evidence.net_margin, _DERIVED),
+            (MEASURE_DEBT_RATIO, latest.debt_ratio if latest else None, evidence.debt_ratio, _DERIVED),
+        )
+        for measure, value, reference, origin in slots:
+            if value is None:
+                continue
+            if reference is None:
+                raise ValueError(
+                    f"evidence reference for '{measure}' is missing while its value is present"
+                )
+            if reference.identity.measure != measure or reference.identity.origin != origin:
+                raise ValueError(
+                    f"evidence reference for '{measure}' does not match "
+                    f"(measure={reference.identity.measure}, origin={reference.identity.origin})"
+                )
+        return self
 
 
 class ValuationFacts(BaseModel):

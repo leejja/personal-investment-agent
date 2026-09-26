@@ -1,4 +1,5 @@
 import xml.etree.ElementTree as ET
+from datetime import UTC, datetime
 from io import BytesIO
 from typing import Any
 from zipfile import ZipFile
@@ -40,6 +41,15 @@ class OpenDartFinancialAccount(BaseModel):
     currency: str
 
 
+class OpenDartFinancialAccountsRetrieval(BaseModel):
+    """internal carrier — 공개 반환 모델(`OpenDartFinancialAccount`)을 바꾸지 않고
+    한 번의 provider 응답 수신 시각을 함께 전달한다. `retrieved_at`은 runtime retrieval
+    시각이며 published_at / available_at이 아니다. MCP tool이 반환하지 않는다."""
+
+    accounts: list[OpenDartFinancialAccount]
+    retrieved_at: datetime
+
+
 class OpenDartService:
     BASE_URL = "https://opendart.fss.or.kr/api"
 
@@ -75,6 +85,19 @@ class OpenDartService:
         business_year: str,
         report_code: str,
     ) -> list[OpenDartFinancialAccount]:
+        retrieval = await self.fetch_financial_accounts(
+            corp_code=corp_code,
+            business_year=business_year,
+            report_code=report_code,
+        )
+        return retrieval.accounts
+
+    async def fetch_financial_accounts(
+        self,
+        corp_code: str,
+        business_year: str,
+        report_code: str,
+    ) -> OpenDartFinancialAccountsRetrieval:
         url = f"{self.BASE_URL}/fnlttSinglAcnt.json"
 
         params = {
@@ -103,7 +126,13 @@ class OpenDartService:
         if not isinstance(rows, list):
             raise TypeError(f"Unexpected OpenDART response: {data}")
 
-        return [self._convert_financial_account(row) for row in rows]
+        # 성공 응답 수신 직후의 runtime retrieval 시각. 한 응답의 모든 row가 공유한다.
+        retrieved_at = datetime.now(UTC)
+
+        return OpenDartFinancialAccountsRetrieval(
+            accounts=[self._convert_financial_account(row) for row in rows],
+            retrieved_at=retrieved_at,
+        )
 
     def _parse_corporation_zip(
         self,

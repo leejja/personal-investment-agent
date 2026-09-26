@@ -25,6 +25,7 @@ from app.models.stock import (
     FinancialSnapshot,
     StockPriceSnapshot,
 )
+from tests.evidence_fixtures import attach_fixture_evidence
 
 _NM_ID = "fundamental.profitability.net_margin"
 _AS_OF = datetime(2026, 9, 7, tzinfo=UTC)
@@ -35,14 +36,14 @@ def _context() -> EvaluationContext:
 
 
 def _result_with_annual(annual: list[AnnualFinancialFeatures]) -> DeterministicAnalysisResult:
-    return DeterministicAnalysisResult(
+    return attach_fixture_evidence(DeterministicAnalysisResult(
         price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=257000.0),
         financials=FinancialSnapshot(business_year="2025"),
         financial_features=FinancialFeatures(annual=annual),
         facts=[],
         max_confidence=AnalysisConfidence.MEDIUM,
         risk_level=RiskLevel.MEDIUM,
-    )
+    ))
 
 
 def test_registry_definition_is_implemented_with_expected_metadata():

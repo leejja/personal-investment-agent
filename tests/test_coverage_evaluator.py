@@ -51,6 +51,7 @@ from app.models.stock import (
     FinancialSnapshot,
     StockPriceSnapshot,
 )
+from tests.evidence_fixtures import attach_fixture_evidence
 
 _AS_OF = datetime(2026, 8, 29, tzinfo=UTC)
 _ROE_ID = "fundamental.profitability.roe"
@@ -89,7 +90,7 @@ def _real_roe_and_operating_margin_results(
 ) -> list[FeatureEvaluationResult]:
     """실제 ROE/OperatingMargin evaluator를 그대로 실행해 result를 얻는다
     -- coverage 테스트가 evaluator 동작을 재구현하지 않는다."""
-    result_input = DeterministicAnalysisResult(
+    result_input = attach_fixture_evidence(DeterministicAnalysisResult(
         price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=257000.0),
         financials=FinancialSnapshot(business_year="2025", roe=roe),
         financial_features=FinancialFeatures(
@@ -100,7 +101,7 @@ def _real_roe_and_operating_margin_results(
         facts=[],
         max_confidence=AnalysisConfidence.MEDIUM,
         risk_level=RiskLevel.MEDIUM,
-    )
+    ))
     data = build_normalized_research_data(result_input, as_of=_AS_OF)
     context = _context()
     return [
@@ -1274,13 +1275,13 @@ def test_recommendation_evaluation_state_can_hold_forward_and_future_opportunity
     as_of = datetime(2026, 8, 29, tzinfo=UTC)
     context = EvaluationContext(symbol="005930", as_of=as_of)
 
-    result_input = DeterministicAnalysisResult(
+    result_input = attach_fixture_evidence(DeterministicAnalysisResult(
         price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=1.0),
         financials=FinancialSnapshot(business_year="2025", roe=12.3),
         facts=[],
         max_confidence=AnalysisConfidence.MEDIUM,
         risk_level=RiskLevel.MEDIUM,
-    )
+    ))
     normalized_data = build_normalized_research_data(result_input, as_of=as_of)
 
     forward_coverage = evaluate_forward_coverage([])

@@ -19,18 +19,19 @@ from app.models.common import AnalysisConfidence, RiskLevel
 from app.models.recommendation import AvailabilityStatus, Component
 from app.models.research_context import EvaluationContext
 from app.models.stock import FinancialSnapshot, StockPriceSnapshot
+from tests.evidence_fixtures import attach_fixture_evidence
 
 _AS_OF = datetime(2026, 8, 29, tzinfo=UTC)
 
 
 def _deterministic_result(roe: float | None) -> DeterministicAnalysisResult:
-    return DeterministicAnalysisResult(
+    return attach_fixture_evidence(DeterministicAnalysisResult(
         price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=257000.0),
         financials=FinancialSnapshot(business_year="2025", roe=roe),
         facts=[],
         max_confidence=AnalysisConfidence.MEDIUM,
         risk_level=RiskLevel.MEDIUM,
-    )
+    ))
 
 
 def _context() -> EvaluationContext:

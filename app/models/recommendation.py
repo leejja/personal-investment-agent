@@ -23,6 +23,7 @@ from enum import Enum
 from pydantic import BaseModel, Field, model_validator
 
 from app.models.common import RiskLevel
+from app.models.evidence import EvidenceReference
 
 # ============================== Shared / Provenance ==============================
 
@@ -96,6 +97,11 @@ class Provenance(BaseModel):
     published_at: datetime | None = None
     effective_at: datetime | None = None
     retrieved_at: datetime | None = None
+
+    # Evidence Identity Preservation: 이 결과가 나타내는 값의 typed evidence reference
+    # (`app.models.evidence`). 위의 result-level 필드(source / evidence_ids / derived_from /
+    # published_at / retrieved_at 등)는 재정의하지 않는다 — 정리는 OPEN(§7.10).
+    evidence: list[EvidenceReference] = Field(default_factory=list)
 
 
 class PolicyConfigRef(BaseModel):

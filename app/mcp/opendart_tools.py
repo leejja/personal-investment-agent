@@ -1,6 +1,46 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 
+from app.models.evidence import (
+    MEASURE_NET_INCOME,
+    MEASURE_OPERATING_PROFIT,
+    MEASURE_REVENUE,
+    MEASURE_TOTAL_ASSETS,
+    MEASURE_TOTAL_EQUITY,
+    MEASURE_TOTAL_LIABILITIES,
+    EvidenceItemIdentity,
+    EvidenceOrigin,
+    EvidenceReference,
+    EvidenceSource,
+    ObservationIdentity,
+)
 from app.services.opendart import OpenDartFinancialAccount, OpenDartService
+
+_OPENDART_SOURCE = EvidenceSource(provider="OpenDART", interface="fnlttSinglAcnt")
+
+# KeyFinancials 필드 / provider-neutral measure key / 매칭할 OpenDART 계정명.
+# _extract_key_financials와 _extract_measure_evidence가 같은 표를 써서, evidence가
+# 항상 값이 실제로 선택된 row와 같은 row에서 만들어지게 한다.
+_KEY_MEASURES: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ("revenue", MEASURE_REVENUE, frozenset({"매출액"})),
+    ("operating_profit", MEASURE_OPERATING_PROFIT, frozenset({"영업이익"})),
+    ("net_income", MEASURE_NET_INCOME, frozenset({"당기순이익", "당기순이익(손실)"})),
+    ("total_assets", MEASURE_TOTAL_ASSETS, frozenset({"자산총계"})),
+    ("total_liabilities", MEASURE_TOTAL_LIABILITIES, frozenset({"부채총계"})),
+    ("total_equity", MEASURE_TOTAL_EQUITY, frozenset({"자본총계"})),
+)
+
+_TERM_AMOUNT_ATTR = {
+    "current": "current_term_amount",
+    "previous": "previous_term_amount",
+    "before_previous": "before_previous_term_amount",
+}
+_TERM_DATE_ATTR = {
+    "current": "current_term_date",
+    "previous": "previous_term_date",
+    "before_previous": "before_previous_term_date",
+}
 
 
 class CompanyFinancials(BaseModel):
@@ -23,6 +63,16 @@ class KeyFinancials(BaseModel):
     total_assets: int | None
     total_liabilities: int | None
     total_equity: int | None
+
+
+class KeyFinancialsWithEvidence(BaseModel):
+    """internal carrier(MCP tool이 반환하지 않는다). `evidence`는 값이 None이 아닌
+    measure마다 그 값을 실제로 제공한 row에서 만든 reference다(measure key →
+    reference). 비교 컬럼(previous / before_previous)은 나중 filing의 `rcept_no`와
+    `source_term`을 그대로 가진다 — 해당 연도 original filing과 구별된다."""
+
+    key_financials: KeyFinancials
+    evidence: dict[str, EvidenceReference]
 
 
 class OpenDartTools:
@@ -120,6 +170,58 @@ class OpenDartTools:
             report_code=report_code,
         )
 
+        return [
+            key_financials
+            for key_financials, _ in self._build_history(
+                financials, business_year=business_year, report_code=report_code
+            )
+        ]
+
+    async def get_key_financials_history_with_evidence(
+        self,
+        stock_code: str,
+        business_year: str,
+        report_code: str = "11011",
+    ) -> list[KeyFinancialsWithEvidence]:
+        """`get_key_financials_history()`와 같은 값/순서에, 각 measure의 evidence
+        reference를 함께 반환하는 internal 경로. 공개 tool 출력은 바꾸지 않는다."""
+        corp_code = await self.service.resolve_corp_code(stock_code)
+        retrieval = await self.service.fetch_financial_accounts(
+            corp_code=corp_code,
+            business_year=business_year,
+            report_code=report_code,
+        )
+        financials = CompanyFinancials(
+            stock_code=stock_code,
+            corp_code=corp_code,
+            business_year=business_year,
+            report_code=report_code,
+            accounts=retrieval.accounts,
+        )
+
+        return [
+            KeyFinancialsWithEvidence(
+                key_financials=key_financials,
+                evidence=self._extract_measure_evidence(
+                    selected_accounts,
+                    stock_code=stock_code,
+                    period_label=key_financials.business_year,
+                    term=term,
+                    retrieved_at=retrieval.retrieved_at,
+                ),
+            )
+            for key_financials, (selected_accounts, term) in self._build_history(
+                financials, business_year=business_year, report_code=report_code
+            )
+        ]
+
+    def _build_history(
+        self,
+        financials: CompanyFinancials,
+        *,
+        business_year: str,
+        report_code: str,
+    ) -> list[tuple[KeyFinancials, tuple[list[OpenDartFinancialAccount], str]]]:
         accounts = financials.accounts
         fs_div = self._select_fs_div(accounts)
         selected_accounts = [
@@ -130,7 +232,7 @@ class OpenDartTools:
         if report_code == "11011":
             terms += ["previous", "before_previous"]
 
-        history: list[KeyFinancials] = []
+        history: list[tuple[KeyFinancials, tuple[list[OpenDartFinancialAccount], str]]] = []
         for term in terms:
             key_financials = self._extract_key_financials(
                 selected_accounts,
@@ -147,7 +249,7 @@ class OpenDartTools:
             # 값이 전부 None이면(상장 이력이 짧은 회사 등) 의미 있는
             # 데이터가 없다는 뜻이므로 결과에서 생략한다.
             if term == "current" or self._has_any_value(key_financials):
-                history.append(key_financials)
+                history.append((key_financials, (selected_accounts, term)))
 
         return history
 
@@ -175,17 +277,50 @@ class OpenDartTools:
             business_year=business_year,
             report_code=report_code,
             fs_div=fs_div,
-            revenue=cls._find_amount(accounts, {"매출액"}, term),
-            operating_profit=cls._find_amount(accounts, {"영업이익"}, term),
-            net_income=cls._find_amount(
-                accounts,
-                {"당기순이익", "당기순이익(손실)"},
-                term,
-            ),
-            total_assets=cls._find_amount(accounts, {"자산총계"}, term),
-            total_liabilities=cls._find_amount(accounts, {"부채총계"}, term),
-            total_equity=cls._find_amount(accounts, {"자본총계"}, term),
+            **{
+                field: cls._find_amount(accounts, names, term)
+                for field, _, names in _KEY_MEASURES
+            },
         )
+
+    @classmethod
+    def _extract_measure_evidence(
+        cls,
+        accounts: list[OpenDartFinancialAccount],
+        *,
+        stock_code: str,
+        period_label: str,
+        term: str,
+        retrieved_at: datetime,
+    ) -> dict[str, EvidenceReference]:
+        # _find_amount와 같은 _find_account로 row를 고르므로, evidence는 값이 실제로
+        # 선택된 row의 identity다. 값이 None인 measure에는 reference를 만들지 않는다.
+        evidence: dict[str, EvidenceReference] = {}
+        for _, measure, names in _KEY_MEASURES:
+            account = cls._find_account(accounts, names)
+            if account is None or getattr(account, _TERM_AMOUNT_ATTR[term]) is None:
+                continue
+
+            evidence[measure] = EvidenceReference(
+                identity=EvidenceItemIdentity(
+                    entity=stock_code,
+                    measure=measure,
+                    origin=EvidenceOrigin.SOURCE_REPORTED,
+                    source=_OPENDART_SOURCE,
+                    observation=ObservationIdentity(
+                        period_notation=getattr(account, _TERM_DATE_ATTR[term]),
+                        period_label=period_label,
+                        source_term=term,
+                        report_type=account.reprt_code,
+                        reporting_basis=account.fs_div,
+                        statement=account.statement_div,
+                    ),
+                    version_anchor=account.rcept_no,
+                ),
+                retrieved_at=retrieved_at,
+            )
+
+        return evidence
 
     @staticmethod
     def _has_any_value(key_financials: KeyFinancials) -> bool:
@@ -201,21 +336,26 @@ class OpenDartTools:
             )
         )
 
-    @staticmethod
+    @classmethod
     def _find_amount(
+        cls,
         accounts: list[OpenDartFinancialAccount],
-        account_names: set[str],
+        account_names: set[str] | frozenset[str],
         term: str = "current",
     ) -> int | None:
-        amount_attr = {
-            "current": "current_term_amount",
-            "previous": "previous_term_amount",
-            "before_previous": "before_previous_term_amount",
-        }[term]
+        account = cls._find_account(accounts, account_names)
+        if account is None:
+            return None
+        return getattr(account, _TERM_AMOUNT_ATTR[term])
 
+    @staticmethod
+    def _find_account(
+        accounts: list[OpenDartFinancialAccount],
+        account_names: set[str] | frozenset[str],
+    ) -> OpenDartFinancialAccount | None:
         for account in accounts:
             if account.account_name in account_names:
-                return getattr(account, amount_attr)
+                return account
 
         return None
 

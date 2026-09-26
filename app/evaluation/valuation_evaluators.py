@@ -39,6 +39,7 @@ registry에서 온다).
 """
 
 from app.evaluation.feature_registry import get_feature_definition
+from app.models.evidence import EvidenceReference
 from app.models.recommendation import (
     AvailabilityStatus,
     EvaluationBasis,
@@ -55,6 +56,21 @@ from app.models.research_context import (
 _TRAILING_PER_UNAVAILABLE_WARNING = (
     "PER not present in NormalizedResearchData.financial_facts.current"
 )
+
+
+def _value_evidence(
+    value: float | None,
+    reference: EvidenceReference | None,
+    measure: str,
+) -> list[EvidenceReference]:
+    """평가 값의 evidence reference. 값이 None이면 reference를 요구하지 않는다. 값이
+    있는데 reference가 없으면 pipeline에서 identity가 소실된 것이므로 fail-fast한다 —
+    downstream에서 identity를 재구성하지 않는다."""
+    if value is None:
+        return []
+    if reference is None:
+        raise ValueError(f"evidence reference for '{measure}' is missing while its value is present")
+    return [reference]
 
 
 class TrailingPerFeatureEvaluator:
@@ -87,6 +103,7 @@ class TrailingPerFeatureEvaluator:
         provenance = Provenance(
             source="Kiwoom",
             as_of=context.as_of,
+            evidence=_value_evidence(per, data.financial_facts.evidence.per, "per"),
         )
 
         if per is None:
@@ -152,6 +169,7 @@ class PbrFeatureEvaluator:
         provenance = Provenance(
             source="Kiwoom",
             as_of=context.as_of,
+            evidence=_value_evidence(pbr, data.financial_facts.evidence.pbr, "pbr"),
         )
 
         if pbr is None:

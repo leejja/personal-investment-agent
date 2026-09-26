@@ -52,11 +52,20 @@ def build_normalized_research_data(
     것은 이 bundle-level status와 별개로 각 feature evaluator가
     개별적으로 판단한다.
     """
+    # Evidence Identity Preservation: evidence 없는 evaluation fallback은 없다. 값별 evidence
+    # 완결성은 FinancialFacts가 생성 시 스스로 검사한다(downstream에서 재구성하지 않는다).
+    if result.evidence is None:
+        raise ValueError(
+            "DeterministicAnalysisResult.evidence is required for evaluation "
+            "(analyze(..., evidence=...)); evidence identity was not provided"
+        )
+
     financial_facts = FinancialFacts(
         status=AvailabilityStatus.AVAILABLE,
         current=result.financials,
         history=result.financial_history,
         features=result.financial_features,
+        evidence=result.evidence,
     )
 
     return NormalizedResearchData(

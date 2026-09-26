@@ -4,6 +4,24 @@ from pydantic import BaseModel, Field
 
 from app.mcp.opendart_tools import KeyFinancials
 from app.models.common import AnalysisConfidence, RiskLevel
+from app.models.evidence import (
+    MEASURE_DEBT_RATIO,
+    MEASURE_NET_INCOME,
+    MEASURE_NET_MARGIN,
+    MEASURE_OPERATING_MARGIN,
+    MEASURE_OPERATING_PROFIT,
+    MEASURE_PBR,
+    MEASURE_PER,
+    MEASURE_REVENUE,
+    MEASURE_ROE,
+    MEASURE_TOTAL_EQUITY,
+    MEASURE_TOTAL_LIABILITIES,
+    DerivationLineage,
+    EvidenceItemIdentity,
+    EvidenceOrigin,
+    EvidenceReference,
+    FinancialFactsEvidence,
+)
 from app.models.stock import (
     AnnualFinancialFeatures,
     FinancialFeatures,
@@ -40,12 +58,30 @@ class DeterministicAnalysisResult(BaseModel):
     # — 기본값은 이 internal result를 직접 생성하는 기존 테스트 fixture가
     # (reasoning.py 테스트 등) 이 필드를 몰라도 깨지지 않게 하기 위함이다.
     financial_features: FinancialFeatures = Field(default_factory=FinancialFeatures)
+    # Evidence Identity Preservation(first slice): 6개 evaluator 경로의 evidence
+    # reference. v1 StockAnalysis / reasoning 경로는 이 값을 쓰지 않으므로 optional이다
+    # — evaluation pipeline(build_normalized_research_data)은 None이면 fail-fast한다.
+    evidence: FinancialFactsEvidence | None = None
+
+
+class AnalysisEvidenceInput(BaseModel):
+    """analyze()에 전달하는 source evidence(measure key → reference).
+
+    `stock_info`: Kiwoom ROE / PER / PBR reference.
+    `latest_financials`: 최신 연도(`financial_history[0]`, 없으면 `key_financials`) —
+    annual[-1] margin / debt_ratio가 계산되는 바로 그 KeyFinancials의 measure reference.
+    """
+
+    stock_info: dict[str, EvidenceReference]
+    latest_financials: dict[str, EvidenceReference]
 
 
 def analyze(
     stock_info: KiwoomStockInfo,
     key_financials: KeyFinancials,
     financial_history: list[KeyFinancials] | None = None,
+    *,
+    evidence: AnalysisEvidenceInput | None = None,
 ) -> DeterministicAnalysisResult:
     price = _map_price_snapshot(stock_info)
     financials = _map_financial_snapshot(stock_info, key_financials)
@@ -102,6 +138,107 @@ def analyze(
         max_confidence=max_confidence,
         risk_level=_risk_level(),
         financial_features=financial_features,
+        evidence=(
+            _build_evaluator_evidence(
+                financials, annual_features_newest_first[0], annual_source[0], evidence
+            )
+            if evidence is not None
+            else None
+        ),
+    )
+
+
+# ============================== Evidence Identity Preservation ==============================
+#
+# 아래 formula 식별자는 이 모듈의 _operating_margin / _net_margin / _debt_ratio가 현재
+# 실행하는 deterministic formula를 가리킨다. lineage를 derivation이 현재 일어나는 위치에서
+# 기록할 뿐이며, 이 모듈이 canonical Derived Feature Value Ownership을 가진다는 뜻이
+# 아니다(ownership OPEN). numeric calibration semantics는 없다.
+_DERIVED_FORMULAS: dict[str, tuple[str, tuple[str, ...]]] = {
+    # measure: (formula_id, required input measures — formula의 입력 순서)
+    MEASURE_OPERATING_MARGIN: ("operating_margin", (MEASURE_REVENUE, MEASURE_OPERATING_PROFIT)),
+    MEASURE_NET_MARGIN: ("net_margin", (MEASURE_REVENUE, MEASURE_NET_INCOME)),
+    MEASURE_DEBT_RATIO: ("debt_ratio", (MEASURE_TOTAL_LIABILITIES, MEASURE_TOTAL_EQUITY)),
+}
+_FORMULA_VERSION = "1"
+
+
+def _build_evaluator_evidence(
+    financials: FinancialSnapshot,
+    latest_annual: AnnualFinancialFeatures,
+    latest_financials: KeyFinancials,
+    evidence: AnalysisEvidenceInput,
+) -> FinancialFactsEvidence:
+    # 값이 있는데 reference가 없으면 pipeline 안에서 identity가 소실된 것이다 — fail-fast.
+    return FinancialFactsEvidence(
+        roe=_required_source_reference(financials.roe, MEASURE_ROE, evidence.stock_info),
+        per=_required_source_reference(financials.per, MEASURE_PER, evidence.stock_info),
+        pbr=_required_source_reference(financials.pbr, MEASURE_PBR, evidence.stock_info),
+        operating_margin=_derived_reference(
+            latest_annual.operating_margin,
+            MEASURE_OPERATING_MARGIN,
+            latest_financials.stock_code,
+            evidence.latest_financials,
+        ),
+        net_margin=_derived_reference(
+            latest_annual.net_margin,
+            MEASURE_NET_MARGIN,
+            latest_financials.stock_code,
+            evidence.latest_financials,
+        ),
+        debt_ratio=_derived_reference(
+            latest_annual.debt_ratio,
+            MEASURE_DEBT_RATIO,
+            latest_financials.stock_code,
+            evidence.latest_financials,
+        ),
+    )
+
+
+def _required_source_reference(
+    value: float | None,
+    measure: str,
+    references: dict[str, EvidenceReference],
+) -> EvidenceReference | None:
+    if value is None:
+        return None
+    reference = references.get(measure)
+    if reference is None:
+        raise ValueError(f"evidence reference for '{measure}' was lost: value present, reference missing")
+    return reference
+
+
+def _derived_reference(
+    value: float | None,
+    measure: str,
+    entity: str,
+    references: dict[str, EvidenceReference],
+) -> EvidenceReference | None:
+    if value is None:
+        return None
+    formula_id, input_measures = _DERIVED_FORMULAS[measure]
+    inputs: list[EvidenceReference] = []
+    for input_measure in input_measures:
+        reference = references.get(input_measure)
+        if reference is None:
+            raise ValueError(
+                f"input evidence '{input_measure}' for derived '{measure}' was lost: "
+                "derived value present, input reference missing"
+            )
+        inputs.append(reference)
+
+    return EvidenceReference(
+        identity=EvidenceItemIdentity(
+            entity=entity,
+            measure=measure,
+            origin=EvidenceOrigin.DERIVED,
+            derivation=DerivationLineage(
+                formula_id=formula_id,
+                formula_version=_FORMULA_VERSION,
+                inputs=tuple(reference.identity for reference in inputs),
+            ),
+        ),
+        input_references=tuple(inputs),
     )
 
 

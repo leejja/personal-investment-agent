@@ -20,6 +20,7 @@ from app.evaluation.feature_registry import (
 )
 from app.evaluation.fundamental_evaluators import RoeFeatureEvaluator
 from app.models.recommendation import AvailabilityStatus, Component, RequirementRole
+from tests.evidence_fixtures import attach_fixture_evidence
 
 _ROE_ID = "fundamental.profitability.roe"
 
@@ -96,13 +97,13 @@ def test_roe_scope_status_is_v1_required_regardless_of_runtime_result():
         (12.3, AvailabilityStatus.AVAILABLE),
         (None, AvailabilityStatus.UNAVAILABLE),
     ):
-        result_input = DeterministicAnalysisResult(
+        result_input = attach_fixture_evidence(DeterministicAnalysisResult(
             price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=1.0),
             financials=FinancialSnapshot(business_year="2025", roe=roe_value),
             facts=[],
             max_confidence=AnalysisConfidence.MEDIUM,
             risk_level=RiskLevel.MEDIUM,
-        )
+        ))
         data = build_normalized_research_data(result_input, as_of=as_of)
         outcome = evaluator.evaluate(data, context)
 
@@ -184,13 +185,13 @@ def test_roe_evaluator_result_requirement_role_matches_registry():
     from app.models.stock import FinancialSnapshot, StockPriceSnapshot
 
     as_of = datetime(2026, 8, 29, tzinfo=UTC)
-    result_input = DeterministicAnalysisResult(
+    result_input = attach_fixture_evidence(DeterministicAnalysisResult(
         price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=1.0),
         financials=FinancialSnapshot(business_year="2025", roe=12.3),
         facts=[],
         max_confidence=AnalysisConfidence.MEDIUM,
         risk_level=RiskLevel.MEDIUM,
-    )
+    ))
     data = build_normalized_research_data(result_input, as_of=as_of)
     context = EvaluationContext(symbol="005930", as_of=as_of)
     outcome = RoeFeatureEvaluator().evaluate(data, context)
@@ -352,13 +353,13 @@ def test_static_applicability_does_not_auto_set_runtime_review_flag():
     from app.models.stock import FinancialSnapshot, StockPriceSnapshot
 
     as_of = datetime(2026, 8, 29, tzinfo=UTC)
-    result_input = DeterministicAnalysisResult(
+    result_input = attach_fixture_evidence(DeterministicAnalysisResult(
         price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=1.0),
         financials=FinancialSnapshot(business_year="2025", roe=12.3),
         facts=[],
         max_confidence=AnalysisConfidence.MEDIUM,
         risk_level=RiskLevel.MEDIUM,
-    )
+    ))
     data = build_normalized_research_data(result_input, as_of=as_of)
     context = EvaluationContext(symbol="005930", as_of=as_of)
     outcome = RoeFeatureEvaluator().evaluate(data, context)
@@ -382,13 +383,13 @@ def test_roe_evaluator_behavior_unchanged_after_rename():
     from app.models.stock import FinancialSnapshot, StockPriceSnapshot
 
     as_of = datetime(2026, 8, 29, tzinfo=UTC)
-    result_input = DeterministicAnalysisResult(
+    result_input = attach_fixture_evidence(DeterministicAnalysisResult(
         price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=257000.0),
         financials=FinancialSnapshot(business_year="2025", roe=12.3),
         facts=[],
         max_confidence=AnalysisConfidence.MEDIUM,
         risk_level=RiskLevel.MEDIUM,
-    )
+    ))
     data = build_normalized_research_data(result_input, as_of=as_of)
     context = EvaluationContext(symbol="005930", as_of=as_of)
     outcome = RoeFeatureEvaluator().evaluate(data, context)

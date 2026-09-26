@@ -14,6 +14,7 @@ import pytest
 from pydantic import ValidationError
 
 import app.models.research_context as research_context_module
+from app.models.evidence import FinancialFactsEvidence
 from app.models.recommendation import AvailabilityStatus
 from app.models.research_context import (
     BenchmarkReference,
@@ -33,7 +34,9 @@ from app.models.research_context import (
 def _normalized_research_data(**overrides) -> NormalizedResearchData:
     defaults = {
         "identity": ResearchIdentity(symbol="005930", name="삼성전자"),
-        "financial_facts": FinancialFacts(status=AvailabilityStatus.AVAILABLE),
+        "financial_facts": FinancialFacts(
+            status=AvailabilityStatus.AVAILABLE, evidence=FinancialFactsEvidence()
+        ),
         "valuation_facts": ValuationFacts(status=AvailabilityStatus.AVAILABLE),
         "flow_facts": FlowFacts(status=AvailabilityStatus.UNAVAILABLE),
         "price_history": PriceHistoryReference(status=AvailabilityStatus.UNAVAILABLE),

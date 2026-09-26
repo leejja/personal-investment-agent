@@ -31,6 +31,7 @@ from app.models.stock import (
     FinancialSnapshot,
     StockPriceSnapshot,
 )
+from tests.evidence_fixtures import attach_fixture_evidence
 
 
 def _coverage(
@@ -244,7 +245,7 @@ def test_first_deterministic_pipeline_state_is_eligible_with_unknown_forward_req
     """First Deterministic Pipeline -> RecommendationEvaluationState ->
     Decision Eligibility. orchestrator는 이 함수를 호출하지 않는다 -- 여기서만
     실제 state로 호환성을 확인한다."""
-    result_input = DeterministicAnalysisResult(
+    result_input = attach_fixture_evidence(DeterministicAnalysisResult(
         price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=257000.0),
         financials=FinancialSnapshot(business_year="2025", roe=12.3, per=10.0),
         financial_features=FinancialFeatures(
@@ -253,7 +254,7 @@ def test_first_deterministic_pipeline_state_is_eligible_with_unknown_forward_req
         facts=[],
         max_confidence=AnalysisConfidence.MEDIUM,
         risk_level=RiskLevel.MEDIUM,
-    )
+    ))
     state = run_first_deterministic_pipeline(
         result_input,
         EvaluationContext(symbol="005930", as_of=datetime(2026, 8, 29, tzinfo=UTC)),

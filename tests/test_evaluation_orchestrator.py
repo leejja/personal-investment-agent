@@ -29,6 +29,7 @@ from app.models.stock import (
     FinancialSnapshot,
     StockPriceSnapshot,
 )
+from tests.evidence_fixtures import attach_fixture_evidence
 
 _AS_OF = datetime(2026, 8, 29, tzinfo=UTC)
 
@@ -76,14 +77,14 @@ def _deterministic_result(
         if annual_kwargs
         else FinancialFeatures()
     )
-    return DeterministicAnalysisResult(
+    return attach_fixture_evidence(DeterministicAnalysisResult(
         price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=257000.0),
         financials=FinancialSnapshot(business_year="2025", roe=roe, per=per, pbr=pbr),
         financial_features=financial_features,
         facts=[],
         max_confidence=AnalysisConfidence.MEDIUM,
         risk_level=RiskLevel.MEDIUM,
-    )
+    ))
 
 
 # ============================== 1. Happy path ==============================

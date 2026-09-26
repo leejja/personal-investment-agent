@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -84,6 +84,15 @@ class KiwoomStockInfo(BaseModel):
 
     high_250d: int | None
     low_250d: int | None
+
+
+class KiwoomStockInfoRetrieval(BaseModel):
+    """internal carrier — 공개 반환 모델(`KiwoomStockInfo`)을 바꾸지 않고 ka10001 응답
+    수신 시각을 함께 전달한다. `retrieved_at`은 runtime retrieval 시각이며 provider event
+    time / available_at이 아니다. MCP tool이 반환하지 않는다."""
+
+    stock_info: KiwoomStockInfo
+    retrieved_at: datetime
 
 
 class KiwoomAccountPosition(BaseModel):
@@ -336,6 +345,17 @@ class KiwoomService:
         access_token: str,
         stock_code: str,
     ) -> KiwoomStockInfo:
+        retrieval = await self.fetch_stock_info(
+            access_token=access_token,
+            stock_code=stock_code,
+        )
+        return retrieval.stock_info
+
+    async def fetch_stock_info(
+        self,
+        access_token: str,
+        stock_code: str,
+    ) -> KiwoomStockInfoRetrieval:
         response = await self.request(
             access_token=access_token,
             api_id="ka10001",
@@ -345,9 +365,11 @@ class KiwoomService:
             },
         )
 
+        # 성공 응답(return_code 0) 수신 직후의 runtime retrieval 시각.
+        retrieved_at = datetime.now(UTC)
         data = response.data
 
-        return KiwoomStockInfo(
+        stock_info = KiwoomStockInfo(
             stock_code=str(data["stk_cd"]),
             stock_name=str(data["stk_nm"]),
             current_price=self._parse_abs_int(data["cur_prc"]),
@@ -362,6 +384,8 @@ class KiwoomService:
             high_250d=self._parse_optional_abs_int(data.get("250hgst")),
             low_250d=self._parse_optional_abs_int(data.get("250lwst")),
         )
+
+        return KiwoomStockInfoRetrieval(stock_info=stock_info, retrieved_at=retrieved_at)
 
     async def get_account_balance(
         self,

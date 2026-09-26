@@ -312,7 +312,9 @@ Calibration Objective & Scope = Contract FROZEN (§7.7)
 PIT Financial Evidence        = Contract FROZEN (§7.8) / implementation NOT STARTED (readiness NO)
 OpenDART PIT Empirical Verif. = EXECUTION COMPLETE / INDEPENDENT REVIEW PASS / FINDINGS FROZEN (§7.9)
 Evidence Identity & Persist.  = Contract DESIGN COMPLETE / REVIEW PASS / FROZEN (§7.10)
-                                 / implementation NOT STARTED
+                                 / implementation PARTIAL (Evidence Identity Preservation slice만)
+Evidence Identity Preservation = IMPLEMENTED / offline verification PASS / live integration
+                                 NOT VERIFIED (6-evaluator first slice, 아래 결과 참고)
 Numeric Calibration           = OPEN (workflow) / readiness BLOCKED (§7.6)
                                  / calibration NOT STARTED
 ```
@@ -343,9 +345,11 @@ NOT SELECTED였다. 아래 selection 블록의 "EXECUTION NOT STARTED"는 선택
 Post-Empirical Critical-Path Review가 NEXT로 Calibration Evidence Identity & Persistence를
 선택했고(아래 Post-Empirical selection 블록 — "DESIGN NOT STARTED"는 선택 시점 기록), 그 design
 contract가 FROZEN됐다(§7.10, implementation NOT STARTED) — 이 시점에 다음 작업 항목은 NOT
-SELECTED였다. 이어서 Post-§7.10 Critical-Path Review가 NEXT를 선택했다 — **현재 NEXT는 Evidence
-Identity Preservation(SELECTION FROZEN / IMPLEMENTATION NOT STARTED), SECOND/THIRD는 NOT
-SELECTED다**(아래 Post-§7.10 selection 블록).
+SELECTED였다. 이어서 Post-§7.10 Critical-Path Review가 NEXT로 Evidence Identity Preservation을
+선택했고(아래 Post-§7.10 selection 블록 — "IMPLEMENTATION NOT STARTED"는 선택 시점 기록), 그
+slice가 구현됐다(아래 구현 결과, offline 검증 PASS / live integration NOT VERIFIED). **현재 다음
+작업 항목은 NOT SELECTED, SECOND/THIRD도 NOT SELECTED다** — 다음 작업은 별도 critical-path
+review에서 선택한다.
 
 **Post-PIT Critical Path Review → NEXT Selection (FROZEN, 선택 시점 기록 — 실행 결과는 §7.9)**
 — work-selection contract이며 새 PIT architecture contract가 아니다(§7.8 semantics 불변):
@@ -510,8 +514,8 @@ candidate, stage 2–9는 NOT IMPLEMENTED, stage 2–8의 stage-level contract�
 Step 3 Core Aggregation, Step 11 = staged policy 자체)는 별도 번호 체계다. 확정된 "8-step
 Recommendation Policy"가 존재하는 것은 아니다.
 
-**Post-§7.10 Critical-Path Review → NEXT Selection (FROZEN)** — §7.10(parent frozen contract)
-아래의 **구현 slice 선택만** 고정한다. 새 architecture contract가 아니며 §7.10을 변경하지 않는다.
+**Post-§7.10 Critical-Path Review → NEXT Selection (FROZEN, 선택 시점 기록 — 구현 결과는 아래)** —
+§7.10(parent frozen contract) 아래의 **구현 slice 선택만** 고정한다. 새 architecture contract가 아니며 §7.10을 변경하지 않는다.
 
 ```text
 NEXT    Evidence Identity Preservation — SELECTION FROZEN / IMPLEMENTATION NOT STARTED
@@ -581,6 +585,43 @@ OUT OF SCOPE  Evidence Basis Manifest implementation; reproducibility-status rep
 - **Blocker**: H6은 구현으로 이후 좁혀질 수 있으나 NOT RESOLVED, H5 unchanged / NOT RESOLVED, H1–H4 /
   H7 unchanged. 선택 freeze 자체로 해소된 blocker 없음(newly resolved NONE).
 
+**Evidence Identity Preservation — 구현 결과** (IMPLEMENTED / independent implementation review PASS
+WITH NON-BLOCKING NOTE / offline verification PASS / live integration verification not performed):
+
+```text
+구현(first slice)  provider-neutral semantic evidence identity(`app/models/evidence.py`)와 retrieval
+                   fact 분리(`EvidenceItemIdentity` vs `EvidenceReference`, retrieved_at은 identity
+                   equality/hash 밖); provider 응답 수신 직후 retrieved_at 기록(internal fetch 경로);
+                   OpenDART: 선택된 row의 rcept_no / reprt_code / fs_div / sj_div / source term /
+                   period notation, comparative(previous / before_previous)는 나중 filing의 rcept_no +
+                   source term 유지; Kiwoom: ROE / PER / PBR은 SOURCE_REPORTED(Kiwoom / ka10001),
+                   version anchor·formula lineage를 만들지 않음; derived: Operating Margin / Net
+                   Margin / Debt Ratio는 DERIVED(formula identity/version + semantic input identity +
+                   source input reference), FeatureValue.is_derived=True(raw slot 유지);
+                   propagation: provider/service → internal evidence-aware tool 경로 → analyze →
+                   NormalizedResearchData(FinancialFacts.evidence) → 6개 evaluator →
+                   FeatureEvaluationResult.provenance.evidence; fail-fast: evidence 없는 builder 경로,
+                   evaluator 소비 값의 evidence 부재, 잘못된 source/derived evidence 구성
+Evaluator slice    ROE / Operating Margin / Net Margin / Debt Ratio / Trailing PER / PBR
+                   (derived source input: revenue / operating_profit / net_income /
+                   total_liabilities / total_equity) — 모든 재무 evidence가 identity를 갖는 것은 아님
+미구현 / 유보      NRD history evidence propagation, YoY lineage, trend lineage, Evidence Basis
+                   Manifest, capture, persistence/storage, reproducibility-status representation(OPEN),
+                   Reference Snapshot, available_at derivation, revision-selection policy(OPEN),
+                   historical PIT — §7.10 implementation은 PARTIAL
+경계               reproducibility NOT CLAIMED(historical recoverability / snapshot reproducibility /
+                   content equivalence / capture completeness / historical PIT eligibility를 확립하지
+                   않음); retrieved_at ≠ available_at ≠ published_at — historical PIT NOT READY;
+                   Derived Feature Value Ownership OPEN(현재 derivation 위치에 lineage를 기록할 뿐);
+                   MCP public contract UNCHANGED; StockAnalysis v1 contract UNCHANGED; 기존 v1 LLM
+                   judgment UNCHANGED(이 구현으로 검증·gating되지 않음)
+검증               focused invariant tests 15 passed; offline suite 772 passed(live-API test 9개
+                   deselect); ruff PASS; live integration NOT VERIFIED
+Blocker            H1–H7 newly resolved NONE(H5 / H6 NOT RESOLVED)
+```
+
+상세 이력(review 지적 포함)은 `docs/dev-log/2026-09-26.md` §S.
+
 RE-04/RE-05의 상세 결정 과정, contract 확정 근거는 `docs/dev-log/
 2026-08-29.md` §1~§51(Post-Orchestration Review Step A~J는 `docs/dev-log/
 2026-09-07.md`, Final Decision Eligibility는 `docs/dev-log/2026-09-25.md`,
@@ -588,7 +629,8 @@ Post-Decision-Eligibility Next Slice Selection / Feature Normalization Contract 
 Calibration Readiness Audit / Calibration Objective & Scope Contract /
 Point-in-Time Financial Evidence Contract / Post-PIT Critical Path Review /
 OpenDART PIT Empirical Verification / Post-Empirical Critical-Path Review /
-Calibration Evidence Identity & Persistence Contract / Post-§7.10 Critical-Path Review는
+Calibration Evidence Identity & Persistence Contract / Post-§7.10 Critical-Path Review /
+Evidence Identity Preservation 구현은
 `docs/dev-log/2026-09-26.md`)과
 `app/models/recommendation.py`/`research_context.py` docstring이 canonical이다.
 

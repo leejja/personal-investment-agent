@@ -57,6 +57,7 @@ from app.models.stock import (
     FinancialSnapshot,
     StockPriceSnapshot,
 )
+from tests.evidence_fixtures import attach_fixture_evidence
 
 _AS_OF = datetime(2026, 8, 29, tzinfo=UTC)
 _ROE_ID = "fundamental.profitability.roe"
@@ -76,7 +77,7 @@ def _context() -> EvaluationContext:
 
 
 def _real_roe_and_operating_margin_results() -> list[FeatureEvaluationResult]:
-    result_input = DeterministicAnalysisResult(
+    result_input = attach_fixture_evidence(DeterministicAnalysisResult(
         price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=257000.0),
         financials=FinancialSnapshot(business_year="2025", roe=12.3),
         financial_features=FinancialFeatures(
@@ -85,7 +86,7 @@ def _real_roe_and_operating_margin_results() -> list[FeatureEvaluationResult]:
         facts=[],
         max_confidence=AnalysisConfidence.MEDIUM,
         risk_level=RiskLevel.MEDIUM,
-    )
+    ))
     data = build_normalized_research_data(result_input, as_of=_AS_OF)
     context = _context()
     return [
@@ -570,13 +571,13 @@ def test_assembly_module_has_no_vendor_llm_or_portfolio_dependency():
 def test_recommendation_evaluation_state_can_hold_fundamental_component_assessment():
     as_of = _AS_OF
     context = _context()
-    result_input = DeterministicAnalysisResult(
+    result_input = attach_fixture_evidence(DeterministicAnalysisResult(
         price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=1.0),
         financials=FinancialSnapshot(business_year="2025", roe=12.3),
         facts=[],
         max_confidence=AnalysisConfidence.MEDIUM,
         risk_level=RiskLevel.MEDIUM,
-    )
+    ))
     normalized_data = build_normalized_research_data(result_input, as_of=as_of)
     results = _real_roe_and_operating_margin_results()
     _, component_assessment, _, _ = _assemble_fundamental(results)
@@ -953,13 +954,13 @@ def test_recommendation_evaluation_state_holds_all_five_component_assessments():
     없음)."""
     as_of = _AS_OF
     context = _context()
-    result_input = DeterministicAnalysisResult(
+    result_input = attach_fixture_evidence(DeterministicAnalysisResult(
         price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=1.0),
         financials=FinancialSnapshot(business_year="2025", roe=12.3),
         facts=[],
         max_confidence=AnalysisConfidence.MEDIUM,
         risk_level=RiskLevel.MEDIUM,
-    )
+    ))
     normalized_data = build_normalized_research_data(result_input, as_of=as_of)
 
     component_assessments = [_assemble(component, [])[1] for component in _ALL_COMPONENTS]
@@ -980,13 +981,13 @@ def test_future_opportunity_evidence_stays_top_level_alongside_five_components()
     별개로 공존한다."""
     as_of = _AS_OF
     context = _context()
-    result_input = DeterministicAnalysisResult(
+    result_input = attach_fixture_evidence(DeterministicAnalysisResult(
         price=StockPriceSnapshot(symbol="005930", name="삼성전자", price=1.0),
         financials=FinancialSnapshot(business_year="2025", roe=12.3),
         facts=[],
         max_confidence=AnalysisConfidence.MEDIUM,
         risk_level=RiskLevel.MEDIUM,
-    )
+    ))
     normalized_data = build_normalized_research_data(result_input, as_of=as_of)
 
     component_assessments = [_assemble(component, [])[1] for component in _ALL_COMPONENTS]
