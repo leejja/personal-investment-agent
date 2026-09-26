@@ -342,8 +342,10 @@ Empirical Verification)가 실행됐고 findings가 FROZEN됐다(§7.9) — 이 
 NOT SELECTED였다. 아래 selection 블록의 "EXECUTION NOT STARTED"는 선택 시점 기록이다. 이어서
 Post-Empirical Critical-Path Review가 NEXT로 Calibration Evidence Identity & Persistence를
 선택했고(아래 Post-Empirical selection 블록 — "DESIGN NOT STARTED"는 선택 시점 기록), 그 design
-contract가 FROZEN됐다(§7.10, implementation NOT STARTED). **현재 다음 작업 항목은 NOT SELECTED,
-SECOND/THIRD도 NOT SELECTED다** — 다음 작업은 별도 critical-path review에서 선택한다.
+contract가 FROZEN됐다(§7.10, implementation NOT STARTED) — 이 시점에 다음 작업 항목은 NOT
+SELECTED였다. 이어서 Post-§7.10 Critical-Path Review가 NEXT를 선택했다 — **현재 NEXT는 Evidence
+Identity Preservation(SELECTION FROZEN / IMPLEMENTATION NOT STARTED), SECOND/THIRD는 NOT
+SELECTED다**(아래 Post-§7.10 selection 블록).
 
 **Post-PIT Critical Path Review → NEXT Selection (FROZEN, 선택 시점 기록 — 실행 결과는 §7.9)**
 — work-selection contract이며 새 PIT architecture contract가 아니다(§7.8 semantics 불변):
@@ -508,6 +510,77 @@ candidate, stage 2–9는 NOT IMPLEMENTED, stage 2–8의 stage-level contract�
 Step 3 Core Aggregation, Step 11 = staged policy 자체)는 별도 번호 체계다. 확정된 "8-step
 Recommendation Policy"가 존재하는 것은 아니다.
 
+**Post-§7.10 Critical-Path Review → NEXT Selection (FROZEN)** — §7.10(parent frozen contract)
+아래의 **구현 slice 선택만** 고정한다. 새 architecture contract가 아니며 §7.10을 변경하지 않는다.
+
+```text
+NEXT    Evidence Identity Preservation — SELECTION FROZEN / IMPLEMENTATION NOT STARTED
+SECOND  NOT SELECTED
+THIRD   NOT SELECTED
+```
+
+Objective: 기존 deterministic pipeline 전반에 provider-neutral evidence identity와 derivation lineage를
+보존해, downstream consumer가 값이 어떤 evidence를 나타내는지, 언제 조회됐는지, source-reported인지
+derived인지를 truthful하게 식별할 수 있게 한다. full §7.10 구현보다 좁다.
+
+선택 근거: 현재 코드는 user-visible V0의 Minimum Trustworthy Product gate를 통과하지 못한다 — evidence
+identity 소실, `retrieved_at` 부재, OpenDART filing / source-column identity 소실, comparative 값의
+relabel, derived 값이 source/raw evidence처럼 보임. 이 slice가 그 trust blocker를 제거한다.
+
+```text
+IN SCOPE      provider-neutral Evidence Item Identity; retrieved_at; provider/source identity;
+              provider version / filing anchor(실제 제공될 때만); observation identity; report
+              identity / reporting basis / source column·term(해당 시); temporal precision 보존;
+              source-reported vs derived 구분; derived formula identity/version; derived required-
+              input evidence identity; provider/domain boundary → NormalizedResearchData →
+              FeatureEvaluationResult provenance까지 identity 보존. exact schema는 고정하지 않음
+OpenDART      interface가 실제 제공하는 것만: rcept_no(served filing anchor) / reprt_code / fs_div /
+              sj_div / source column·term / observation period / provider·interface / retrieved_at.
+              published_at / available_at / revision ordering / revision relationship을 만들지
+              않는다. fnlttSinglAcnt는 rcept_dt를 제공하지 않는다 — 이후 interface가 제공하면 source
+              precision 유지(date → timestamp 승격 금지)
+Kiwoom        provider/interface / security·entity / measure / retrieved_at / current-runtime
+              observation identity. version anchor는 실제 있을 때만(만들지 않음). 부재 표현
+              (None / ABSENT / enum / optional)은 구현 세부로 고정하지 않음. PER/PBR/ROE는 provider가
+              계산한 비율일 수 있으나 이 시스템이 derivation을 모르므로 formula/input lineage를 만들지
+              않고 provider-reported 값으로 source identity와 함께 보존
+Derived       SOURCE_REPORTED ≠ DERIVED. 현재 pipeline이 derive하는 값은 formula identity/version과
+              required input evidence identity 보존(현재 derivation 위치는 사실로 기록 가능).
+              lineage preservation ≠ canonical Derived Feature Value Ownership — ownership OPEN
+              (analysis.py / evaluator / normalization 등 어느 것도 canonical owner로 선택하지 않음)
+Comparative   later filing의 prior-year comparative 값이 해당 연도 original filing 값과 구별 불가능해지지
+              않도록 identity 보존(§7.8 P3/P11). historical PIT selection / revision / restatement /
+              equivalence policy는 구현하지 않음
+OUT OF SCOPE  Evidence Basis Manifest implementation; reproducibility-status representation;
+              evidence capture; physical persistence; database/storage selection; retention;
+              hashing/content addressing; equivalence-check mechanism; Reference Snapshot
+              implementation(universe / statistic / membership / persistence / construction policy
+              미선택); availability derivation policy / available_at derivation; revision-selection
+              policy; historical PIT implementation; historical calibration infrastructure;
+              current-reference Semantic admissibility; numeric policy source; PolicyConfig work;
+              calibration parameters; Feature Normalization implementation; component score/signal;
+              Core Attractiveness; Recommendation Policy stages 2–9; StockOpportunityAssessment
+              changes; V0 app/API wiring; changes to existing v1 LLM outputs; new evaluators
+```
+
+- **Reproducibility**: capture도 검증된 recovery/equivalence mechanism도 없으므로 reproducibility를
+  **주장하지 않는다**. 그러나 NOT_ESTABLISHED status / enum / flag / CAPTURED / VERSION_ADDRESSABLE을
+  구현·고정하지 않는다 — representation은 §7.10 아래 OPEN.
+- **Evidence Basis Manifest**: 구현은 OUT OF SCOPE. §7.10 E12 semantic requirement는 그대로 FROZEN이며,
+  이 slice는 이후 manifest가 참조할 identity를 만들고 보존할 뿐이다.
+- **V0 관계**: `Evidence Identity Preservation → (identity / lineage trust blocker 제거) → trustworthy V0
+  App Surface를 별도로 설계·wiring 가능`. 이 NEXT가 V0를 완료하지 않는다 — V0는 이후에도 app/API
+  wiring, user-facing output contract, supported-output 검증, 기존 v1 LLM judgment에 대한 product
+  decision이 필요하다.
+- **기존 v1 LLM 출력(product-boundary finding)**: 현재 app은 RE-05 밖의 LLM investment judgment/action
+  (thesis / scenario, BUY / ADD / HOLD / REDUCE / SELL / AVOID)을 이미 노출한다. 이 slice는 이를
+  검증·수정·gating하지 않는다. trustworthy V0 출시 전 separation / labeling / gating / coexistence에
+  대한 별도 product decision이 필요하다(지금 선택하지 않음).
+- **K 관계**: K(Numeric Policy-Source / First-Slice Scope Decision)는 이 slice에 hard implementation
+  dependency가 없다. K는 선택되지 않았다.
+- **Blocker**: H6은 구현으로 이후 좁혀질 수 있으나 NOT RESOLVED, H5 unchanged / NOT RESOLVED, H1–H4 /
+  H7 unchanged. 선택 freeze 자체로 해소된 blocker 없음(newly resolved NONE).
+
 RE-04/RE-05의 상세 결정 과정, contract 확정 근거는 `docs/dev-log/
 2026-08-29.md` §1~§51(Post-Orchestration Review Step A~J는 `docs/dev-log/
 2026-09-07.md`, Final Decision Eligibility는 `docs/dev-log/2026-09-25.md`,
@@ -515,7 +588,7 @@ Post-Decision-Eligibility Next Slice Selection / Feature Normalization Contract 
 Calibration Readiness Audit / Calibration Objective & Scope Contract /
 Point-in-Time Financial Evidence Contract / Post-PIT Critical Path Review /
 OpenDART PIT Empirical Verification / Post-Empirical Critical-Path Review /
-Calibration Evidence Identity & Persistence Contract는
+Calibration Evidence Identity & Persistence Contract / Post-§7.10 Critical-Path Review는
 `docs/dev-log/2026-09-26.md`)과
 `app/models/recommendation.py`/`research_context.py` docstring이 canonical이다.
 
