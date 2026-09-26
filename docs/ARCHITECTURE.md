@@ -308,6 +308,7 @@ Feature Normalization         = Ownership & Representation Contract FROZEN (§7.
                                  / implementation NOT STARTED (readiness NO, §7.6)
 Calibration Readiness Audit   = COMPLETE / INDEPENDENT REVIEW PASS (§7.6)
 Calibration Objective & Scope = Contract FROZEN (§7.7)
+PIT Financial Evidence        = Contract FROZEN (§7.8) / implementation NOT STARTED
 Numeric Calibration           = OPEN (workflow) / readiness BLOCKED (§7.6)
                                  / calibration NOT STARTED
 ```
@@ -329,16 +330,16 @@ Numeric Calibration을 시작하지 않으며 numeric parameter/threshold/weight
 정하지 않는다(`Numeric Calibration = OPEN` 유지). contract(rev.1)는 §7.5에
 FROZEN됐고 구현은 시작하지 않았다. 이어서 SECOND였던 Calibration Data &
 Parameter Provenance Readiness Audit이 COMPLETE됐고(§7.6), post-audit NEXT였던
-Calibration Objective & Scope Contract가 FROZEN됐다(§7.7). 현재 NEXT는
-Point-in-Time Financial Evidence Contract(selection FROZEN, design NOT STARTED),
-SECOND는 NOT SELECTED다.
+Calibration Objective & Scope Contract가 FROZEN됐다(§7.7). 이어서 NEXT였던
+Point-in-Time Financial Evidence Contract가 FROZEN됐다(§7.8, 구현 NOT STARTED). 다음
+작업 항목은 NOT SELECTED, SECOND/THIRD도 NOT SELECTED다.
 
 RE-04/RE-05의 상세 결정 과정, contract 확정 근거는 `docs/dev-log/
 2026-08-29.md` §1~§51(Post-Orchestration Review Step A~J는 `docs/dev-log/
 2026-09-07.md`, Final Decision Eligibility는 `docs/dev-log/2026-09-25.md`,
 Post-Decision-Eligibility Next Slice Selection / Feature Normalization Contract /
-Calibration Readiness Audit / Calibration Objective & Scope Contract는
-`docs/dev-log/2026-09-26.md`)과
+Calibration Readiness Audit / Calibration Objective & Scope Contract /
+Point-in-Time Financial Evidence Contract는 `docs/dev-log/2026-09-26.md`)과
 `app/models/recommendation.py`/`research_context.py` docstring이 canonical이다.
 
 ### 7.4 Recommendation Policy Step 1 — Decision Eligibility (primitive)
@@ -564,7 +565,7 @@ SECOND  Point-in-Time Financial Evidence Contract — NOT STARTED
 THIRD   not selected
 ```
 
-(이후 진행: NEXT는 §7.7로 FROZEN됐고, SECOND가 현재 NEXT가 됐다 — §7.3 참고.)
+(이후 진행: NEXT는 §7.7로 FROZEN됐고, SECOND가 다음 NEXT가 되어 §7.8로 FROZEN됐다 — §7.3 참고.)
 
 - selection 시점에는 selection만 FROZEN이었으며 두 contract의 내용은 설계되지 않았다.
 - NEXT는 투자 outcome label(수익률/초과수익/drawdown/Sharpe/ACTIONABLE success
@@ -648,7 +649,7 @@ as_of / reference snapshot as_of / future outcome period. 해당되는 reference
 `reference snapshot as_of <= evaluation as_of`. future outcome period는
 Recommendation/outcome evidence에 속하며 Semantic fitting/primary-selection evidence가
 아니다. temporal schema는 정하지 않는다 — 상세는 Point-in-Time Financial Evidence
-Contract의 몫이다.
+Contract(§7.8)의 몫이다.
 
 **Semantic evidence classes**:
 
@@ -791,7 +792,7 @@ Versioning           future representation of independent Semantic / Recommendat
 ```text
 Calibration Objective & Scope Contract (FROZEN)
         ↓
-Point-in-Time Financial Evidence Contract (NEXT, design NOT STARTED)
+Point-in-Time Financial Evidence Contract (FROZEN, §7.8 / implementation NOT STARTED)
         ↓
 Calibration Evidence Identity & Persistence   (candidate, not selected)
         ↓
@@ -807,6 +808,221 @@ Contract(candidate)와 선택된 objective에 따른 conditional evidence(histor
 survivorship-safe universe / adjusted-price)가 선행한다.
 
 design rev.0 → rev.1 review 이력은 `docs/dev-log/2026-09-26.md` §K가 canonical이다.
+
+### 7.8 Point-in-Time Financial Evidence Contract (FROZEN)
+
+```text
+Status          DESIGN COMPLETE / INDEPENDENT REVIEW PASS / FROZEN (rev.1 + §4.1 wording correction)
+Implementation  NOT STARTED (PIT capability 없음)
+```
+
+**Purpose**: 재무 evidence가 특정 information boundary에서 정당하게 사용될 수 있는지
+판정하는 데 필요한 최소 temporal/evidence semantics를 정한다.
+
+**Scope**: 개별 재무 evidence item(raw / derived), current-runtime usability boundary,
+historical PIT eligibility boundary.
+
+**Non-goals**: implementation schema / exact field name, dataset identity, persistence
+구현, valuation reconstruction, price / corporate-action semantics, quarterly/TTM 계산,
+revision-policy 선택, availability-policy 선택, Numeric Calibration, Feature
+Normalization 구현, Recommendation Calibration, numeric parameter / threshold / weight,
+normalization formula, outcome label / horizon / benchmark.
+
+**Temporal model**:
+
+```text
+economic observation ≠ filing/publication ≠ information availability
+                     ≠ evaluation_as_of   ≠ retrieval time
+```
+
+architecture가 **표현 가능해야** 하는 evidence 차원: observation identity / filing
+identity / availability identity / retrieval identity / revision dimension. 표현 가능성은
+모든 evidence item이 다섯 차원 모두의 구체적 값을 안다는 뜻이 아니다 — 어떤 값이
+알려져야 하는지는 사용 목적(current-runtime vs historical)과 consumer policy가 정한다.
+consumer 측 개념(evidence 속성 아님): `evaluation_as_of`, revision-selection policy.
+
+**Observation identity**: economic/reporting period, report type, reporting basis,
+source column / term, (해당 시) raw vs derived origin을 구별할 수 있어야 한다 — FY
+연간 / Q4 / 반기 / TTM / 비교 컬럼 값이 조용히 동일시되지 않도록. quarterly/TTM 계산은
+설계하지 않는다. Repository finding: OpenDART source parsing(`OpenDartFinancialAccount`:
+`bsns_year`/`reprt_code`/`fs_div`/`sj_div`/`thstrm·frmtrm·bfefrmtrm` `_nm`/`_dt`)은
+downstream `KeyFinancials`/`FinancialSnapshot`보다 풍부한 기간/source 정보를 갖고,
+downstream은 이를 보존하지 않는다(`rcept_no`, 기간 날짜, source column, `sj_div`가
+소실되고, `fs_div`는 `FinancialSnapshot`에서 소실).
+
+**Filing identity**: source 문서를 식별한다. 그 자체로 publication timestamp /
+availability timestamp / original·corrected status / revision order / replacement
+semantics를 증명하지 않는다. OpenDART: `rcept_no` → provider-specific filing identity
+후보 → adapter가 generic filing identity로 매핑. generic architecture는 `rcept_no`에
+직접 의존하지 않는다. `rcept_no`의 구조/semantics는 empirically UNVERIFIED다(repository에
+해석 코드 없음).
+
+**Availability semantics**: `published_at` = source 측 publication/filing event.
+`available_at` = 식별 가능한 source-specific availability policy 아래 가장 이른 방어
+가능한 information boundary. `published_at == available_at`은 검증된 source-specific
+policy가 뒷받침할 때만 허용된다(현재 없음). latency/timezone 가정을 두지 않는다. 정확한
+schema 표현은 OPEN.
+
+**Current-runtime usability boundary**: current-runtime latest-known 사용에서, 성공한
+source retrieval은 명시적 source/runtime policy 아래 **오직** `available_at <=
+retrieved_at`만 확립할 수 있다. 이는 해당 policy 아래 current-runtime usability만
+뒷받침한다. exact historical `available_at`을 확립하지 않으며, 임의의 더 이른 `T`에
+대해 `available_at <= historical_as_of_T`를 확립해서는 안 된다 — `available_at`은
+`retrieved_at`보다 훨씬 이를 수도 있고, historical `T`보다 늦으면서 `retrieved_at`보다는
+이를 수도 있으며, upper bound만으로는 두 경우를 구분할 수 없다. 또한 지금 조회된
+version이 historical `T`에 존재한 version이라는 것도 증명되지 않는다. 따라서
+`Current-runtime usability ≠ Historical PIT eligibility`(P4와 공존: 상한은 현재 사용을
+뒷받침하고, P4가 부정하는 것은 historical 가용성이다). upper bound의 field 표현은 OPEN.
+
+**Historical PIT boundary**: 방어 가능한 `available_at <= evaluation_as_of` + consumer의
+명시적 revision-selection policy 아래 정당성. `retrieved_at` 단독, `EvaluationContext.as_of`
+단독으로는 historical PIT eligibility를 충족하지 않는다.
+
+**Revision dimension**: revision 정보는 반드시 표현 가능해야 한다. source가 확립할 수
+없으면 known concrete revision identity는 요구되지 않으며, 이 경우 `revision state =
+UNKNOWN`이 명시적으로 유지된다. UNKNOWN은 original / latest-corrected / revision-free를
+조용히 뜻하지 않는다. revision identity/state = evidence 속성, revision-selection policy
+= consumer/policy 선택. 개념 대안(as-known-at-time / latest-corrected / original-only)
+중 어느 것도 선택하지 않는다.
+
+**Comparative-column rule**: filing `Y`의 비교 컬럼 값(economic period `Y-1`)은 filing
+`Y`가 available해진 이후 "filing Y가 보고한 비교 값"으로 사용할 수 있다. 그 값을
+"`Y-1` historical information boundary에서 알려진 값"으로 자동 표현해서는 안 된다 —
+더 이른 boundary에서 실제로 available했던 evidence와의 동등성이 독립적으로 확립된 경우는
+예외. source-column / term identity는 downstream 변환에서 보존돼야 한다.
+Repository defect/risk: `get_key_financials_history()`(`app/mcp/opendart_tools.py`)는
+하나의 나중 filing에서 비교 값을 꺼내 `_year_label_for_term()`으로 더 이른
+`business_year`로 relabel한다(`report_code`는 그대로) — downstream 표현은 "나중 filing의
+비교 값"과 "더 이른 filing이 직접 보고한 값"의 구분을 잃는다. 실제 restatement 발생이나
+production leakage를 주장하지 않는다 — leakage risk가 현재 통제되지 않으며, 이 경로가
+historical calibration/backtesting에 재사용되면 탐지 불가능할 수 있다.
+
+**PIT eligibility (conceptual historical predicate, 함수/schema 아님)**: historical
+재무 evidence는 다음을 모두 만족할 때만 `evaluation_as_of`에서 사용될 수 있다.
+
+```text
+1. observation identity가 존재한다
+2. filing identity가 존재한다
+3. 식별 가능한 availability policy 아래 방어 가능한 available_at이 존재한다
+4. available_at <= evaluation_as_of
+5. revision state가 명시적이다(해당 시 UNKNOWN 포함)
+6. consumer의 명시적 revision-selection policy 아래 선택 가능하다
+7. 비교 컬럼 evidence는 comparative-column rule을 따른다
+```
+
+**Missing / UNKNOWN**:
+
+```text
+PIT eligibility를 주장하는 내부 object에 필수 identity 부재  → contract violation / fail-fast 후보
+source가 historical temporal/revision 사실을 확립 불가        → not PIT-eligible / UNKNOWN
+재무 값 자체 부재                                             → 기존 missing-aware semantics
+```
+
+latest / current / neutral / zero / SATISFIED로 조용히 fallback하지 않는다. 정확한
+status/schema 표현은 OPEN.
+
+**Derived evidence (lower bound only)**: derived evidence item은 그것을 도출하는 데 필요한
+어떤 evidence input보다도 이른 availability boundary를 가져서는 안 된다 — 개념적으로
+`derived_available_at >= max(required_input_available_at)`. 이는 선택된 구현 공식이 아니며
+`= max(...)`를 완전한 semantics로 freeze하지 않는다. derived feature ownership / 완전한
+derived-evidence availability semantics / formula identity ownership / policy·config
+temporal identity는 OPEN.
+
+**Provenance boundary**:
+
+```text
+EvaluationContext.as_of                      consumer information boundary
+evidence publication/availability identity   evidence/source temporal identity
+retrieved_at                                 retrieval/audit identity
+revision-selection policy                    consumer/policy identity
+```
+
+`as_of`를 overload하지 않는다. 현재 evaluator `Provenance`는 `source`와
+`as_of = context.as_of`만 채우며 `published_at`/`effective_at`/`retrieved_at`은 항상
+`None`, `available_at`·revision field는 없다. `Provenance.effective_at` semantics는 OPEN.
+
+**Source-neutral vs OpenDART-specific**: source-neutral — evidence 차원, eligibility
+predicate, current-runtime upper-bound 규칙, P1–P12. OpenDART adapter/policy —
+`rcept_no` → filing identity, `reprt_code`/`fs_div`/`sj_div` → observation identity,
+비교 컬럼 표시, publication timestamp source, availability policy, revision state 판별.
+
+**Leakage classes** (전부 "risk not controlled", "leakage observed" 아님): later-filing
+comparative, restatement, corrected-filing, publication-time look-ahead, retrieval-time
+confusion, derived-availability advancement.
+
+**Invariants (P1–P12)**:
+
+```text
+P1  Economic observation과 information availability는 구별된다.
+P2  evaluation_as_of에 쓰이는 historical evidence는 evaluation_as_of 이하의 방어 가능한
+    availability boundary를 확립해야 한다.
+P3  나중 filing의 비교 값은 독립적 동등성 evidence 없이 더 이른 information boundary로
+    back-project되어서는 안 된다.
+P4  Retrieval time은 historical availability를 확립하지 않는다.
+P5  EvaluationContext.as_of 단독으로는 evidence availability를 확립하지 않는다.
+P6  Revision identity/state와 revision-selection policy는 구별된다. 여러 version이 존재할
+    수 있으면 consumer policy가 명시적이어야 한다.
+P7  UNKNOWN historical availability/revision은 조용히 current/latest evidence가 되어서는
+    안 된다.
+P8  PIT eligibility는 Numeric Calibration 또는 Feature Normalization readiness를 뜻하지
+    않는다.
+P9  PIT evidence identity는 calibration dataset identity와 구별된다.
+P10 Provider-specific identifier는 generic evidence identity를 구현할 수 있으나, generic
+    architecture는 특정 provider에 불필요하게 의존해서는 안 된다.
+P11 PIT-relevant identity는 downstream 변환에서 보존돼야 한다. source-column origin을
+    지우거나, 나중 filing의 비교 값이 더 이른 filing의 직접 보고 값과 구별 불가능해지도록
+    relabel해서는 안 된다.
+P12 Derived evidence item은 필요한 어떤 evidence input보다도 이른 availability boundary를
+    가져서는 안 된다. 완전한 derived-evidence availability semantics는 OPEN.
+```
+
+**OPEN**:
+
+```text
+OpenDART corrected-filing retrieval behavior; authoritative publication timestamp source;
+defensible available_at source/policy; revision-chain reconstruction; revision-selection policy;
+historical filing retrieval capability; comparative-column equivalence verification;
+quarterly / half-year / TTM semantics; persistence/schema representation;
+calibration dataset identity; historical valuation reconstruction;
+corporate-action / adjusted-price semantics; Provenance.effective_at semantics;
+PIT-unavailable status representation; _find_amount / sj_div ambiguity;
+derived feature ownership; complete derived-evidence availability semantics;
+formula/policy/config temporal identity; published_at / available_at field representation;
+current-runtime upper-bound field representation
+```
+
+**EMPIRICAL VERIFICATION REQUIRED** (이 contract는 아래를 해소하지 않는다):
+
+```text
+1. fnlttSinglAcnt original / corrected / latest behavior
+2. historical original filing retrieval / reconstruction
+3. rcept_no structure and semantics
+4. authoritative publication timestamp source
+5. API / comparative-column mutation after correction / restatement
+6. period-field(thstrm_dt 등) / reprt_code semantics beyond repository-proven facts
+```
+
+**Blocker status**: 이 contract의 freeze로 해소된 H1–H7 blocker는 **없다**.
+
+```text
+H2 TEMPORAL     CLARIFIED / NARROWED — blocking 유지
+H3 EXTERNAL     NARROWED — blocking 유지
+H5 INFRA        CLARIFIED — 미해결
+H6 PROVENANCE   CLARIFIED — blocking 유지
+H1 / H4 / H7    변경 없음
+```
+
+**Readiness**: PIT capability implementation NOT STARTED · Feature Normalization
+implementation NOT STARTED / readiness NO · Numeric Calibration OPEN / readiness BLOCKED /
+NOT STARTED · Recommendation Calibration NOT STARTED / BLOCKED.
+
+**Dependency candidates (선택되지 않음 — NEXT/SECOND/THIRD 아님)**: OpenDART PIT Empirical
+Verification(PIT 구현 이전에 필요할 가능성이 높음), Calibration Evidence Identity &
+Persistence, Parameter Provenance / PolicyConfig, Historical Valuation Reconstruction,
+Corporate Action / Adjusted Price, Recommendation Objective & Outcome Semantics.
+
+design rev.0 → rev.1 → §4.1 wording correction → freeze-readiness review 이력은
+`docs/dev-log/2026-09-26.md` §M이 canonical이다.
 
 ## 8. Dependency Boundaries / Invariants
 
