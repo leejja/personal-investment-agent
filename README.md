@@ -286,7 +286,7 @@ StrategyResult   (v1 실제 출력)
 | | |
 |---|---|
 | **Phase** | RE-05 — Recommendation Evaluation Pipeline |
-| **Current Task** | 다음 작업 항목 NOT SELECTED · 직전: Evidence Identity Preservation — **IMPLEMENTED**(offline 검증 PASS, live integration NOT VERIFIED) · 그 이전: Calibration Evidence Identity & Persistence Contract — DESIGN COMPLETE / REVIEW PASS / FROZEN(§7.10, implementation **PARTIAL** — 위 identity slice만) · 그 이전: OpenDART PIT Empirical Verification — EXECUTION COMPLETE / INDEPENDENT REVIEW PASS / FINDINGS FROZEN(PIT 구현 NOT STARTED, Numeric Calibration은 여전히 OPEN / readiness BLOCKED) |
+| **Current Task** | 다음 작업 항목 NOT SELECTED · **다음 세션 entry point: Post-EIP Critical-Path Review**(handoff: `docs/dev-log/2026-09-27.md`) · 직전: Evidence Identity Preservation — **IMPLEMENTED**(offline 검증 PASS, live integration NOT VERIFIED) · 그 이전: Calibration Evidence Identity & Persistence Contract — DESIGN COMPLETE / REVIEW PASS / FROZEN(§7.10, implementation **PARTIAL** — 위 identity slice만) · 그 이전: OpenDART PIT Empirical Verification — EXECUTION COMPLETE / INDEPENDENT REVIEW PASS / FINDINGS FROZEN(PIT 구현 NOT STARTED, Numeric Calibration은 여전히 OPEN / readiness BLOCKED) |
 
 ### RE-05 Critical Path — Current Position
 
@@ -302,6 +302,8 @@ JUST COMPLETED   Evidence Identity Preservation — IMPLEMENTED (§7.10의 ident
                    reproducibility(NOT CLAIMED) · historical PIT(NOT READY)
 NEXT WORK ITEM   NOT SELECTED (별도 critical-path review에서 선택)
 SECOND / THIRD   NOT SELECTED
+NEXT SESSION     Post-EIP Critical-Path Review — EIP 이후 실제 repository 상태를 다시 읽고 NEXT 하나를
+                 선택(구현 baseline 5c6d10e, handoff: docs/dev-log/2026-09-27.md)
 (이전 완료: Calibration Evidence Identity & Persistence Contract — FROZEN §7.10, implementation
  PARTIAL · OpenDART PIT Empirical Verification — findings FROZEN §7.9)
 (이전 완료: OpenDART PIT Empirical Verification — findings FROZEN §7.9 · Point-in-Time Financial
