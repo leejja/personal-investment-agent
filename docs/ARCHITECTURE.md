@@ -303,7 +303,8 @@ Market Confirmation           = NOT IMPLEMENTED (readiness BLOCKED)
 Risk                          = NOT IMPLEMENTED (readiness BLOCKED)
 Confidence                    = NOT IMPLEMENTED (readiness BLOCKED)
 Final AssessmentStatus        = NOT IMPLEMENTED
-Recommendation Policy Step 2~8 = NOT IMPLEMENTED (policy consumer 없음)
+Recommendation Policy Step 2~8 = NOT IMPLEMENTED (policy consumer 없음; "Step"은 staged policy의
+                                 stage 번호 — 아래 numbering 주석 참고)
 Feature Normalization         = Ownership & Representation Contract FROZEN (§7.5)
                                  / implementation NOT STARTED (readiness NO, §7.6)
 Calibration Readiness Audit   = COMPLETE / INDEPENDENT REVIEW PASS (§7.6)
@@ -335,10 +336,11 @@ Calibration Objective & Scope Contract가 FROZEN됐다(§7.7). 이어서 NEXT였
 Point-in-Time Financial Evidence Contract가 FROZEN됐다(§7.8, 구현 NOT STARTED). 이어서
 Post-PIT Critical Path Review가 COMPLETE됐고 NEXT가 선택됐다(아래). §7.8 말미의
 dependency candidate 목록은 §7.8 freeze 시점 기준이다. 이어서 선택된 NEXT(OpenDART PIT
-Empirical Verification)가 실행됐고 findings가 FROZEN됐다(§7.9). **현재 다음 작업 항목은
-NOT SELECTED, SECOND/THIRD도 NOT SELECTED다** — 아래 selection 블록의
-"EXECUTION NOT STARTED"는 선택 시점 기록이다. Calibration Evidence Identity &
-Persistence는 post-empirical critical-path review의 후보일 뿐이다.
+Empirical Verification)가 실행됐고 findings가 FROZEN됐다(§7.9) — 이 시점에 다음 작업 항목은
+NOT SELECTED였다. 아래 selection 블록의 "EXECUTION NOT STARTED"는 선택 시점 기록이다. 이어서
+Post-Empirical Critical-Path Review가 NEXT를 선택했다 — **현재 NEXT는 Calibration Evidence
+Identity & Persistence(SELECTION FROZEN / DESIGN NOT STARTED / IMPLEMENTATION NOT STARTED),
+SECOND/THIRD는 NOT SELECTED다**(아래 Post-Empirical selection 블록).
 
 **Post-PIT Critical Path Review → NEXT Selection (FROZEN, 선택 시점 기록 — 실행 결과는 §7.9)**
 — work-selection contract이며 새 PIT architecture contract가 아니다(§7.8 semantics 불변):
@@ -412,13 +414,104 @@ H3 direct empirical target, may clarify / narrow · H5 may provide evidence towa
 persistence requirements · H6 may clarify available revision identity · H1 / H4 / H7 no
 direct effect.
 
+**Post-Empirical Critical-Path Review → NEXT Selection (FROZEN)** — work-item 선택만 고정한다.
+contract 설계·schema·persistence 구현·PIT capability·calibration readiness·numeric parameter
+어느 것도 뜻하지 않는다:
+
+```text
+Post-Empirical Critical-Path Review   COMPLETE (+ targeted correction)
+First route-independent blocker       H5/H6 — evidence / reference-snapshot identity & persistence
+NEXT    Calibration Evidence Identity & Persistence
+        — SELECTION FROZEN / DESIGN NOT STARTED / IMPLEMENTATION NOT STARTED
+SECOND  NOT SELECTED
+THIRD   NOT SELECTED
+```
+
+선택 근거: 가장 짧은 trustworthy vertical-slice 경로에서 route와 무관한 첫 미해결 blocker는
+재현 가능한 evidence / reference-snapshot identity와 persistence semantics(H5/H6)다. current-
+runtime 재현성과 향후 historical calibration 양쪽이 이를 요구하므로, 이후 Numeric Policy-Source /
+First-Slice Scope 결정과 무관하게 유효하다. §7.9 findings로 source 동작이 확립돼, 다음을 가장하지
+않고 설계할 수 있다: latest-only API output == historical evidence / `rcept_dt == available_at` /
+reconstruction이 보편적으로 가능 / revision chain이 완전히 알려짐.
+
+Future design scope(경계만 — 이 pass에서 설계하지 않음): per-evidence identity, observation
+identity, source / filing / version identity, retrieval identity, availability identity
+representation, revision identity representation(UNKNOWN 포함), reference-snapshot identity,
+재현성에 필요한 최소 수준의 dataset identity, immutability semantics, lineage preservation,
+empirically 확립된 hybrid capability(가능한 곳은 reconstruction + 필요한 곳은 forward
+accumulation)의 표현.
+
+```text
+OUT OF SCOPE  physical database/storage implementation; database technology selection;
+              full historical data warehouse; large-scale historical ingestion; historical
+              valuation reconstruction; corporate-action / adjusted-price system; survivorship
+              infrastructure; numeric calibration; normalization parameters; thresholds;
+              weights; signal boundaries; Feature Normalization / Component Score·Signal /
+              Core Attractiveness / Recommendation Policy implementation; Portfolio Strategy
+              changes; UI implementation
+NOT DECIDED   current cross-sectional reference statistic의 Semantic admissibility(OPEN);
+              first trustworthy app version에 historical calibration이 필요한지; exact numeric
+              policy source; first-slice terminal output — 모두 이후 Numeric Policy-Source /
+              First-Slice Scope Decision의 몫(SECOND 아님)
+```
+
+Dependency context(frozen roadmap 아님 — K / B / N / S는 NEXT/SECOND/THIRD가 아니다):
+
+```text
+── architecture / identity / provenance readiness ──
+A  Calibration Evidence Identity & Persistence        (selected NEXT)
+     ↓
+K  Numeric Policy-Source / First-Slice Scope Decision  (not selected)
+     ↓
+B  Parameter Provenance / PolicyConfig                 (not selected)
+── actual numeric-policy readiness ──
+N  admissible Semantic numeric policy/reference actually established + validated
+     ↓
+Feature Normalization implementation
+     ↓
+S  admissible aggregation weights / signal thresholds
+     ↓
+Component Score / Signal
+```
+
+`A + K + B ≠ numeric readiness` — PolicyConfig container/store나 reference-snapshot mechanism은
+그 안의 숫자나 특정 reference statistic이 admissible함을 증명하지 않는다(§7.5 N9 / implicit
+default 금지, §7.7 C14 / C15).
+
+Product-state 구분(planning 용도):
+
+```text
+V0      Evidence → FeatureEvaluationResult — code/test에서 실행 가능(run_first_deterministic_
+        pipeline), app/API 미연결, current/latest-known semantics only, evidence lineage 불완전
+        (rcept_no / source column 소실). app 기능 완료 아님
+V1/V1⁻  normalized decision-support surface — NOT YET FEASIBLE(architecture contract만으로는
+        부족, admissible numeric semantics 필요)
+V2      Core Attractiveness → staged Recommendation Policy → StockOpportunityAssessment —
+        NOT YET FEASIBLE(추가 Recommendation-level evidence와 policy boundary 필요)
+```
+
+H1–H7: 선택으로 해소된 blocker 없음(newly resolved NONE). H5/H6은 미해결이며 이 NEXT의 주
+대상이다. H2 NARROWED, H3 PARTIALLY EVIDENCED(RESOLVED 아님), H1/H4/H7 미해결.
+
+**Recommendation Policy numbering 주석**: 두 번호 체계가 공존한다. (1) staged Recommendation
+Policy candidate(dev-log 2026-08-29 §24.12): 1 Decision Eligibility → 2 Core Economic Assessment
+→ 3 Opportunity State → 4 Event / Forward Context → 5 Priced-In → 6 Risk Review → 7 Correlation /
+Conflict → 8 Coverage / Confidence Guardrail → 9 StockOpportunityAssessment. Stage 1은
+IMPLEMENTED / VERIFIED / FROZEN(§7.4, orchestrator/consumer 미연결), 9-stage 구조는 FROZEN
+candidate, stage 2–9는 NOT IMPLEMENTED, stage 2–8의 stage-level contract는 확정되지 않았다.
+이 문서와 README의 "Step 2~8 NOT IMPLEMENTED"는 이 stage 번호를 가리킨다. (2) dev-log
+2026-08-29 §24.x의 design/calibration "Step 1–12"(예: Step 2 Component Signal Threshold,
+Step 3 Core Aggregation, Step 11 = staged policy 자체)는 별도 번호 체계다. 확정된 "8-step
+Recommendation Policy"가 존재하는 것은 아니다.
+
 RE-04/RE-05의 상세 결정 과정, contract 확정 근거는 `docs/dev-log/
 2026-08-29.md` §1~§51(Post-Orchestration Review Step A~J는 `docs/dev-log/
 2026-09-07.md`, Final Decision Eligibility는 `docs/dev-log/2026-09-25.md`,
 Post-Decision-Eligibility Next Slice Selection / Feature Normalization Contract /
 Calibration Readiness Audit / Calibration Objective & Scope Contract /
 Point-in-Time Financial Evidence Contract / Post-PIT Critical Path Review /
-OpenDART PIT Empirical Verification은 `docs/dev-log/2026-09-26.md`)과
+OpenDART PIT Empirical Verification / Post-Empirical Critical-Path Review는
+`docs/dev-log/2026-09-26.md`)과
 `app/models/recommendation.py`/`research_context.py` docstring이 canonical이다.
 
 ### 7.4 Recommendation Policy Step 1 — Decision Eligibility (primitive)
