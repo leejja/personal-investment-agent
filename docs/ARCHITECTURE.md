@@ -311,6 +311,8 @@ Calibration Readiness Audit   = COMPLETE / INDEPENDENT REVIEW PASS (§7.6)
 Calibration Objective & Scope = Contract FROZEN (§7.7)
 PIT Financial Evidence        = Contract FROZEN (§7.8) / implementation NOT STARTED (readiness NO)
 OpenDART PIT Empirical Verif. = EXECUTION COMPLETE / INDEPENDENT REVIEW PASS / FINDINGS FROZEN (§7.9)
+Evidence Identity & Persist.  = Contract DESIGN COMPLETE / REVIEW PASS / FROZEN (§7.10)
+                                 / implementation NOT STARTED
 Numeric Calibration           = OPEN (workflow) / readiness BLOCKED (§7.6)
                                  / calibration NOT STARTED
 ```
@@ -338,9 +340,10 @@ Post-PIT Critical Path Review가 COMPLETE됐고 NEXT가 선택됐다(아래). §
 dependency candidate 목록은 §7.8 freeze 시점 기준이다. 이어서 선택된 NEXT(OpenDART PIT
 Empirical Verification)가 실행됐고 findings가 FROZEN됐다(§7.9) — 이 시점에 다음 작업 항목은
 NOT SELECTED였다. 아래 selection 블록의 "EXECUTION NOT STARTED"는 선택 시점 기록이다. 이어서
-Post-Empirical Critical-Path Review가 NEXT를 선택했다 — **현재 NEXT는 Calibration Evidence
-Identity & Persistence(SELECTION FROZEN / DESIGN NOT STARTED / IMPLEMENTATION NOT STARTED),
-SECOND/THIRD는 NOT SELECTED다**(아래 Post-Empirical selection 블록).
+Post-Empirical Critical-Path Review가 NEXT로 Calibration Evidence Identity & Persistence를
+선택했고(아래 Post-Empirical selection 블록 — "DESIGN NOT STARTED"는 선택 시점 기록), 그 design
+contract가 FROZEN됐다(§7.10, implementation NOT STARTED). **현재 다음 작업 항목은 NOT SELECTED,
+SECOND/THIRD도 NOT SELECTED다** — 다음 작업은 별도 critical-path review에서 선택한다.
 
 **Post-PIT Critical Path Review → NEXT Selection (FROZEN, 선택 시점 기록 — 실행 결과는 §7.9)**
 — work-selection contract이며 새 PIT architecture contract가 아니다(§7.8 semantics 불변):
@@ -414,7 +417,8 @@ H3 direct empirical target, may clarify / narrow · H5 may provide evidence towa
 persistence requirements · H6 may clarify available revision identity · H1 / H4 / H7 no
 direct effect.
 
-**Post-Empirical Critical-Path Review → NEXT Selection (FROZEN)** — work-item 선택만 고정한다.
+**Post-Empirical Critical-Path Review → NEXT Selection (FROZEN, 선택 시점 기록 — 설계 결과는 §7.10)**
+— work-item 선택만 고정한다.
 contract 설계·schema·persistence 구현·PIT capability·calibration readiness·numeric parameter
 어느 것도 뜻하지 않는다:
 
@@ -510,7 +514,8 @@ RE-04/RE-05의 상세 결정 과정, contract 확정 근거는 `docs/dev-log/
 Post-Decision-Eligibility Next Slice Selection / Feature Normalization Contract /
 Calibration Readiness Audit / Calibration Objective & Scope Contract /
 Point-in-Time Financial Evidence Contract / Post-PIT Critical Path Review /
-OpenDART PIT Empirical Verification / Post-Empirical Critical-Path Review는
+OpenDART PIT Empirical Verification / Post-Empirical Critical-Path Review /
+Calibration Evidence Identity & Persistence Contract는
 `docs/dev-log/2026-09-26.md`)과
 `app/models/recommendation.py`/`research_context.py` docstring이 canonical이다.
 
@@ -1356,6 +1361,212 @@ implementation, Numeric Calibration도 선택되지 않았다.
 
 실행 / independent review(R1/R2, count correction) 이력은 `docs/dev-log/2026-09-26.md` §O가
 canonical이다.
+
+### 7.10 Calibration Evidence Identity & Persistence Contract (FROZEN)
+
+```text
+Status          DESIGN COMPLETE / REVIEW PASS / FROZEN (rev.1)
+Implementation  NOT STARTED
+```
+
+`FROZEN`은 architecture/design contract가 고정됐다는 뜻이다. persistence 구현, evidence capture
+구현, reproducibility 달성, PIT 구현, calibration / normalization / numeric policy readiness를
+뜻하지 않는다. 이 contract는 §7.5 / §7.7 / §7.8 / §7.9를 **변경하지 않고** 그 위에 선다(§7.8
+P1–P12 그대로 적용). 범용 data platform이 아니라 첫 trustworthy vertical slice에 필요한 evidence
+측 최소 contract다.
+
+**Problem**: 시스템은 physical persistence 기술이나 numeric / calibration policy를 고르지 않고도
+다음을 판정할 수 있어야 한다 — assessment가 정확히 어떤 evidence를 썼는가 / 정확히 어떤
+reference snapshot을 썼는가 / 어떤 information·evaluation boundary가 적용됐는가 / 그 evidence
+basis가 reproducible한가 / derived evidence가 source evidence와 어떻게 연결되는가. 현재 구현은
+adapter boundary에서 filing / version / period / retrieval identity를 잃고(OpenDART:
+`KeyFinancials`에서 `rcept_no`·기간 날짜·source column 소실, Kiwoom: `KiwoomStockInfo`에 시간·
+version·retrieval identity 없음) 위 질문에 답하지 못한다.
+
+**Conceptual model** (각각 별개):
+
+```text
+Evidence Item Identity          하나의 source-backed 관측/값
+Temporal / Availability Identity
+Revision Identity
+Reference Snapshot Identity
+Evidence Basis Manifest         assessment/evaluation 단위
+Calibration Dataset Identity    별도 — 이후 calibration infrastructure(이 contract 밖)
+Policy Identity                 별도 — 이후 PolicyConfig 측(이 contract 밖)
+
+Evidence Item ≠ Reference Snapshot ≠ Calibration Dataset
+Evidence Identity ≠ Policy Identity
+```
+
+**Evidence Item Identity** (provider-neutral, field 이름 OPEN) — 식별 가능해야 하는 것: entity /
+subject, measure(source-reported metric identity), observation period, report type, reporting
+basis, source column / source term, provider / source interface 또는 artifact, provider version /
+filing anchor(있을 때), source-reported vs derived origin. provider-specific 값(OpenDART
+`rcept_no` / `reprt_code` / `fs_div` / `sj_div` 등)은 adapter가 provider-neutral evidence model로
+매핑한다. provider model은 downstream canonical type이 아니다. identity는 값(content)을 포함하지
+않는다.
+
+**Temporal / Availability Identity** — `published_at` / `available_at` / `retrieved_at` /
+`evaluation_as_of`는 별개다.
+
+```text
+retrieved_at        runtime-retrieved source evidence에 REQUIRED; historical available_at 아님
+evaluation_as_of    consumer boundary; evidence availability 아님
+source precision    보존 필수 (예: rcept_dt = day-level 접수일자 — 정밀 timestamp로 만들지 않음)
+UNKNOWN timezone / precision   UNKNOWN 유지, upward precision fabrication 금지
+available_at        식별된 availability policy의 산출로만 기록, 아니면 UNKNOWN
+                    (availability derivation policy NOT SELECTED)
+```
+
+**Revision Identity** — 표현 가능해야 하는 것: served version / filing anchor(있을 때), source
+serving semantics(예: latest-only at retrieval / version-addressed / UNKNOWN), revision
+relationship, source-reported correction/revision signal(그대로 기록). revision relation은
+authoritative metadata로 확립되지 않으면 UNKNOWN이며, revision ordering을 identifier 형식에서
+추론하지 않는다. revision-selection policy는 선택하지 않는다(as-known-at-time / latest-corrected
+/ original-only 중 어느 것도 아님, §7.8 P6).
+
+**Reference Snapshot Identity** — identity 요구만 고정한다: snapshot identity, exact membership,
+exact included evidence-item binding, relevant information / as-of boundary. 같은 human label이라도
+membership 또는 content가 다르면 다른 snapshot이다. construction-policy identity는 이 contract의
+필수 요소가 아니다 — construction-policy metadata 요구 여부, reference universe, reference
+statistic, normalization method, current-reference Semantic admissibility는 OPEN(이후 K / B).
+
+**Evidence Basis Manifest** (semantic requirement) — 각 assessment/evaluation은 다음을 식별할 수
+있어야 한다: 사용한 evidence item, 사용한 reference snapshot, `evaluation_as_of`, 각 member의
+reproducibility 확립 여부, 확립된 경우 그 basis. exact Python type / database representation /
+SOA field / evaluation-state field / serialization format은 구현 결정(OPEN). policy identity는
+manifest에 포함되지 않는다 — 향후 reproducible decision은 개념적으로 `Evidence Basis + Policy
+Identity`를 요구하며, 이 contract는 evidence 측만 소유한다.
+
+**Identity vs Content / Reproducibility** — `Identity ≠ Content`: identifier만으로는
+reproducibility가 확립되지 않는다. evidence item은 다음 중 하나가 있을 때만 reproducible하다:
+
+```text
+A. immutable captured content
+B. per-item verified version-addressable recovery + 실제 사용한 evidence와의 equivalence 확립
+otherwise → reproducibility NOT ESTABLISHED
+```
+
+provider 수준 또는 sample 수준 evidence만으로 version-addressable recovery를 가정하지 않는다
+(§7.9 findings는 sample-bounded).
+
+**Latest-only sources** — latest-only interface는 그 자체로 historical evidence의 recoverability를
+확립하지 않는다. 정확한 evidence를 다른 검증된 version-addressable representation에서 독립적으로
+복구할 수 있고 equivalence가 확립되면 capture가 반드시 필요한 것은 아니다. 그렇지 않으면
+reproducibility를 위해 capture가 필요하다.
+
+**Reproducibility representation** — semantic invariant만 고정한다: 각 evidence item / snapshot에
+대해 reproducibility ESTABLISHED / NOT ESTABLISHED를 판정할 수 있어야 하고, established이면 그
+basis를 식별할 수 있어야 한다. enum이나 category 이름은 고정하지 않는다(representation OPEN).
+
+**Derived Evidence Lineage** — derived evidence는 source-reported evidence와 구별 가능해야 하고
+formula identity / version과 required input evidence identity를 참조해야 한다. input availability가
+확립된 곳에서 `derived.available_at ≥ max(required_input.available_at)`(§7.8 P12, lower bound
+only). required input의 availability 중 하나라도 UNKNOWN이면 그 input만으로는 historical PIT
+eligibility를 확립할 수 없다 — 이는 eligibility 진술이며 `derived.available_at = UNKNOWN`을
+universal rule로 고정하지 않는다. derived availability representation OPEN, availability
+derivation policy NOT SELECTED, Derived Feature Value Ownership OPEN.
+
+**Current implementation finding (Derived-as-Raw, debt — 이번에 수정하지 않음)**: Operating Margin
+/ Net Margin 등 derived 값은 upstream(`app/agents/stock_research/analysis.py`)에서 계산된 뒤
+evaluator의 `FeatureValue` `raw` slot에 기록되며, `is_derived` / `Provenance.derived_from` /
+`formula_id/version` / input evidence identity가 보존되지 않는다. 이 finding은 contract의 근거일 뿐
+새 구현 작업 선택이 아니며, derivation ownership layer는 결정하지 않는다.
+
+**Provider-neutral ownership boundary**:
+
+```text
+integration adapter        provider-specific identity 파싱, retrieval fact 기록,
+                           provider-neutral evidence representation으로 매핑
+provider-neutral identity  downstream으로 생존(adapter boundary 이후 소실 금지)
+NormalizedResearchData     fact를 evidence reference와 함께 전달(vendor model import 금지 유지)
+Evaluation layer           evidence reference를 소비; 이미 소실된 identity를 재구성하지 않는다
+Calibration dataset        이후 calibration infrastructure 관심사
+Policy identity            PolicyConfig 측
+```
+
+**Requirement / eligibility distinction** — 네 개념은 하나의 status로 합쳐지지 않는다:
+
+```text
+Current-runtime usability     identity + retrieved_at + latest-only 명시 — full historical
+                              infrastructure를 요구하지 않는다
+Reproducibility eligibility   모든 member에 대해 reproducibility ESTABLISHED
+Historical PIT eligibility    §7.8 predicate를 계속 따른다
+Calibration eligibility       더 넓은 calibration 요구(§7.6 / §7.7)로 여전히 BLOCKED
+```
+
+| | Evidence item ID | Availability ID | Revision ID | Ref. snapshot ID | Calib. dataset ID | Immutable / recoverable content | Historical universe ID | Corporate-action policy |
+|---|---|---|---|---|---|---|---|---|
+| Current-runtime assessment | REQUIRED | CONDITIONAL (`retrieved_at` required, historical `available_at` 불요) | REQUIRED (anchor 또는 ABSENT/UNKNOWN 명시) | CONDITIONAL (relative basis 사용 시) | NOT REQUIRED | CONDITIONAL (reproducibility 주장 시에만) | NOT REQUIRED | NOT REQUIRED |
+| Current cross-sectional reference | REQUIRED | CONDITIONAL | REQUIRED | REQUIRED | NOT REQUIRED | REQUIRED | NOT REQUIRED (universe는 K) | OPEN |
+| Historical Semantic calibration | REQUIRED | REQUIRED | REQUIRED | CONDITIONAL | REQUIRED | REQUIRED | CONDITIONAL | CONDITIONAL |
+| Backtest / walk-forward | REQUIRED | REQUIRED | REQUIRED | CONDITIONAL | REQUIRED | REQUIRED | REQUIRED | OPEN |
+
+**Invariants (E1–E13)**:
+
+```text
+E1  Every source-backed evidence item carries a provider-neutral Evidence Item Identity;
+    identity must not be dropped or reconstructed downstream (from the adapter boundary).
+E2  Evidence items differing in observation identity (period, report type, reporting
+    basis, source column) are distinct evidence (§7.8 P3/P11).
+E3  Identity ≠ content: identity alone does not establish reproducibility.
+E4  An evidence item is reproducible only with (a) immutable captured content, or
+    (b) per-item verified version-addressable recovery + established equivalence to the
+    evidence actually used; otherwise reproducibility is NOT ESTABLISHED.
+E5  A latest-only interface does not by itself establish recoverability of past
+    evidence; capture is required only when independently verified recovery +
+    equivalence is absent.
+E6  retrieved_at is required for runtime-retrieved evidence; it never substitutes for
+    historical available_at (§7.8 P4).
+E7  Source temporal precision and timezone state are preserved; no upward precision
+    fabrication.
+E8  available_at is recorded only as the output of an identified availability policy;
+    otherwise UNKNOWN.
+E9  Revision relation is UNKNOWN unless established by authoritative metadata; revision
+    ordering is not inferred from identifier form (§7.8 P6).
+E10 Derived evidence is distinguishable from source-reported evidence and references its
+    formula identity/version and required input evidence identities; where input
+    availability is established, derived.available_at ≥ max(required input
+    available_at) (§7.8 P12, lower bound only); UNKNOWN input availability prevents
+    historical PIT proof from those inputs alone but does not freeze the derived
+    availability representation.
+E11 A reference snapshot binds immutable identity to its exact membership, exact
+    evidence-item binding and relevant information boundary; construction policy
+    remains outside this contract.
+E12 An assessment/evaluation references its evidence basis (items + snapshots +
+    evaluation_as_of) and, for each member, reproducibility status and (if established)
+    its basis; the basis's reproducibility is the conjunction of its members.
+E13 Evidence/Snapshot Identity ≠ Policy Identity; this contract does not define or imply
+    policy content.
+```
+
+**OPEN (이 contract가 해소하지 않음)**:
+
+```text
+exact Python schema/types; manifest location/type; physical persistence mechanism;
+storage technology; retention; hashing/content addressing; equivalence-check mechanism;
+reproducibility-basis representation; recoverability verification procedure;
+derived availability representation; availability derivation policy; revision-selection
+policy; construction-policy metadata; reference universe; reference statistic;
+normalization method; current-reference admissibility; numeric policy source;
+calibration dataset metadata; historical universe/survivorship; historical valuation;
+Derived Feature Value Ownership; result-level Provenance temporal-field cleanup
+(published_at / retrieved_at / effective_at); Kiwoom time/version metadata
+```
+
+**Blocker status**: 이 freeze로 해소된 H1–H7 blocker는 **없다**. H5/H6은 해결 경계가 정의·축소됐을
+뿐 미해결이다(persistence / reproducibility는 구현되지 않았다).
+
+**Impact**: contract freeze 자체는 실행 가능한 capability를 열지 않는다(contract ≠ implementation ≠
+captured evidence ≠ numeric readiness). 구현 이후 V0는 identity를 보존하는 auditable current-runtime
+evidence(E4가 확립된 item에 한해 reproducible)에 도달할 수 있다. V1⁻ / V1 / V2는 여전히 NOT YET
+FEASIBLE이다(K / B / N / S, V2는 Recommendation-level evidence 추가 필요 — §7.3).
+
+**Work-selection state**: 이 contract freeze 이후 NEXT / SECOND / THIRD는 NOT SELECTED다. 다음
+작업(K 또는 구현 포함)은 별도 critical-path review에서 선택한다.
+
+design rev.0 → review(R1–R3) → rev.1 → review PASS → freeze 이력은 `docs/dev-log/2026-09-26.md`
+§Q가 canonical이다.
 
 ## 8. Dependency Boundaries / Invariants
 
