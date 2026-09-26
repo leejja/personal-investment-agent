@@ -308,7 +308,8 @@ Feature Normalization         = Ownership & Representation Contract FROZEN (§7.
                                  / implementation NOT STARTED (readiness NO, §7.6)
 Calibration Readiness Audit   = COMPLETE / INDEPENDENT REVIEW PASS (§7.6)
 Calibration Objective & Scope = Contract FROZEN (§7.7)
-PIT Financial Evidence        = Contract FROZEN (§7.8) / implementation NOT STARTED
+PIT Financial Evidence        = Contract FROZEN (§7.8) / implementation NOT STARTED (readiness NO)
+OpenDART PIT Empirical Verif. = EXECUTION COMPLETE / INDEPENDENT REVIEW PASS / FINDINGS FROZEN (§7.9)
 Numeric Calibration           = OPEN (workflow) / readiness BLOCKED (§7.6)
                                  / calibration NOT STARTED
 ```
@@ -333,10 +334,14 @@ Parameter Provenance Readiness Audit이 COMPLETE됐고(§7.6), post-audit NEXT�
 Calibration Objective & Scope Contract가 FROZEN됐다(§7.7). 이어서 NEXT였던
 Point-in-Time Financial Evidence Contract가 FROZEN됐다(§7.8, 구현 NOT STARTED). 이어서
 Post-PIT Critical Path Review가 COMPLETE됐고 NEXT가 선택됐다(아래). §7.8 말미의
-dependency candidate 목록은 §7.8 freeze 시점 기준이다.
+dependency candidate 목록은 §7.8 freeze 시점 기준이다. 이어서 선택된 NEXT(OpenDART PIT
+Empirical Verification)가 실행됐고 findings가 FROZEN됐다(§7.9). **현재 다음 작업 항목은
+NOT SELECTED, SECOND/THIRD도 NOT SELECTED다** — 아래 selection 블록의
+"EXECUTION NOT STARTED"는 선택 시점 기록이다. Calibration Evidence Identity &
+Persistence는 post-empirical critical-path review의 후보일 뿐이다.
 
-**Post-PIT Critical Path Review → NEXT Selection (FROZEN)** — work-selection contract이며
-새 PIT architecture contract가 아니다(§7.8 semantics 불변):
+**Post-PIT Critical Path Review → NEXT Selection (FROZEN, 선택 시점 기록 — 실행 결과는 §7.9)**
+— work-selection contract이며 새 PIT architecture contract가 아니다(§7.8 semantics 불변):
 
 ```text
 Post-PIT Critical Path Review   COMPLETE / INDEPENDENT REVIEW PASS
@@ -412,8 +417,8 @@ RE-04/RE-05의 상세 결정 과정, contract 확정 근거는 `docs/dev-log/
 2026-09-07.md`, Final Decision Eligibility는 `docs/dev-log/2026-09-25.md`,
 Post-Decision-Eligibility Next Slice Selection / Feature Normalization Contract /
 Calibration Readiness Audit / Calibration Objective & Scope Contract /
-Point-in-Time Financial Evidence Contract / Post-PIT Critical Path Review는
-`docs/dev-log/2026-09-26.md`)과
+Point-in-Time Financial Evidence Contract / Post-PIT Critical Path Review /
+OpenDART PIT Empirical Verification은 `docs/dev-log/2026-09-26.md`)과
 `app/models/recommendation.py`/`research_context.py` docstring이 canonical이다.
 
 ### 7.4 Recommendation Policy Step 1 — Decision Eligibility (primitive)
@@ -1097,6 +1102,167 @@ Corporate Action / Adjusted Price, Recommendation Objective & Outcome Semantics.
 
 design rev.0 → rev.1 → §4.1 wording correction → freeze-readiness review 이력은
 `docs/dev-log/2026-09-26.md` §M이 canonical이다.
+
+### 7.9 OpenDART PIT Empirical Verification — Frozen Findings
+
+```text
+Status  EXECUTION COMPLETE / INDEPENDENT REVIEW PASS (rev. with R1/R2 + count correction)
+        / FINDINGS FROZEN
+```
+
+§7.3 selection(M1–M3 MUST, S1–S4 SHOULD)의 실행 결과다. **§7.8은 변경하지 않는다** — 이
+findings는 frozen PIT contract를 소급 수정하지 않으며, availability policy / revision-selection
+policy / persistence architecture를 선택하지 않는다.
+
+**Scope / method**: official OpenDART 개발가이드(공시검색 `list.json`, 공시서류원본파일
+`document.xml`, 단일회사 주요계정 `fnlttSinglAcnt`, 단일회사 전체 재무제표 `fnlttSinglAcntAll`,
+재무제표 원본파일 `fnlttXbrl.xml`)와 실제 API 응답. bounded sample(2026-09-26 조회):
+
+```text
+A  삼성전자 00126380  FY2023 사업보고서  20240312000736 (조회 범위에서 정정 미관측)
+B  셀트리온 00413046  FY2021 사업보고서  original 20220308000956 → [기재정정] 20220317000991
+                                          → [기재정정] 20220512000853
+C  카카오   00258801  FY2023 사업보고서  original 20240320002039 → [기재정정] 20240321000907
+                                          → 20240328001805 → 20240418000375
+```
+
+정정 관계는 official metadata(`report_nm`의 `[기재정정]`, `rm`의 "정")로 확인했다 — identifier
+형식으로 추론하지 않았다. 분류: `VERIFIED` / `VERIFIED — sample-bounded` / `CONTRADICTED` /
+`UNKNOWN`. 근거 유형: OFFICIAL-DOC / EMPIRICAL / REPO. 아래 sample 수치는 **coverage 추정치가
+아니다**.
+
+**M1 Corrected-filing / revision behavior — COMPLETE**
+
+```text
+fnlttSinglAcnt / fnlttSinglAcntAll            latest correction observed — VERIFIED (sample-bounded)
+  (셀트리온 FY2021 → 20220512000853, 카카오 FY2023 → 20240418000375, 단일 version만 노출)
+specific historical version request            NOT SUPPORTED — official request 인자는
+  (fnlttSinglAcnt)                              corp_code/bsns_year/reprt_code뿐(OFFICIAL-DOC),
+                                                추가 rcept_no 인자는 무시됨(EMPIRICAL)
+corrected filing의 별도 rcept_no               VERIFIED (sample-bounded)
+pre-correction historical endpoint response    UNKNOWN
+explicit original↔correction link field       NOT OBSERVED (list.json 필드: corp_cls, corp_code,
+                                                corp_name, flr_nm, rcept_dt, rcept_no, report_nm, rm)
+official correction signals                    [기재정정] prefix, rm "정", last_reprt_at(OFFICIAL-DOC)
+```
+
+**M2 Historical/original reconstruction — COMPLETE**
+
+```text
+historical reconstruction                      demonstrated for some filing versions
+general structured reconstruction coverage     NOT established
+original filing 식별(정정 이후)                  VERIFIED (sample-bounded) — list.json last_reprt_at=N
+document.xml (rcept_no-addressed)              version-specific artifact 8 / 8 requested — VERIFIED (sample-bounded)
+fnlttXbrl.xml (rcept_no-addressed)             version-specific structured artifact 7 / 8 requested
+                                                — VERIFIED (sample-bounded)
+observed gap                                   카카오 original 20240320002039 → status 014(파일 없음)
+anchor                                         rcept_no — VERIFIED (sample-bounded)
+```
+
+셀트리온 FY2021 연결 영업이익: original XBRL `752,485,791,729` vs correction `756,857,107,226`
+(당기순이익·자산총계·자본총계도 상이, 오늘의 `fnlttSinglAcnt`는 correction 값). original
+`document.xml`에는 original 값이 존재한다 — 이는 official artifact에 값이 **존재함**만 보이며,
+production-quality structured extraction method를 확립하지 않는다.
+
+**M3 Publication metadata — COMPLETE**
+
+In the investigated official API/document interfaces, the verified filing-time metadata is
+`rcept_dt`, an official receipt date with day-level precision. No time-of-day field was observed
+in the investigated interfaces. Whether another authoritative OpenDART surface exposes time-of-day
+or stronger public-availability metadata remains UNKNOWN.
+
+```text
+rcept_dt                          official "공시 접수일자(YYYYMMDD)" — VERIFIED
+precision                         day-level in investigated interfaces — VERIFIED
+historical filing metadata        VERIFIED (sample-bounded, 2016 filing 조회 확인)
+rcept_no join (list ↔ financial)  VERIFIED (sample-bounded)
+time-of-day                       UNKNOWN
+timezone                          UNKNOWN
+earliest public availability      NOT established
+rcept_dt == available_at          NOT established
+```
+
+**SHOULD findings**
+
+```text
+S1 comparative-column   셀트리온: FY2022 사업보고서의 FY2021 비교값 중 매출액·영업이익이 original과
+                        correction 어느 쪽과도 불일치 — VERIFIED (sample-bounded difference).
+                        삼성전자/카카오 6개 계정 일치 — sample-bounded equality일 뿐.
+                        P3를 뒷받침하는 positive evidence. P3 UNCHANGED
+S2 rcept_no             14자리, 관찰 sample 내 unique. prefix == rcept_dt는 126 / 127 일치,
+                        반례 1건(20220310001226 vs rcept_dt 20220311) → CONTRADICTED as a general
+                        rule. rcept_no 형식에서 receipt/publication 시점을 도출하지 않는다
+S3 API mutation         정정 이후 historical API mutation — UNKNOWN
+S4 period / codes       reprt_code(11013/11012/11014/11011) / fs_div(OFS/CFS) / sj_div(BS/IS,
+                        전체재무제표는 CIS/CF/SCE 추가) — documented semantics VERIFIED.
+                        period-field 형식("YYYY.MM.DD 현재" / "YYYY.MM.DD ~ YYYY.MM.DD") —
+                        sample-bounded 관찰. documentation 범위를 넘는 quarterly/half-year period
+                        semantics — UNKNOWN. TTM/reconstruction design — OUT OF SCOPE
+```
+
+**Critical result**:
+
+Evidence supports a hybrid-capability model, with important limits. Historical reconstruction is
+empirically demonstrated for some filing versions, but general reconstruction coverage is NOT
+established. Forward accumulation remains independently necessary wherever latest-only interfaces
+cannot recover prior response states and where version-addressable structured evidence is
+unavailable. This is a factual constraint derived from observed source behavior. It is NOT a
+selection of persistence architecture.
+
+```text
+hybrid-capability evidence  ≠  hybrid persistence architecture selected
+```
+
+이 findings는 다음을 주장하지 않는다: 모든 historical filing이 재구성 가능하다 / XBRL이 historical
+filing에 일반적으로 존재한다 / document parsing이 검증된 structured reconstruction method다.
+
+**Architecture implications (implications only — 선택 없음)**:
+
+```text
+Evidence identity  rcept_no는 per-version filing anchor를 empirically 뒷받침한다.
+                   fnlttSinglAcnt 단독으로는 historical version을 표현할 수 없다(latest-only 관찰).
+Reconstruction     version-addressed reconstruction은 일부 filing에서 가능, general coverage
+                   unestablished, reconstruction-only reproducibility NOT established.
+Availability       rcept_dt는 day-level receipt-date fact를 제공한다. earliest public
+                   availability와의 관계 UNKNOWN. available_at policy NOT SELECTED.
+Revision           per-version rcept_no는 representable version identity를 뒷받침한다.
+                   explicit original↔correction chain field NOT OBSERVED. revision-selection
+                   policy NOT SELECTED. UNKNOWN revision handling은 여전히 필요하다(§7.8).
+PIT implementation 현재 fnlttSinglAcnt integration은 그 자체로 historical PIT에 부적합.
+                   PIT implementation NOT STARTED / NOT READY.
+```
+
+**Remaining UNKNOWN**: time-of-day / timezone / earliest public availability, pre-correction
+endpoint response(S3), original filing에 대한 XBRL coverage, machine-readable original↔correction
+link, quarterly/half-year period semantics, 3개 sample 밖으로의 일반화.
+
+**Blocker status** — **H1–H7 newly RESOLVED: NONE**
+
+```text
+H1 OBJECTIVE       UNCHANGED
+H2 TEMPORAL        NARROWED
+H3 EXTERNAL        PARTIALLY EVIDENCED (RESOLVED 아님)
+H4 VALUATION       UNCHANGED
+H5 INFRA           NARROWED
+H6 PROVENANCE      NARROWED
+H7 SURVIVORSHIP    UNCHANGED
+```
+
+**Work-selection state**:
+
+```text
+JUST COMPLETED  OpenDART PIT Empirical Verification
+NEXT            NOT SELECTED
+SECOND          NOT SELECTED
+THIRD           NOT SELECTED
+```
+
+Calibration Evidence Identity & Persistence는 post-empirical critical-path review의 **candidate**일
+뿐이다. Parameter Provenance / PolicyConfig, PIT implementation, Feature Normalization
+implementation, Numeric Calibration도 선택되지 않았다.
+
+실행 / independent review(R1/R2, count correction) 이력은 `docs/dev-log/2026-09-26.md` §O가
+canonical이다.
 
 ## 8. Dependency Boundaries / Invariants
 
