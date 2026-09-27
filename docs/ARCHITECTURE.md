@@ -347,9 +347,11 @@ Post-Empirical Critical-Path Review가 NEXT로 Calibration Evidence Identity & P
 contract가 FROZEN됐다(§7.10, implementation NOT STARTED) — 이 시점에 다음 작업 항목은 NOT
 SELECTED였다. 이어서 Post-§7.10 Critical-Path Review가 NEXT로 Evidence Identity Preservation을
 선택했고(아래 Post-§7.10 selection 블록 — "IMPLEMENTATION NOT STARTED"는 선택 시점 기록), 그
-slice가 구현됐다(아래 구현 결과, offline 검증 PASS / live integration NOT VERIFIED). **현재 다음
-작업 항목은 NOT SELECTED, SECOND/THIRD도 NOT SELECTED다** — 다음 작업은 별도 critical-path
-review에서 선택한다.
+slice가 구현됐다(아래 구현 결과, offline 검증 PASS / live integration NOT VERIFIED) — 이 시점에
+다음 작업 항목은 NOT SELECTED였다. 이어서 read-only Post-EIP Critical-Path Review가 NEXT로 Trustworthy
+V0 Product Boundary & Current-Runtime Evidence / Output Contract를 선택했다(아래 Post-EIP selection
+블록). **현재 NEXT는 SELECTION FROZEN / DESIGN NOT STARTED / IMPLEMENTATION NOT STARTED이고,
+SECOND/THIRD는 NOT SELECTED다.**
 
 **Post-PIT Critical Path Review → NEXT Selection (FROZEN, 선택 시점 기록 — 실행 결과는 §7.9)**
 — work-selection contract이며 새 PIT architecture contract가 아니다(§7.8 semantics 불변):
@@ -622,6 +624,94 @@ Blocker            H1–H7 newly resolved NONE(H5 / H6 NOT RESOLVED)
 
 상세 이력(review 지적 포함)은 `docs/dev-log/2026-09-26.md` §S.
 
+**Post-EIP Critical-Path Review → NEXT Selection (FROZEN, 선택 시점 기록)** — work-item 선택만
+고정한다. contract 설계·구현·wiring 어느 것도 뜻하지 않으며 새 architecture contract가 아니다
+(§7.5 / §7.7 / §7.8 / §7.9 / §7.10 불변):
+
+```text
+Post-EIP Critical-Path Review   COMPLETE (read-only, repository unchanged) / independent review PASS
+NEXT    Trustworthy V0 Product Boundary & Current-Runtime Evidence / Output Contract
+        — SELECTED / SELECTION FROZEN / DESIGN NOT STARTED / IMPLEMENTATION NOT STARTED
+SECOND  NOT SELECTED
+THIRD   NOT SELECTED
+```
+
+선택 근거(baseline `c33f785`, 실제 code inspection): EIP는 선택된 6-evaluator slice에 대해 구현·
+offline 검증됐지만 production app 경로에서 도달할 수 없다 — `run_first_deterministic_pipeline` /
+`evaluate_decision_eligibility`는 `app/`에 production caller가 없고, evidence-aware retrieval
+(`get_stock_info_with_evidence` / `get_key_financials_history_with_evidence`)은 production
+orchestrator가 사용하지 않으며, `StockResearchOrchestrator.run()`은 deterministic analysis에 evidence를
+전달하지 않는다. user-facing 투자 판단은 여전히 기존 v1 LLM 출력이다. 즉 trustworthy evidence
+machinery는 있지만, 그것이 user-visible product가 되는 방식을 정한 frozen product / runtime
+contract가 없다 — 이것이 Minimum Trustworthy Product까지의 첫 blocker다.
+
+```text
+Evidence Identity Preservation                     DONE for selected first slice
+  ↓
+Trustworthy V0 Product Boundary
+& Current-Runtime Evidence / Output Contract       ← SELECTED NEXT
+  ↓
+future V0 wiring / integration                     NOT SELECTED
+  ↓
+Minimum Trustworthy Product
+```
+
+numeric-semantic path(K → Parameter Provenance / PolicyConfig → admissible Semantic numeric policy/
+reference → Feature Normalization → component aggregation / signal → Core Attractiveness → staged
+Recommendation Policy → StockOpportunityAssessment)는 재정의하지 않으며 불필요하다고 판단하지 않는다.
+선택 판단은 그 path가 첫 usable Minimum Trustworthy Product까지의 가장 짧은 blocker가 아니라는 것뿐이다.
+
+Objective: production wiring 구현 전에, trustworthy / auditable / 현재 지원되는 RE-05 정보만 사용자에게
+노출하는 데 필요한 product 경계와 current-runtime evidence 경계를 정의한다. 이 작업은 UI / output-schema
+작업으로 축소되지 않는다 — Product Boundary · Current-Runtime Evidence Selection Boundary · Output
+Contract를 포함한다(올바른 output surface라도 runtime이 잘못된 evidence를 고르면 trustworthy하지 않다).
+
+이후 design이 답해야 할 질문(**이 selection에서 답하지 않음**): V0가 노출할 수 있는 것 / 노출하면 안 되는
+것 / UNKNOWN·NOT AVAILABLE인 것; 어떤 current-runtime evidence가 eligible한가; V0에서 evaluation_as_of의
+의미와 retrieved_at과의 관계; applicable / latest-known report와 current year / reporting period 선택;
+source-reported vs derived evidence 표현; output에 동반할 최소 evidence / provenance 정보; 재현성 부재의
+정직한 표현; 기존 v1 LLM judgment와 V0의 관계; V0 production wiring 경계; V0 usable 판정에 필요한
+acceptance evidence.
+
+```text
+CANDIDATE DESIGN TOPICS (결정 아님 — 모두 DESIGN OPEN)
+  A  V0 user-visible surface — 후보 입력: 구현된 6개 evaluator 값, source-reported vs derived origin,
+     evidence provenance, Coverage, Future Opportunity Evidence, 의미상 적절한 경우 Decision
+     Eligibility, UNKNOWN / NOT AVAILABLE. 실제 노출 여부 OPEN
+  B  numeric judgment boundary — 후보 원칙: required numeric policy path 이전에 numeric
+     interpretation / threshold / score / attractiveness classification / recommendation을 만들지
+     않는다(기존 frozen architecture의 제약). exact V0 terminal output OPEN
+  C  기존 v1 LLM output(investment_thesis / scenarios / BUY·ADD·HOLD·REDUCE·SELL·AVOID)과 V0의 관계 —
+     hidden / retained / legacy·experimental label / separated / gated 중 어느 것도 선택하지 않음.
+     public StockAnalysis / presentation contract 영향은 design 중 명시적으로 review
+  D  current-runtime evidence semantics — evaluation_as_of, retrieved_at, report / reporting-period
+     선택, current-runtime eligibility, history / YoY / trend 제외 또는 표현. historical PIT 구현 아님
+  E  evidence / reproducibility representation — §7.10과 양립하는 최소한의 정직한 표현. Evidence Basis
+     Manifest / capture / persistence / Reference Snapshot / historical PIT / full reproducibility
+     infrastructure 구현을 요구하지 않음(§7.10 전체를 V0로 자동으로 끌어오지 않음)
+  F  wiring boundary — 기존 StockResearchOrchestrator 수정 vs 별도 V0 / RE-05 execution path, 선택 없음
+  G  acceptance boundary — usable 판정 evidence 정의. live evidence-path verification 고려 예정.
+     pytest marker / environment variable / CI job / live-test gating mechanism은 구현 선택이며
+     여기서 선택·구현하지 않음. live-test gating은 별도 maintenance candidate, NOT SELECTED
+NON-GOALS  V0 implementation / wiring; API·UI implementation; live-test gating implementation; live API
+           verification; Evidence Basis Manifest / capture / persistence·storage / Reference Snapshot /
+           historical PIT / revision-selection policy implementation; numeric calibration; K
+           design·implementation; PolicyConfig; Feature Normalization implementation; component
+           score / signal; Core Attractiveness; Recommendation Policy stages 2–9;
+           StockOpportunityAssessment implementation; new evaluators
+```
+
+- **Frozen architecture 관계**: §7.8 FROZEN(current-runtime boundary 준수) · §7.10 FROZEN(implementation
+  PARTIAL) · §7.5 FROZEN(implementation NOT STARTED) · §7.7 FROZEN · RE-04 StockOpportunityAssessment
+  contract 불변. selection 시점 architecture-contract 변경 필요: NONE. 이후 design이 기존 frozen
+  contract와의 실제 모순을 발견하면 STOP하고 명시적으로 보고한다(frozen contract를 조용히 고쳐 쓰지 않음).
+- **불변 상태**: EIP IMPLEMENTED / VERIFIED OFFLINE · §7.10 implementation PARTIAL · reproducibility NOT
+  CLAIMED · historical PIT NOT READY / NOT IMPLEMENTED · Derived Feature Value Ownership OPEN · READY
+  evaluators 6/14 · live integration NOT VERIFIED. 이 선택으로 해소된 항목은 없다(H1–H7 newly resolved
+  NONE).
+
+상세 review 근거는 `docs/dev-log/2026-09-27.md` §J–§K.
+
 RE-04/RE-05의 상세 결정 과정, contract 확정 근거는 `docs/dev-log/
 2026-08-29.md` §1~§51(Post-Orchestration Review Step A~J는 `docs/dev-log/
 2026-09-07.md`, Final Decision Eligibility는 `docs/dev-log/2026-09-25.md`,
@@ -631,7 +721,8 @@ Point-in-Time Financial Evidence Contract / Post-PIT Critical Path Review /
 OpenDART PIT Empirical Verification / Post-Empirical Critical-Path Review /
 Calibration Evidence Identity & Persistence Contract / Post-§7.10 Critical-Path Review /
 Evidence Identity Preservation 구현은
-`docs/dev-log/2026-09-26.md`)과
+`docs/dev-log/2026-09-26.md`, Post-EIP Critical-Path Review / NEXT Selection은
+`docs/dev-log/2026-09-27.md`)과
 `app/models/recommendation.py`/`research_context.py` docstring이 canonical이다.
 
 ### 7.4 Recommendation Policy Step 1 — Decision Eligibility (primitive)
