@@ -1,7 +1,12 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
+from app.models.annual_evidence import (
+    AnnualEvidenceOutcome,
+    AnnualSelectionFailure,
+    AnnualSelectionStatus,
+)
 from app.models.evidence import (
     MEASURE_NET_INCOME,
     MEASURE_OPERATING_PROFIT,
@@ -15,7 +20,16 @@ from app.models.evidence import (
     EvidenceSource,
     ObservationIdentity,
 )
-from app.services.opendart import OpenDartFinancialAccount, OpenDartService
+from app.services.opendart import (
+    ANNUAL_REPORT_CODE,
+    OpenDartAnnualRetrieval,
+    OpenDartFinancialAccount,
+    OpenDartService,
+)
+
+# OpenDART 공식 문서(단일회사 주요계정): bsns_year "사업연도(4자리) ※ 2015년 이후 부터 정보제공".
+# provider 사실이며, 후보 탐색의 하한이다.
+OPENDART_FINANCIAL_DATA_LOWER_BOUND_YEAR = 2015
 
 _OPENDART_SOURCE = EvidenceSource(provider="OpenDART", interface="fnlttSinglAcnt")
 
@@ -73,6 +87,143 @@ class KeyFinancialsWithEvidence(BaseModel):
 
     key_financials: KeyFinancials
     evidence: dict[str, EvidenceReference]
+
+
+class AnnualCandidate(BaseModel):
+    """연간 보고서 후보(요청 identity). 후보 순서는 탐색 순서일 뿐 latest / corrected /
+    original / final / best filing을 뜻하지 않는다. 순서는 `AnnualEvidenceSelection.candidates`의
+    tuple 위치가 표현한다(별도 ordinal 없음)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    business_year: str
+    report_code: str = Field(pattern=f"^{ANNUAL_REPORT_CODE}$")
+
+
+class AnnualSelectionTraceEntry(BaseModel):
+    """시도한 후보 하나와 그 분류된 조회 결과(provider status / message, failure reason /
+    detail, EVIDENCE_RETURNED의 accounts / retrieved_at)를 그대로 담는다."""
+
+    model_config = ConfigDict(frozen=True)
+
+    candidate: AnnualCandidate
+    retrieval: OpenDartAnnualRetrieval
+
+    @model_validator(mode="after")
+    def _retrieval_matches_candidate(self) -> "AnnualSelectionTraceEntry":
+        if (
+            self.retrieval.business_year != self.candidate.business_year
+            or self.retrieval.report_code != self.candidate.report_code
+        ):
+            raise ValueError("trace retrieval does not match its candidate")
+        return self
+
+
+class AnnualEvidenceSelection(BaseModel):
+    """positive-only fallback selection의 결과(Implementation Contract rev.1).
+
+    탐색 범위(`candidate_basis_instant` · `lookback_years` · `candidates`)와 시도한 후보의
+    `trace`를 기록한다. `NO_ANNUAL_REPORT_EVIDENCE_AMONG_EXAMINED_CANDIDATES`는 기록된 후보 집합
+    안의 결과일 뿐 전역 부재가 아니다. `evaluation_as_of`를 만들거나 정의하지 않는다(§7.11.3)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    corp_code: str
+    candidate_basis_instant: datetime
+    lookback_years: StrictInt = Field(ge=1)
+    candidates: tuple[AnnualCandidate, ...]
+    trace: tuple[AnnualSelectionTraceEntry, ...]
+    status: AnnualSelectionStatus
+    failure: AnnualSelectionFailure | None = None
+
+    @model_validator(mode="after")
+    def _selection_invariant(self) -> "AnnualEvidenceSelection":
+        if self.candidates != _annual_candidates(
+            self.candidate_basis_instant, lookback_years=self.lookback_years
+        ):
+            raise ValueError("candidates do not match the recorded search universe")
+
+        if len(self.trace) > len(self.candidates) or any(
+            entry.candidate != candidate
+            for entry, candidate in zip(self.trace, self.candidates, strict=False)
+        ):
+            raise ValueError("trace must follow the candidate order, each candidate at most once")
+
+        if any(entry.retrieval.corp_code != self.corp_code for entry in self.trace):
+            raise ValueError("trace retrieval corp_code does not match the selection")
+
+        outcomes = [entry.retrieval.outcome for entry in self.trace]
+        # fallback은 positive UNAVAILABLE 다음에만 — 마지막을 제외한 entry는 모두 UNAVAILABLE이다.
+        if any(
+            outcome != AnnualEvidenceOutcome.REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE
+            for outcome in outcomes[:-1]
+        ):
+            raise ValueError("only a positive unavailability may be followed by another candidate")
+
+        last = outcomes[-1] if outcomes else None
+
+        if self.status == AnnualSelectionStatus.SELECTED:
+            valid = last == AnnualEvidenceOutcome.EVIDENCE_RETURNED and self.failure is None
+        elif self.status == AnnualSelectionStatus.FAILED:
+            if self.failure == AnnualSelectionFailure.NO_CANDIDATES:
+                valid = not self.candidates and not self.trace
+            else:
+                valid = (
+                    self.failure == AnnualSelectionFailure.CANDIDATE_FAILURE
+                    and last == AnnualEvidenceOutcome.FAILURE
+                )
+        else:
+            valid = (
+                bool(self.candidates)
+                and len(self.trace) == len(self.candidates)
+                and last == AnnualEvidenceOutcome.REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE
+                and self.failure is None
+            )
+
+        if not valid:
+            raise ValueError(f"trace is inconsistent with selection status {self.status.value}")
+        return self
+
+    @property
+    def selected(self) -> OpenDartAnnualRetrieval | None:
+        """SELECTED일 때 선택된 retrieval(= 마지막 trace entry). 그 외에는 None."""
+        if self.status != AnnualSelectionStatus.SELECTED:
+            return None
+        return self.trace[-1].retrieval
+
+
+def _annual_candidates(
+    candidate_basis_instant: datetime,
+    *,
+    lookback_years: int,
+) -> tuple[AnnualCandidate, ...]:
+    """Bounded descending bsns_year probe(Implementation Contract rev.1).
+
+    basis 연도(`candidate_basis_instant`의 UTC 연도)부터 내림차순으로 최대 `lookback_years`개,
+    provider 하한(2015) 미만은 제외한다. 현재 시각을 읽지 않고 암묵적 "전년도" 기본값이 없다.
+    `lookback_years`는 호출자가 정한다 — 기본값이 없고 값은 향후 V0 policy 소유다(OpenDART
+    의미 아님, 충분성 / 탐색 완전성 보증 아님).
+    """
+    if not isinstance(candidate_basis_instant, datetime):
+        raise TypeError("candidate_basis_instant must be a datetime")
+    if candidate_basis_instant.utcoffset() is None:
+        raise ValueError("candidate_basis_instant must be timezone-aware")
+    # bool은 int의 subclass이므로 type으로 정확히 거부한다.
+    if type(lookback_years) is not int:
+        raise TypeError("lookback_years must be an int")
+    if lookback_years < 1:
+        raise ValueError("lookback_years must be >= 1")
+
+    basis_year = candidate_basis_instant.astimezone(UTC).year
+    lowest_year = max(
+        basis_year - lookback_years + 1,
+        OPENDART_FINANCIAL_DATA_LOWER_BOUND_YEAR,
+    )
+
+    return tuple(
+        AnnualCandidate(business_year=str(year), report_code=ANNUAL_REPORT_CODE)
+        for year in range(basis_year, lowest_year - 1, -1)
+    )
 
 
 class OpenDartTools:
@@ -214,6 +365,66 @@ class OpenDartTools:
                 financials, business_year=business_year, report_code=report_code
             )
         ]
+
+    async def select_annual_evidence(
+        self,
+        corp_code: str,
+        *,
+        candidate_basis_instant: datetime,
+        lookback_years: int,
+    ) -> AnnualEvidenceSelection:
+        """사업보고서 evidence를 positive-only fallback으로 선택한다(Implementation Contract rev.1).
+
+        후보를 순서대로 조회해 EVIDENCE_RETURNED면 선택하고, FAILURE면 fallback 없이 중단하며,
+        REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE일 때만 다음 후보로 간다. 보고서가 반환됐지만
+        feature 계정이 없는 것은 EVIDENCE_RETURNED다(feature 단위 문제, fallback 사유 아님).
+        `corp_code`는 이미 해석된 값을 받는다(종목 해석은 이 selection 범위 밖).
+        """
+        candidates = _annual_candidates(candidate_basis_instant, lookback_years=lookback_years)
+
+        def selection(
+            trace: list[AnnualSelectionTraceEntry],
+            status: AnnualSelectionStatus,
+            failure: AnnualSelectionFailure | None = None,
+        ) -> AnnualEvidenceSelection:
+            return AnnualEvidenceSelection(
+                corp_code=corp_code,
+                candidate_basis_instant=candidate_basis_instant.astimezone(UTC),
+                lookback_years=lookback_years,
+                candidates=candidates,
+                trace=tuple(trace),
+                status=status,
+                failure=failure,
+            )
+
+        if not candidates:
+            return selection([], AnnualSelectionStatus.FAILED, AnnualSelectionFailure.NO_CANDIDATES)
+
+        trace: list[AnnualSelectionTraceEntry] = []
+
+        for candidate in candidates:
+            retrieval = await self.service.retrieve_annual_accounts(
+                corp_code=corp_code,
+                business_year=candidate.business_year,
+            )
+            trace.append(AnnualSelectionTraceEntry(candidate=candidate, retrieval=retrieval))
+
+            if retrieval.outcome == AnnualEvidenceOutcome.EVIDENCE_RETURNED:
+                return selection(trace, AnnualSelectionStatus.SELECTED)
+
+            if retrieval.outcome == AnnualEvidenceOutcome.FAILURE:
+                return selection(
+                    trace,
+                    AnnualSelectionStatus.FAILED,
+                    AnnualSelectionFailure.CANDIDATE_FAILURE,
+                )
+
+            # REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE만 여기까지 온다 → 다음 후보.
+
+        return selection(
+            trace,
+            AnnualSelectionStatus.NO_ANNUAL_REPORT_EVIDENCE_AMONG_EXAMINED_CANDIDATES,
+        )
 
     def _build_history(
         self,

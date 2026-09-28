@@ -5,7 +5,18 @@ from typing import Any
 from zipfile import ZipFile
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+
+from app.models.annual_evidence import AnnualEvidenceFailureReason, AnnualEvidenceOutcome
+
+ANNUAL_REPORT_CODE = "11011"
+
+# Positive-unavailability admission set(docs/ARCHITECTURE.md §7.3 Implementation Contract rev.1).
+# 여기 속한 non-success status만 REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE이 되어 fallback을 허용한다.
+# 시작 상태는 비어 있다 — 공식 문서는 013의 메시지("조회된 데이타가 없습니다.")만 정하고 원인을
+# 정하지 않으므로 013도 FAILURE(PROVIDER_STATUS)다. 확장은 official evidence + 승인된 live
+# contrast + 별도 review가 필요하다(Q2b OPEN).
+_POSITIVE_UNAVAILABLE_STATUSES: frozenset[str] = frozenset()
 
 
 class OpenDartCorporation(BaseModel):
@@ -48,6 +59,70 @@ class OpenDartFinancialAccountsRetrieval(BaseModel):
 
     accounts: list[OpenDartFinancialAccount]
     retrieved_at: datetime
+
+
+class OpenDartAnnualRetrieval(BaseModel):
+    """연간 보고서 후보 하나(`corp_code`, `business_year`, `reprt_code=11011`)의 분류된 조회
+    결과(Implementation Contract rev.1). provider 원문 status / message는 있으면 그대로 보존한다.
+
+    `retrieved_at`은 EVIDENCE_RETURNED일 때만 있고, provider 응답을 수신한 runtime 시각이다 —
+    published_at / available_at / 접수 시각 / 최신성이 아니다. 복수 `rcept_no`는 row별로 보존하며
+    응답을 하나의 filing identity로 요약하지 않는다(filing-anchor 일관성은 S5 소유)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    corp_code: str
+    business_year: str
+    report_code: str
+    outcome: AnnualEvidenceOutcome
+    accounts: tuple[OpenDartFinancialAccount, ...] | None = None
+    retrieved_at: datetime | None = None
+    provider_status: str | None = None
+    provider_message: str | None = None
+    failure_reason: AnnualEvidenceFailureReason | None = None
+    failure_detail: str | None = None
+
+    @model_validator(mode="after")
+    def _outcome_invariant(self) -> "OpenDartAnnualRetrieval":
+        if self.report_code != ANNUAL_REPORT_CODE:
+            raise ValueError(f"annual retrieval requires reprt_code {ANNUAL_REPORT_CODE}")
+
+        if self.outcome == AnnualEvidenceOutcome.EVIDENCE_RETURNED:
+            if not self.accounts:
+                raise ValueError("EVIDENCE_RETURNED requires at least one account row")
+            if self.retrieved_at is None or self.retrieved_at.utcoffset() is None:
+                raise ValueError("EVIDENCE_RETURNED requires a timezone-aware retrieved_at")
+            if self.provider_status != "000":
+                raise ValueError("EVIDENCE_RETURNED requires provider status 000")
+            if self.failure_reason is not None or self.failure_detail is not None:
+                raise ValueError("EVIDENCE_RETURNED must not carry a failure")
+            return self
+
+        if self.accounts is not None or self.retrieved_at is not None:
+            raise ValueError(f"{self.outcome.value} must not carry accounts or retrieved_at")
+
+        if self.outcome == AnnualEvidenceOutcome.REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE:
+            # admission set 밖에서는 이 분류를 만들 수 없다 — positive unavailability 우회 방지.
+            if self.provider_status not in _POSITIVE_UNAVAILABLE_STATUSES:
+                raise ValueError("unavailability requires an admitted provider status")
+            if self.failure_reason is not None or self.failure_detail is not None:
+                raise ValueError("REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE must not carry a failure")
+            return self
+
+        if self.failure_reason is None:
+            raise ValueError("FAILURE requires a failure reason")
+        if self.failure_reason == AnnualEvidenceFailureReason.PROVIDER_STATUS:
+            if self.provider_status is None or self.provider_status == "000":
+                raise ValueError("PROVIDER_STATUS failure requires a non-success provider status")
+            if self.provider_status in _POSITIVE_UNAVAILABLE_STATUSES:
+                raise ValueError("an admitted provider status is not a PROVIDER_STATUS failure")
+        if (
+            self.failure_reason
+            in (AnnualEvidenceFailureReason.TRANSPORT, AnnualEvidenceFailureReason.HTTP_STATUS)
+            and self.provider_status is not None
+        ):
+            raise ValueError(f"{self.failure_reason.value} failure has no provider status")
+        return self
 
 
 class OpenDartService:
@@ -132,6 +207,189 @@ class OpenDartService:
         return OpenDartFinancialAccountsRetrieval(
             accounts=[self._convert_financial_account(row) for row in rows],
             retrieved_at=retrieved_at,
+        )
+
+    async def retrieve_annual_accounts(
+        self,
+        corp_code: str,
+        business_year: str,
+    ) -> OpenDartAnnualRetrieval:
+        """사업보고서(11011) 후보 하나를 조회해 분류한다(Implementation Contract rev.1).
+
+        legacy `fetch_financial_accounts()`와 달리 provider / transport 결과로 raise하지 않고
+        EVIDENCE_RETURNED / REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE / FAILURE 중 하나를 반환한다.
+        분류 대상이 아닌 예외(programming error)는 숨기지 않고 그대로 전파한다(fail closed).
+        """
+        url = f"{self.BASE_URL}/fnlttSinglAcnt.json"
+
+        params = {
+            "crtfc_key": self.api_key,
+            "corp_code": corp_code,
+            "bsns_year": business_year,
+            "reprt_code": ANNUAL_REPORT_CODE,
+        }
+
+        def classified(
+            outcome: AnnualEvidenceOutcome, **fields: Any
+        ) -> OpenDartAnnualRetrieval:
+            return OpenDartAnnualRetrieval(
+                corp_code=corp_code,
+                business_year=business_year,
+                report_code=ANNUAL_REPORT_CODE,
+                outcome=outcome,
+                **fields,
+            )
+
+        def failure(
+            reason: AnnualEvidenceFailureReason, detail: str, **fields: Any
+        ) -> OpenDartAnnualRetrieval:
+            return classified(
+                AnnualEvidenceOutcome.FAILURE,
+                failure_reason=reason,
+                failure_detail=detail,
+                **fields,
+            )
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(url, params=params)
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            return failure(
+                AnnualEvidenceFailureReason.HTTP_STATUS,
+                f"HTTP {exc.response.status_code}",
+            )
+        except httpx.RequestError as exc:
+            # 유효한 HTTP / provider 응답이 없다(timeout / connect / protocol 등).
+            return failure(AnnualEvidenceFailureReason.TRANSPORT, type(exc).__name__)
+
+        try:
+            data = response.json()
+        except ValueError:
+            return failure(
+                AnnualEvidenceFailureReason.MALFORMED_RESPONSE,
+                "response body is not valid JSON",
+            )
+
+        if not isinstance(data, dict):
+            return failure(
+                AnnualEvidenceFailureReason.MALFORMED_RESPONSE,
+                "top-level JSON value is not an object",
+            )
+
+        status = data.get("status")
+
+        if status is None:
+            return failure(AnnualEvidenceFailureReason.MALFORMED_RESPONSE, "status missing")
+
+        if not isinstance(status, str):
+            return failure(
+                AnnualEvidenceFailureReason.MALFORMED_RESPONSE,
+                "status is not a string",
+            )
+
+        raw_message = data.get("message")
+        message = raw_message if isinstance(raw_message, str) else None
+
+        if status != "000":
+            if status in _POSITIVE_UNAVAILABLE_STATUSES:
+                return classified(
+                    AnnualEvidenceOutcome.REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE,
+                    provider_status=status,
+                    provider_message=message,
+                )
+            return failure(
+                AnnualEvidenceFailureReason.PROVIDER_STATUS,
+                f"provider status {status} is not an admitted unavailability status",
+                provider_status=status,
+                provider_message=message,
+            )
+
+        # 아래 실패는 모두 status 000 응답 안의 문제다 — provider status를 그대로 남긴다.
+        provider = {"provider_status": status, "provider_message": message}
+
+        if "list" not in data:
+            return failure(
+                AnnualEvidenceFailureReason.MALFORMED_RESPONSE,
+                "status 000 without list",
+                **provider,
+            )
+
+        rows = data["list"]
+
+        if not isinstance(rows, list):
+            return failure(
+                AnnualEvidenceFailureReason.MALFORMED_RESPONSE,
+                "list is not a JSON array",
+                **provider,
+            )
+
+        # 공식 문서상 "조회된 데이타가 없습니다."는 013이다. 000 + 빈 list는 문서에 없는 조합이므로
+        # positive unavailability로 해석하지 않고 fail closed한다.
+        if not rows:
+            return failure(
+                AnnualEvidenceFailureReason.MALFORMED_RESPONSE,
+                "status 000 with empty list",
+                **provider,
+            )
+
+        accounts: list[OpenDartFinancialAccount] = []
+
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                return failure(
+                    AnnualEvidenceFailureReason.MALFORMED_RESPONSE,
+                    f"list row {index} is not a JSON object",
+                    **provider,
+                )
+
+            try:
+                account = self._convert_financial_account(row)
+            except KeyError as exc:
+                return failure(
+                    AnnualEvidenceFailureReason.INTEGRITY,
+                    f"row {index}: required field {exc.args[0]!r} missing",
+                    **provider,
+                )
+            except ValidationError:
+                return failure(
+                    AnnualEvidenceFailureReason.INTEGRITY,
+                    f"row {index}: required field has an invalid value",
+                    **provider,
+                )
+            except (ValueError, TypeError, AttributeError):
+                # _parse_amount의 int() / strip() 실패 — 금액 파싱 실패. Q12(금액 의미)는 해소하지 않는다.
+                return failure(
+                    AnnualEvidenceFailureReason.INTEGRITY,
+                    f"row {index}: amount could not be parsed",
+                    **provider,
+                )
+
+            if account.bsns_year != business_year:
+                return failure(
+                    AnnualEvidenceFailureReason.INTEGRITY,
+                    f"row {index}: bsns_year {account.bsns_year!r} does not match request",
+                    **provider,
+                )
+
+            if account.reprt_code != ANNUAL_REPORT_CODE:
+                return failure(
+                    AnnualEvidenceFailureReason.INTEGRITY,
+                    f"row {index}: reprt_code {account.reprt_code!r} does not match request",
+                    **provider,
+                )
+
+            accounts.append(account)
+
+        # EVIDENCE_RETURNED가 확립된 직후의 runtime retrieval 시각(legacy의 "성공 응답 수신 직후"와 같은
+        # 의미). published_at / available_at / 접수 시각 / historical availability가 아니다.
+        retrieved_at = datetime.now(UTC)
+
+        return classified(
+            AnnualEvidenceOutcome.EVIDENCE_RETURNED,
+            accounts=tuple(accounts),
+            retrieved_at=retrieved_at,
+            **provider,
         )
 
     def _parse_corporation_zip(
