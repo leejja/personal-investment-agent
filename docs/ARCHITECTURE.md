@@ -320,7 +320,8 @@ Numeric Calibration           = OPEN (workflow) / readiness BLOCKED (§7.6)
 Trustworthy V0 Contract       = DESIGN COMPLETE / INDEPENDENT REVIEW PASS / FROZEN (§7.11)
                                  / implementation NOT STARTED / Supported Feature Set 0 / USABLE V0 NOT YET
 Trustworthy V0 Implementation = NOT STARTED / NEXT: OpenDART Annual-Report Evidence Selection
-                                 (SELECTION FROZEN / IMPLEMENTATION CONTRACT NOT STARTED, 아래 selection 블록)
+                                 (SELECTION FROZEN / IMPLEMENTATION CONTRACT rev.1 FROZEN /
+                                 IMPLEMENTATION NOT STARTED, 아래 selection / implementation contract 블록)
 ```
 
 Post-Decision-Eligibility Next Slice Selection(FROZEN):
@@ -357,9 +358,10 @@ V0 Product Boundary & Current-Runtime Evidence / Output Contract를 선택했다
 블록 — "DESIGN NOT STARTED"는 선택 시점 기록), 그 contract가 rev.0 → rev.1 → rev.1-final을 거쳐
 FROZEN됐다(§7.11, implementation NOT STARTED, USABLE V0 NOT YET) — 이 시점에 다음 작업 항목은 NOT
 SELECTED였다. 이어서 read-only Trustworthy V0 Implementation NEXT Selection Review가 NEXT로 OpenDART
-Annual-Report Evidence Selection을 선택했다(아래 V0 implementation selection 블록). **현재 NEXT는
-SELECTION FROZEN / IMPLEMENTATION CONTRACT NOT STARTED / IMPLEMENTATION NOT STARTED이고, SECOND/THIRD는
-NOT SELECTED다.**
+Annual-Report Evidence Selection을 선택했고(아래 V0 implementation selection 블록 — "IMPLEMENTATION
+CONTRACT NOT STARTED"는 선택 시점 기록), 그 implementation contract가 rev.0 → rev.1을 거쳐 FROZEN됐다(아래
+implementation contract 블록). **현재 NEXT는 SELECTION FROZEN / IMPLEMENTATION CONTRACT rev.1 FROZEN /
+IMPLEMENTATION NOT STARTED이고, SECOND/THIRD는 NOT SELECTED다.**
 
 **Post-PIT Critical Path Review → NEXT Selection (FROZEN, 선택 시점 기록 — 실행 결과는 §7.9)**
 — work-selection contract이며 새 PIT architecture contract가 아니다(§7.8 semantics 불변):
@@ -720,7 +722,7 @@ NON-GOALS  V0 implementation / wiring; API·UI implementation; live-test gating 
 
 상세 review 근거는 `docs/dev-log/2026-09-27.md` §J–§K.
 
-**Trustworthy V0 Implementation → NEXT Selection (FROZEN, 선택 시점 기록)** — §7.11 FROZEN contract의
+**Trustworthy V0 Implementation → NEXT Selection (FROZEN, 선택 시점 기록 — implementation contract는 아래 블록)** — §7.11 FROZEN contract의
 구현 순서에서 NEXT 하나만 고정한다. 구현·implementation contract·Q2b / Q3 해소를 뜻하지 않으며 새
 architecture contract가 아니고, 이후 전체 구현 순서를 고정하지 않는다(§7.4–§7.11 불변):
 
@@ -810,6 +812,160 @@ NEXT selection FROZEN ≠ NEXT implementation started ≠ Q2b resolved ≠ Q3 re
 
 선택으로 해소된 항목은 없다(H1–H7 newly resolved NONE). 상세 review 근거는 `docs/dev-log/2026-09-27.md` §M.
 
+**OpenDART Annual-Report Evidence Selection — Implementation Contract (FROZEN, rev.1)** — 위 NEXT의 구현
+contract다. 구현을 뜻하지 않으며 새 architecture contract가 아니다 — §7.4–§7.11 위에서 동작하고 그것들을
+변경하지 않는다:
+
+```text
+Status          DESIGN COMPLETE / INDEPENDENT REVIEW PASS / PRE-FREEZE VERIFICATION PASS / FROZEN (rev.1)
+Implementation  NOT STARTED (아래 code surface는 planned — 해당 file / symbol은 아직 존재하지 않는다)
+Q2b / Q3        OPEN (contract 구조만 고정 — provider admissibility / label semantics 미해소)
+```
+
+*Result taxonomy (Q2b)* — 연간 보고서 후보 하나(`corp_code`, `bsns_year`, `reprt_code=11011`)의 조회 결과는
+정확히 하나로 분류된다:
+
+```text
+EVIDENCE_RETURNED                       status 000 + integrity 통과 — accounts + tz-aware retrieved_at
+REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE   provider status가 positive-unavailability admission set에 속함
+FAILURE                                 그 외 전부. failure reason:
+  TRANSPORT            transport 오류(timeout / connect)
+  HTTP_STATUS          non-2xx
+  MALFORMED_RESPONSE   non-JSON · top-level이 object 아님 · status 없음 · 000 + list 없음 / list 아님 ·
+                       000 + 빈 list(문서상 "데이터 없음"은 013이므로 문서에 없는 조합 — fail closed)
+  PROVIDER_STATUS      admission set 밖의 non-000 status(모르는 코드 포함) — provider status / message 원문 보존
+  INTEGRITY            row 필수 필드 누락 · 금액 파싱 실패 · row bsns_year / reprt_code ≠ 요청
+```
+
+- 분류되지 않는 예외(programming error)는 FAILURE로 숨기지 않고 그대로 raise한다(fail closed).
+- **Positive-unavailability admission set = EMPTY**(시작 상태). 따라서 현재 013 → `FAILURE(PROVIDER_STATUS)` →
+  fallback 없음. admission set 확장은 official evidence + 승인된 live contrast + 별도 review가 필요하며, 그
+  경우에도 결론은 전제 조건(OpenDART 목록에서 해석된 corp_code · bsns_year ≥ 2015 · reprt_code 11011) 아래의
+  좁은 admissibility 결정이지 "013이 보편적으로 연간 evidence 부재를 뜻한다"가 아니다. 표본이 전제로 배제할
+  수 없는 overload를 보이면 admission은 비활성으로 유지한다.
+- 복수 `rcept_no`는 그 자체로 FAILURE가 아니다. row마다 자기 `rcept_no`를 보존하고, 성공 응답을 하나의 filing
+  identity로 요약하지 않는다. 파생 입력의 filing-anchor 일관성은 기존 frozen S5(§7.11.2)가 소유한다(S5 불변).
+- Q12(금액 / 통화 / `"-"` / 결측 사유 의미)는 해소하지 않는다 — 금액 파싱 실패를 INTEGRITY로 fail closed할 뿐이다.
+
+*Fallback / selection* — positive UNAVAILABLE 다음에만 다음 후보로 진행한다:
+
+```text
+candidates = generate(candidate_basis_instant, lookback_years)
+if candidates 비어 있음 → FAILED (조회 0회, trace 비어 있음)
+for candidate in candidates (결정론적 순서):
+    retrieve → trace에 기록
+    EVIDENCE_RETURNED                      → SELECTED, 중단
+    FAILURE                                → FAILED, 중단 (fallback 없음)
+    REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE  → 다음 후보
+소진 → NO_ANNUAL_REPORT_EVIDENCE_AMONG_EXAMINED_CANDIDATES
+```
+
+- 보고서가 반환됐지만 feature 계정 / 값이 없거나 일부 statement만 있는 것은 EVIDENCE_RETURNED이며 annual-report
+  fallback 사유가 아니다(feature 단위 문제).
+- `NO_ANNUAL_REPORT_EVIDENCE_AMONG_EXAMINED_CANDIDATES`(§7.11.4 / §7.11.6 어휘)는 기록된 후보 집합 안에서
+  EVIDENCE_RETURNED가 없었다는 것만 뜻한다 — `NO_ANNUAL_REPORT_EVIDENCE_EXISTS` 같은 전역 부재가 아니며, provider
+  하한까지 탐색해도 그 범위에 한정된다. admission set이 비어 있는 동안 이 상태는 실제 조회에서 도달하지 않는다.
+- 후보 순서는 탐색 순서일 뿐 latest / latest corrected / original / final / best filing을 뜻하지 않는다.
+
+*Candidate generation (Q3 — Bounded Descending bsns_year Probe)*:
+
+```text
+inputs      candidate_basis_instant  명시적, tz-aware(아니면 거부) — evaluation_as_of 아님, availability 의미 없음
+            lookback_years           필수, 호출자 제공, 기본값 없음, 정수 ≥ 1(아니면 거부)
+basis_year  candidate_basis_instant의 UTC 연도
+candidates  basis_year부터 내림차순 연속, 최대 lookback_years개, 2015 미만 제외(provider 하한) — 유한 · 결정론적
+            basis_year < 2015 → 후보 0개
+금지         hidden now() · 암묵적 current-year-minus-one 기본값 · fiscal 달력(12월 결산 등) 가정
+```
+
+- **lookback_years 값은 OPEN**이며 향후 V0 실행 경로의 policy가 소유한다 — OpenDART 의미가 아니고, 충분성이나
+  탐색 완전성을 보증하지 않는다. offline test의 구체 값(예: 3)은 fixture일 뿐 production 값이 아니다.
+- 첫 후보가 basis_year 자체인 이유는 bsns_year 라벨 관례를 가정하지 않기 위해서다. 이 설계는 "bsns_year 라벨은
+  basis UTC 연도를 넘지 않는다"는 가정에 기대며 이 가정은 미확립(Q3)이다 — 틀리면 후보를 놓칠 뿐 최신성 주장이
+  없으므로 잘못된 주장은 생기지 않는다.
+- **§7.11.4 부합 조건**: 후보 생성의 §7.11.4 완전 부합("검증된 provider / report-period semantics")은 위 라벨 상한
+  가정을 포함한 Q3 해소에 달려 있다. Q3 해소 전까지 구현은 §7.11.10 implementation acceptance를 주장해서는 안 된다
+  (§7.11 불변).
+
+*Selection record / trace* — selection 결과는 탐색 범위와 결과를 식별할 수 있게 `candidate_basis_instant` ·
+`lookback_years` · `candidates` · `trace` · 종료 상태(SELECTED / `NO_ANNUAL_REPORT_EVIDENCE_AMONG_EXAMINED_CANDIDATES`
+/ FAILED) · 선택된 retrieval을 담는다. trace는 시도한 후보마다 정확히 한 번, 후보 순서대로(후보 목록의 prefix)
+candidate · outcome · provider status / message 원문 · failure reason / detail · (EVIDENCE_RETURNED일 때)
+`retrieved_at`을 기록하며 결론(최신성, 사유 추정)을 넣지 않는다. 마지막을 제외한 trace entry는 모두 positive
+UNAVAILABLE이다. 후보가 lookback_years보다 적으면 provider 하한으로 잘린 것이다. 이 NEXT는 `evaluation_as_of`를
+만들거나 정의하지 않는다(§7.11.3 소유) — 이후 record는 `candidate_basis_instant ≤ retrieved_at ≤
+evaluation_as_of`를 지킨다. V0 Evaluation Record는 이 NEXT가 만들지 않는다.
+
+*Planned code surface / placement* (구현 전 — 존재하지 않음):
+
+```text
+app/models/annual_evidence.py   provider-neutral 어휘: AnnualEvidenceOutcome · AnnualEvidenceFailureReason ·
+                                AnnualSelectionStatus · AnnualSelectionFailure
+app/services/opendart.py        provider-specific: OpenDartAnnualRetrieval · 빈 positive-unavailability admission
+                                set · OpenDartService.retrieve_annual_accounts(corp_code, business_year)
+app/mcp/opendart_tools.py       OpenDART candidate / selection / trace: provider 하한 상수(2015) · AnnualCandidate ·
+                                AnnualSelectionTraceEntry · AnnualEvidenceSelection · 후보 생성 함수 ·
+                                OpenDartTools.select_annual_evidence(corp_code, *, candidate_basis_instant,
+                                lookback_years)
+tests/test_opendart_annual_selection.py
+
+dependency  app/models ← app/services ← app/mcp (기존 방향, 순환 · service→mcp 의존 없음)
+```
+
+`AnnualSelectionFailure`(trace가 비었는지로 도출 가능)와 `AnnualCandidate.ordinal`(tuple 위치로 도출 가능)은
+의미상 필수가 아닌 implementation-detail 후보이며, 도출 가능한 정보가 trace / 결과에 남는 한 구현에서 단순화할
+수 있다 — contract 의미는 이 둘에 의존하지 않는다.
+
+*Legacy v1 isolation* — `fetch_financial_accounts` / `get_financial_accounts` / `get_company_financials` /
+`get_key_financials` / `get_key_financials_history` / `get_key_financials_history_with_evidence` / `_parse_amount` /
+`_convert_financial_account`(재사용만) / `_select_fs_div` / `_default_business_year` / `StockResearchOrchestrator`
+/ supervisor · MCP server · API · v1 schema는 변경하지 않는다. 새 조회는 legacy 요청 코드를 refactor하지 않고 별도
+method로 둔다. 새 symbol의 production caller는 0이다(V0 wiring 범위 밖). LLM routing 변경 없음.
+
+*Official OpenDART evidence (class B — guide 원문 확인, API 호출 없음; §7.9 sample-bounded empirical evidence와
+별개)*:
+
+```text
+fnlttSinglAcnt   bsns_year "사업연도(4자리) ※ 2015년 이후 부터 정보제공" · 11011 = 사업보고서 · rcept_no =
+                 접수번호(14자리) · fs_div OFS 재무제표 / CFS 연결재무제표 · currency "통화 단위"
+                 NOT ESTABLISHED: bsns_year ≤ basis 연도 · 응답당 단일 rcept_no · 반환 정정 version ·
+                 비12월 결산 라벨 규칙
+status 013       원문 메시지 "조회된 데이타가 없습니다." — cause semantics NOT ESTABLISHED(API 공통 메시지 표)
+기업개황          acc_mt = "결산월(MM)" — 기준 시점 / 변경 이력 / bsns_year 매핑 NOT ESTABLISHED (Option A 미채택)
+공시검색          A001 = 사업보고서 · last_reprt_at(N이면 정정보고서 포함 전체 검색) · sort 기본 접수일자 desc ·
+                 report_nm = 공시구분+보고서명+기타정보 · rcept_dt = 공시 접수일자
+                 NOT ESTABLISHED: report_nm → bsns_year 파싱 · rcept_no를 fnlttSinglAcnt에 지정하는 요청(요청 인자에
+                 없음) · latest / original / final 의미 (Option B 미채택)
+```
+
+*Acceptance boundary*:
+
+- offline(구현 시): 13개 status code + 모르는 코드 · transport / HTTP / malformed / integrity 분류, 013 + 빈 admission
+  set → FAILURE, 주입된 admission set → UNAVAILABLE(분류 경로만 검증), 후보 생성(명시적 bound · 하한 clip · 내림차순
+  · 0개 · tz-naive / 잘못된 lookback_years 거부), UNAVAILABLE → 다음 / FAILURE → 중단 / RETURNED → 중단, 소진 결과와
+  기록된 탐색 범위, trace 완전성 · 순서, 복수 rcept_no → EVIDENCE_RETURNED(row별 보존), 보고서 반환 + 계정 부재 →
+  fallback 없음, legacy suite 무수정 PASS(013 → ValueError 유지), ruff PASS.
+- live(별도 명시 승인 시에만, 전부 sample-bounded): Q2b — 013 원인 대조(진행 중 연도 · 존재하지 않는 corp_code · 형식
+  오류 요청 · 2015 미만); Q3 — bsns_year 라벨 동작(비12월 결산 포함); rcept_no — 성공 응답의 receipt identity 집합
+  관찰. 표본 관찰은 보편적 provider 사실이 되지 않는다.
+- Q2b 해소 = official 인용 + live contrast + 좁은 admissibility 결정 + admission set 변경의 별도 review + offline
+  PASS. Q3 해소 = 후보 생성 구조의 offline PASS + 라벨 상한 가정의 문서 또는 sample-bounded live 지지 + review —
+  lookback_years 값 선택은 Q3 해소에 필요하지 않으며, Q3 해소는 충분한 lookback · 탐색 완전성 · 보편적 라벨 의미를
+  확립하지 않는다.
+
+```text
+OPEN        Q2b · Q3 · Q12 · Q1 · lookback_years production 값(향후 V0 policy)
+NON-GOALS   Q12 value semantics; Q1 Kiwoom; Feature Support Determination; V0 Evaluation Record; Evidence Basis
+            Manifest projection; V0 execution wiring; V0 API; SUPPORTED 승격; Normalization; Calibration; Core
+            Assessment; Decision Eligibility wiring; Recommendation Policy; Risk / Confidence; portfolio; historical
+            PIT; persistence; Reference Snapshot; LLM routing / judgment; legacy v1 redesign; 자동매매; 범용 live-test
+            gating; corp_code 해석 변경; CFS / OFS 선택 변경; 공시검색 · 기업개황 wrapper; S5 일관성 검사 구현
+현재         Implementation Contract rev.1 FROZEN / NEXT implementation NOT STARTED / Supported Feature Set 0 /
+            live integration NOT VERIFIED / USABLE V0 NO / SECOND · THIRD NOT SELECTED
+```
+
+H1–H7 newly resolved NONE. 설계·검증 이력은 `docs/dev-log/2026-09-27.md` §N.
+
 RE-04/RE-05의 상세 결정 과정, contract 확정 근거는 `docs/dev-log/
 2026-08-29.md` §1~§51(Post-Orchestration Review Step A~J는 `docs/dev-log/
 2026-09-07.md`, Final Decision Eligibility는 `docs/dev-log/2026-09-25.md`,
@@ -820,8 +976,8 @@ OpenDART PIT Empirical Verification / Post-Empirical Critical-Path Review /
 Calibration Evidence Identity & Persistence Contract / Post-§7.10 Critical-Path Review /
 Evidence Identity Preservation 구현은
 `docs/dev-log/2026-09-26.md`, Post-EIP Critical-Path Review / NEXT Selection /
-Trustworthy V0 Contract 설계·freeze / Trustworthy V0 Implementation NEXT Selection은
-`docs/dev-log/2026-09-27.md`)과
+Trustworthy V0 Contract 설계·freeze / Trustworthy V0 Implementation NEXT Selection / OpenDART
+Annual-Report Evidence Selection Implementation Contract는 `docs/dev-log/2026-09-27.md`)과
 `app/models/recommendation.py`/`research_context.py` docstring이 canonical이다.
 
 ### 7.4 Recommendation Policy Step 1 — Decision Eligibility (primitive)
