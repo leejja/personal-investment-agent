@@ -319,6 +319,8 @@ Numeric Calibration           = OPEN (workflow) / readiness BLOCKED (§7.6)
                                  / calibration NOT STARTED
 Trustworthy V0 Contract       = DESIGN COMPLETE / INDEPENDENT REVIEW PASS / FROZEN (§7.11)
                                  / implementation NOT STARTED / Supported Feature Set 0 / USABLE V0 NOT YET
+Trustworthy V0 Implementation = NOT STARTED / NEXT: OpenDART Annual-Report Evidence Selection
+                                 (SELECTION FROZEN / IMPLEMENTATION CONTRACT NOT STARTED, 아래 selection 블록)
 ```
 
 Post-Decision-Eligibility Next Slice Selection(FROZEN):
@@ -353,8 +355,11 @@ slice가 구현됐다(아래 구현 결과, offline 검증 PASS / live integrati
 다음 작업 항목은 NOT SELECTED였다. 이어서 read-only Post-EIP Critical-Path Review가 NEXT로 Trustworthy
 V0 Product Boundary & Current-Runtime Evidence / Output Contract를 선택했다(아래 Post-EIP selection
 블록 — "DESIGN NOT STARTED"는 선택 시점 기록), 그 contract가 rev.0 → rev.1 → rev.1-final을 거쳐
-FROZEN됐다(§7.11, implementation NOT STARTED, USABLE V0 NOT YET). **현재 다음 작업 항목은 NOT
-SELECTED, SECOND/THIRD도 NOT SELECTED다.**
+FROZEN됐다(§7.11, implementation NOT STARTED, USABLE V0 NOT YET) — 이 시점에 다음 작업 항목은 NOT
+SELECTED였다. 이어서 read-only Trustworthy V0 Implementation NEXT Selection Review가 NEXT로 OpenDART
+Annual-Report Evidence Selection을 선택했다(아래 V0 implementation selection 블록). **현재 NEXT는
+SELECTION FROZEN / IMPLEMENTATION CONTRACT NOT STARTED / IMPLEMENTATION NOT STARTED이고, SECOND/THIRD는
+NOT SELECTED다.**
 
 **Post-PIT Critical Path Review → NEXT Selection (FROZEN, 선택 시점 기록 — 실행 결과는 §7.9)**
 — work-selection contract이며 새 PIT architecture contract가 아니다(§7.8 semantics 불변):
@@ -715,6 +720,96 @@ NON-GOALS  V0 implementation / wiring; API·UI implementation; live-test gating 
 
 상세 review 근거는 `docs/dev-log/2026-09-27.md` §J–§K.
 
+**Trustworthy V0 Implementation → NEXT Selection (FROZEN, 선택 시점 기록)** — §7.11 FROZEN contract의
+구현 순서에서 NEXT 하나만 고정한다. 구현·implementation contract·Q2b / Q3 해소를 뜻하지 않으며 새
+architecture contract가 아니고, 이후 전체 구현 순서를 고정하지 않는다(§7.4–§7.11 불변):
+
+```text
+Trustworthy V0 Implementation NEXT Selection Review   COMPLETE (read-only, repository unchanged)
+                                                       / independent review PASS / freeze readiness YES
+NEXT    OpenDART Annual-Report Evidence Selection
+        — SELECTED / SELECTION FROZEN / IMPLEMENTATION CONTRACT NOT STARTED / IMPLEMENTATION NOT STARTED
+SECOND  NOT SELECTED
+THIRD   NOT SELECTED
+```
+
+Canonical scope(하나의 coherent implementation slice — Q2b와 Q3를 별도 NEXT로 나누지 않는다):
+
+```text
+1  classified annual-evidence retrieval result (Q2b)
+2  finite, calendar-assumption-free annual-report candidate generation (Q3)
+3  positive-only fallback
+4  per-candidate selection trace
+
+candidate retrieval → classified result → positive REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE?
+                                            YES → next candidate
+                                            NO  → stop / fail
+                    → selection trace
+```
+
+선택 근거(baseline `78ba30d`, 실제 code inspection): `OpenDartService.fetch_financial_accounts()`
+(`fnlttSinglAcnt.json`)는 `status != "000"`을 모두 하나의 `ValueError`로 처리하고, 사업연도 기본값은
+`now(UTC).year - 1`(v1 supervisor `_default_business_year`)이며 연간 보고서 후보는 하나, fallback은 없다.
+따라서 현재 구현은 §7.11.4의 `EVIDENCE_RETURNED` / `REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE` / `FAILURE`
+구분을 만족할 수 없고 positive-only fallback을 안전하게 구현할 수 없다. 또한 production 코드는
+`*_with_evidence` / `analyze(..., evidence=...)` / `run_first_deterministic_pipeline`을 호출하지 않는다 —
+EIP capability는 존재하고(설계 결함 아님), V0 경로의 production reachability가 없을 뿐이다.
+
+Provider-first over V0-skeleton-first(이 repository 기준): 현재 Supported Feature Set = 0이므로
+지금의 V0 skeleton은 OpenDART evidence 경로를 실행하지 않아(§7.11.1: Supported Feature Set과 entity
+식별에 필요한 provider만 호출) 가장 이른 trust blocker를 제거하지 못한다. OpenDART annual-evidence
+selection은 (a) Supported Feature Set ≥ 1까지의 현재 가장 짧은 경로, (b) OpenDART-derived candidate
+feature, (c) V0 report-selection evidence가 공유하는 가장 이른 실제 dependency다.
+
+- **Q12 OPEN — NEXT에 포함하지 않음**: derived-feature support readiness(amount absence semantics ·
+  currency / unit 보존 · derived-input coherence · S4 / S5)에 이후 필요하다. NEXT는 currency semantics /
+  `"-"` semantics / amount unit semantics / full absence-reason modeling / derived feature support
+  determination으로 확장되지 않는다. 예외: Q2b retrieval classification이 malformed / shape / integrity
+  failure를 positive unavailability와 구별해야 하는 범위의 failure classification은 NEXT에 속한다 — 이것이
+  Q12 전체를 해소하지 않는다.
+- **Q1 OPEN — Kiwoom-first 미선택**: 현재 ka10001 기반 ROE / PER / PBR은 S2 / S3 / S4가 미해결이며,
+  특히 검사한 응답 경로는 trustworthy V0 supported feature에 필요한 period semantics를 확립하지 않는다.
+- **First-supported-feature direction(방향일 뿐 feature 선택 아님)**: 현재 repository evidence상
+  Supported Feature Set ≥ 1까지의 가장 짧은 알려진 trustworthy 경로는 OpenDART-derived feature를
+  통한다(현재 candidate: Operating Margin / Net Margin / Debt Ratio). 셋 중 무엇이 먼저인지는 선택하지
+  않았고 어느 것도 support-ready로 판정하지 않았다. 현재 SUPPORTED feature는 없다(Supported Feature
+  Set 0).
+
+Entry conditions: 구현 전에 짧은 implementation contract를 작성하고 independent review를 받는다. 그
+contract가 최소한 답할 것(**이 selection에서 답하거나 고정하지 않음**): A. Q3 candidate-generation
+approach(검토 예: fiscal / closing-month 기반, filing-list 기반 — 선택 없음) · B. classified retrieval
+result type(위치 · naming · failure taxonomy) · C. legacy v1 동작 보존 방식 · D. status semantics에 쓰는
+authoritative OpenDART documentation / evidence · E. offline vs live acceptance 경계.
+
+Exit conditions(의도 — 구현되지 않음): offline acceptance는 status / HTTP / parse / shape classified
+behavior, positive로 분류된 `REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE` 이후에만 fallback, FAILURE 이후
+fallback 없음, finite candidate generation, V0 selection 경로에 암묵적 current-year-minus-one 가정 없음,
+완전한 per-candidate selection trace, 근거 없는 latestness 주장 없음, legacy v1 regression 보호, ruff
+PASS를 포함한다. Q2b / Q3 해소는 offline code만으로 되지 않는다 — official / documented evidence +
+승인된 live verification이 필요하며, 그 전까지 구현은 semantics가 확립되지 않은 곳에서 fail closed한다.
+
+```text
+OUT OF SCOPE  Q12 broader value semantics; Q1 Kiwoom semantics; Feature Support Determination; V0
+              Evaluation Record implementation; Evidence Basis Manifest projection; dedicated V0 execution
+              path; V0 API; Supported feature promotion; Feature Normalization; Numeric Calibration; Core
+              Economic Assessment; Decision Eligibility wiring; Recommendation Policy stages; portfolio
+              logic; automatic trading; historical PIT reconstruction; persistent evidence storage;
+              Reference Snapshot implementation; LLM judgment; legacy v1 redesign; live-test gating
+              mechanism
+```
+
+Legacy v1은 별도로 review·승인된 변경이 없는 한 이후 NEXT 구현으로 동작이 바뀌지 않는다.
+
+```text
+NEXT selection FROZEN ≠ NEXT implementation started ≠ Q2b resolved ≠ Q3 resolved
+                      ≠ feature SUPPORTED ≠ usable V0
+
+현재   Trustworthy V0 Contract FROZEN / Trustworthy V0 Implementation NOT STARTED /
+       Q2b · Q3 · Q12 · Q1 OPEN / Supported Feature Set 0 / live integration NOT VERIFIED / USABLE V0 NO
+```
+
+선택으로 해소된 항목은 없다(H1–H7 newly resolved NONE). 상세 review 근거는 `docs/dev-log/2026-09-27.md` §M.
+
 RE-04/RE-05의 상세 결정 과정, contract 확정 근거는 `docs/dev-log/
 2026-08-29.md` §1~§51(Post-Orchestration Review Step A~J는 `docs/dev-log/
 2026-09-07.md`, Final Decision Eligibility는 `docs/dev-log/2026-09-25.md`,
@@ -725,7 +820,8 @@ OpenDART PIT Empirical Verification / Post-Empirical Critical-Path Review /
 Calibration Evidence Identity & Persistence Contract / Post-§7.10 Critical-Path Review /
 Evidence Identity Preservation 구현은
 `docs/dev-log/2026-09-26.md`, Post-EIP Critical-Path Review / NEXT Selection /
-Trustworthy V0 Contract 설계·freeze는 `docs/dev-log/2026-09-27.md`)과
+Trustworthy V0 Contract 설계·freeze / Trustworthy V0 Implementation NEXT Selection은
+`docs/dev-log/2026-09-27.md`)과
 `app/models/recommendation.py`/`research_context.py` docstring이 canonical이다.
 
 ### 7.4 Recommendation Policy Step 1 — Decision Eligibility (primitive)
