@@ -317,6 +317,8 @@ Evidence Identity Preservation = IMPLEMENTED / offline verification PASS / live 
                                  NOT VERIFIED (6-evaluator first slice, 아래 결과 참고)
 Numeric Calibration           = OPEN (workflow) / readiness BLOCKED (§7.6)
                                  / calibration NOT STARTED
+Trustworthy V0 Contract       = DESIGN COMPLETE / INDEPENDENT REVIEW PASS / FROZEN (§7.11)
+                                 / implementation NOT STARTED / Supported Feature Set 0 / USABLE V0 NOT YET
 ```
 
 Post-Decision-Eligibility Next Slice Selection(FROZEN):
@@ -350,8 +352,9 @@ SELECTED였다. 이어서 Post-§7.10 Critical-Path Review가 NEXT로 Evidence I
 slice가 구현됐다(아래 구현 결과, offline 검증 PASS / live integration NOT VERIFIED) — 이 시점에
 다음 작업 항목은 NOT SELECTED였다. 이어서 read-only Post-EIP Critical-Path Review가 NEXT로 Trustworthy
 V0 Product Boundary & Current-Runtime Evidence / Output Contract를 선택했다(아래 Post-EIP selection
-블록). **현재 NEXT는 SELECTION FROZEN / DESIGN NOT STARTED / IMPLEMENTATION NOT STARTED이고,
-SECOND/THIRD는 NOT SELECTED다.**
+블록 — "DESIGN NOT STARTED"는 선택 시점 기록), 그 contract가 rev.0 → rev.1 → rev.1-final을 거쳐
+FROZEN됐다(§7.11, implementation NOT STARTED, USABLE V0 NOT YET). **현재 다음 작업 항목은 NOT
+SELECTED, SECOND/THIRD도 NOT SELECTED다.**
 
 **Post-PIT Critical Path Review → NEXT Selection (FROZEN, 선택 시점 기록 — 실행 결과는 §7.9)**
 — work-selection contract이며 새 PIT architecture contract가 아니다(§7.8 semantics 불변):
@@ -624,7 +627,7 @@ Blocker            H1–H7 newly resolved NONE(H5 / H6 NOT RESOLVED)
 
 상세 이력(review 지적 포함)은 `docs/dev-log/2026-09-26.md` §S.
 
-**Post-EIP Critical-Path Review → NEXT Selection (FROZEN, 선택 시점 기록)** — work-item 선택만
+**Post-EIP Critical-Path Review → NEXT Selection (FROZEN, 선택 시점 기록 — 설계 결과는 §7.11)** — work-item 선택만
 고정한다. contract 설계·구현·wiring 어느 것도 뜻하지 않으며 새 architecture contract가 아니다
 (§7.5 / §7.7 / §7.8 / §7.9 / §7.10 불변):
 
@@ -721,8 +724,8 @@ Point-in-Time Financial Evidence Contract / Post-PIT Critical Path Review /
 OpenDART PIT Empirical Verification / Post-Empirical Critical-Path Review /
 Calibration Evidence Identity & Persistence Contract / Post-§7.10 Critical-Path Review /
 Evidence Identity Preservation 구현은
-`docs/dev-log/2026-09-26.md`, Post-EIP Critical-Path Review / NEXT Selection은
-`docs/dev-log/2026-09-27.md`)과
+`docs/dev-log/2026-09-26.md`, Post-EIP Critical-Path Review / NEXT Selection /
+Trustworthy V0 Contract 설계·freeze는 `docs/dev-log/2026-09-27.md`)과
 `app/models/recommendation.py`/`research_context.py` docstring이 canonical이다.
 
 ### 7.4 Recommendation Policy Step 1 — Decision Eligibility (primitive)
@@ -1773,6 +1776,367 @@ FEASIBLE이다(K / B / N / S, V2는 Recommendation-level evidence 추가 필요 
 
 design rev.0 → review(R1–R3) → rev.1 → review PASS → freeze 이력은 `docs/dev-log/2026-09-26.md`
 §Q가 canonical이다.
+
+### 7.11 Trustworthy V0 Product Boundary & Current-Runtime Evidence / Output Contract (FROZEN)
+
+```text
+Status          DESIGN COMPLETE / INDEPENDENT REVIEW PASS / FROZEN (rev.1-final)
+Implementation  NOT STARTED
+Live integration NOT VERIFIED
+Supported Feature Set  0
+USABLE V0       NOT YET
+```
+
+`FROZEN`은 product / runtime / output contract가 고정됐다는 뜻이다. V0 구현, live 검증, V0 usable,
+SUPPORTED feature 존재, historical PIT 구현, reproducibility 확립, Recommendation Policy 구현을 뜻하지
+않는다(`Contract FROZEN ≠ V0 IMPLEMENTED ≠ V0 USABLE`). 이 contract는 RE-04 / §7.4 / §7.5 / §7.7 /
+§7.8 / §7.9 / §7.10을 **변경하지 않고** 그 위에 선다. 설계 이력(rev.0 → rev.1 → rev.1-final, review
+지적)은 `docs/dev-log/2026-09-27.md` §L이 canonical이다 — 구현은 이 section만으로 contract를 복원할
+수 있어야 한다.
+
+**Purpose**: production wiring 구현 전에, trustworthy / auditable / 현재 지원되는 RE-05 정보만 사용자에게
+노출하는 데 필요한 Product Boundary · Current-Runtime Evidence Selection Boundary · Output Contract를
+정한다.
+
+**Repository basis (baseline `8a9136f`, code inspection)**: EIP evidence 경로 · deterministic pipeline ·
+Decision Eligibility는 production app 경로에 연결돼 있지 않다. 기존 사업연도 선택은 `now(UTC).year - 1` /
+`reprt_code=11011` 고정이며 OpenDART non-`000` status를 하나의 오류로 처리한다. NRD history / YoY / trends는
+evidence가 없고 비교 컬럼을 relabel한다. `FinancialSnapshot.current`는 OpenDART 연도 label 아래 Kiwoom
+비율을 섞는다. Kiwoom `ka10001` PER / PBR / ROE의 산출 기준 · 기간 · 결측 인코딩은 확립돼 있지 않다(파서는
+`"0"`을 `0.0`으로 읽는다; registry id `trailing_per`의 "trailing"도 근거 없음). 현 구현에서 State Coverage는
+구조적으로 항상 `INSUFFICIENT`, FOE는 항상 `UNKNOWN`이다. legacy v1은 LLM thesis / scenarios(목표가 ·
+확률) / `InvestmentAction` / `target_weight`를 노출하고 `risk_level`을 `MEDIUM`으로 고정한다.
+
+#### 7.11.1 Product identity
+
+```text
+Trustworthy V0  = current-runtime financial evidence surface
+                ≠ assessment surface
+                ≠ recommendation surface
+평가 단위        명시적으로 요청된 한국 상장 종목 1개 / evaluation
+종료 출력        V0 Evaluation Record(내부) + 그 사용자 view
+```
+
+- V0 경로에 LLM judgment / LLM routing이 없다. legacy v1 출력과 합성하지 않는다.
+- V0 capability가 **아닌** 것: recommendation / action / 목표가 / 확률 / scenario / score /
+  `normalized_value` / signal / Core / 평가적 해석 · 비교 · 순위 / history · YoY · trend / 가격 /
+  Forward · Flow · Market Confirmation · Event / historical as_of 평가 / reproducibility 주장 /
+  LLM-generated content.
+- 실행 경계: legacy LLM orchestrator를 수정하지 않는 **별도 V0 실행 경로**(명시적 종목 코드; 이름 해석은
+  기존 결정론적 exact-match 조회만). 기존 EIP evidence 도구 / `analyze(evidence=…)` / pipeline 재사용은
+  허용된다. V0 평가는 Supported Feature Set과 entity 식별에 필요한 provider만 호출한다. 세부 구현은 OPEN.
+
+#### 7.11.2 Candidate vs Supported Feature Set
+
+```text
+Candidate Feature Set   V0가 고려할 수 있는 구현된 evaluator feature
+                        현재: ROE · Operating Margin · Net Margin · Debt Ratio ·
+                              provider-reported PER · PBR
+Supported Feature Set   아래 S1–S6이 모두 확립된 candidate
+Candidate ≠ Supported   evaluator 구현은 V0 support를 확립하지 않는다
+                        (구현 사실 "implemented evaluators 6 / 14"는 support 진술이 아니다)
+```
+
+Support eligibility conditions(feature별, 전부 필요):
+
+```text
+S1 Evidence identity   EIP evidence reference가 V0 경로에서 산출된다(§7.10 E1).
+S2 Measure semantics   source가 보고하는 measure의 정의 / 산출 기준이 문서 또는 empirical evidence로
+                       확립돼 있다 — provider 계산값이면 그 계산 기준까지.
+S3 Period semantics    값이 가리키는 observation period를 source identity로 알 수 있다.
+                       알 수 없으면 S3 불충족(다른 source의 기간을 차용해 충족시킬 수 없다).
+S4 Absence encoding    "값 없음"과 실제 값(0 / 음수 포함)을 구별하는 source 인코딩이 확립돼 있다.
+                       loss-making 등 경계 사례의 source 동작이 알려져 있다.
+S5 Derived coherence   (DERIVED만) 모든 input이 S1–S4를 충족하고, 같은 filing anchor · reporting basis ·
+                       source term에서 오며, formula identity / version과 정의역 규칙이 명시돼 있다.
+S6 Label honesty       사용자 표시명이 S2–S3로 확립된 것 이상을 주장하지 않는다.
+```
+
+Support status:
+
+```text
+support_status ∈ { SUPPORTED, NOT_SUPPORTED_IN_V0 }   — 정확히 두 contract state, 세 번째 state 없음
+not_supported_reason = SUPPORT_CONDITIONS_NOT_ESTABLISHED + 미확립 S-condition 목록
+"support-eligible"   design / readiness prose 전용 — runtime · serialized · 사용자 표시 status나
+                     추가 contract state가 아니다(enum 표기 금지)
+```
+
+Freeze 시점 Feature Support Determination(evidence 기반 판정 기록이며, 조건 확립 / 반증 시 contract
+변경 없이 판정만 바뀐다 — readiness 설명은 판정 기록의 prose이고 출력되지 않는다):
+
+| Candidate | Origin | support_status | 미확립 조건 | readiness 설명(prose) |
+|---|---|---|---|---|
+| ROE | Kiwoom SOURCE_REPORTED | NOT_SUPPORTED_IN_V0 | S2 · S3 · S4 | — |
+| PER (provider-reported) | Kiwoom SOURCE_REPORTED | NOT_SUPPORTED_IN_V0 | S2 · S3 · S4 · S6("trailing" 주장 금지) | — |
+| PBR | Kiwoom SOURCE_REPORTED | NOT_SUPPORTED_IN_V0 | S2 · S3 · S4 | — |
+| Operating Margin | DERIVED(OpenDART 입력) | NOT_SUPPORTED_IN_V0 | S4 absence encoding(§7.9 수준 evidence) · S5 통화 일관성(Q12) | support-eligible candidate — 남은 조건 확립 대기 |
+| Net Margin | DERIVED | NOT_SUPPORTED_IN_V0 | 동일 | 동일 |
+| Debt Ratio | DERIVED | NOT_SUPPORTED_IN_V0 | 동일 | 동일 |
+
+```text
+SUPPORTED count   0
+```
+
+#### 7.11.3 Current-runtime evidence semantics
+
+```text
+economic observation ≠ publication ≠ availability ≠ retrieval ≠ evaluation_as_of   (§7.8)
+```
+
+- **`evaluation_as_of`** = current-runtime V0 evaluation boundary instant: 평가당 정확히 1회, 그 평가에
+  필요한 모든 evidence 조회가 완료된 **후** 기록, tz-aware, canonical UTC. 사용된 모든 source-reported
+  item에 대해 `retrieved_at <= evaluation_as_of`. 이 값은 그 current-runtime 순서 관계만 확립한다.
+- **`retrieved_at`** = V0 runtime이 해당 provider 응답을 관찰·수신한 tz-aware instant(source-reported
+  item마다 REQUIRED, §7.10 E6). V0에서 허용되는 용도는 (1) 조회 시각 보존·표시, (2)
+  `retrieved_at <= evaluation_as_of` 순서 확립 **뿐**이다.
+- V0는 `retrieved_at` 또는 `evaluation_as_of`로 다음을 확립·산출·표시하지 않는다: `published_at` /
+  `available_at` / historical availability / historical PIT eligibility / filing latestness / filing
+  originality / correction ordering / reproducibility. identity 구분은 순서가 제약돼도 유지된다:
+  `retrieved_at ≠ published_at`, `retrieved_at ≠ available_at`, `retrieved_at ≠ evaluation_as_of`.
+- §7.8의 current-runtime relation(retrieval과 availability의 관계)은 frozen architecture reasoning으로
+  그대로 유효하다. V0 product contract는 그것을 runtime / product semantic claim으로 사용하지 않는다(V0
+  자체 주장 범위의 축소일 뿐 §7.8 변경·재해석 아님). V0는 `available_at`을 산출·확립하지 않는다(E8).
+- observation / report type / reporting basis / source term / version anchor는 source 표기 그대로이며,
+  source가 제공하지 않으면 "source 미제공"(ABSENT)으로 명시하고 다른 source의 label로 채우지 않는다.
+- **Current-runtime eligibility**: (1) SOURCE_REPORTED는 이번 평가 안에서 조회(cache / 이전 요청 /
+  snapshot 재사용 금지), `retrieved_at <= evaluation_as_of`, identity 완전. (2) DERIVED는 모든 input이
+  (1)을 만족. (3) OpenDART는 선택된 연간 보고서의 당기 컬럼만(비교 컬럼 금지, §7.8 P3). (4) 해당 feature가
+  SUPPORTED.
+- `Current-runtime usability ≠ Historical PIT eligibility`: historical as_of 요청은 NOT SUPPORTED(거절);
+  historical `available_at`을 확립하지 않고, 나중 filing 비교 컬럼을 back-project하지 않으며, history /
+  YoY / trend를 노출하지 않는다.
+
+#### 7.11.4 Annual-report selection (provider-neutral semantics only)
+
+- 대상: 이번 평가의 current-runtime 조회 경로에서 실제로 얻을 수 있는 eligible annual-report evidence
+  중 검증된 provider / report-period semantics에 따라 가장 최근인 것. eligible annual evidence = adapter가
+  검증된 provider 의미로 "연간 보고서"로 분류한 보고서의 당기 evidence(OpenDART `reprt_code=11011` 의미는
+  OFFICIAL-DOC VERIFIED, §7.9 S4).
+- 후보별 조회 결과 분류: `EVIDENCE_RETURNED` / `REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE`(positive
+  classification만) / `FAILURE`.
+- 더 최근 후보 → 더 오래된 후보 진행은 더 최근 후보가 `REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE`로 positive
+  분류된 경우에**만** 허용된다. network failure / authentication failure / rate-limit · provider
+  operational failure / malformed response / unknown status / unclassified provider error / integrity
+  failure는 fail closed이며 fallback을 일으키지 않는다.
+- 보고서가 반환됐지만 개별 계정 / 값이 없는 것은 report-level fallback 조건이 아니다(해당 feature
+  UNAVAILABLE). 모든 후보가 UNAVAILABLE이면 해당 provider 의존 SUPPORTED feature는 UNAVAILABLE
+  (`NO_ANNUAL_REPORT_EVIDENCE_AMONG_EXAMINED_CANDIDATES`).
+- 조회한 후보와 후보별 분류 결과를 record에 기록한다. 후보 생성은 검증된 provider / report-period
+  semantics를 사용하고, 유한하며, 달력 가정(12월 결산 등)을 두지 않는다.
+- 후보 완전성이 확립되지 않으면 V0는 latest filing / latest corrected filing / original / final / latest
+  financial information을 주장하지 않는다. evidence가 실제로 확립한 identity(`bsns_year` / `reprt_code` /
+  제공된 경우 `rcept_no` / `fs_div`·reporting basis / source term / source period 표기)만 노출한다.
+- **고정하지 않는 것**: 구체적 OpenDART status-code mapping(Q2b), 특정 후보 알고리즘(Y / Y-1 / Y-2 등),
+  12월 결산 가정.
+
+#### 7.11.5 Evidence Basis Manifest / reproducibility
+
+V0 Evaluation Record는 §7.10 **logical Evidence Basis Manifest**를 포함 / 참조한다 — 병렬 대체 개념을
+만들지 않는다. §7.10 current-runtime assessment 행(Evidence item ID REQUIRED · Revision ID REQUIRED(anchor
+또는 ABSENT/UNKNOWN 명시) · Ref. snapshot ID CONDITIONAL(relative basis 사용 시) · immutable/recoverable
+content CONDITIONAL(reproducibility 주장 시에만) · "identity + retrieved_at + latest-only 명시")을 그대로
+적용한다.
+
+```text
+evidence item members        SUPPORTED output이 사용한 모든 source-reported / derived item과 derived input
+reference snapshot members   사용 없음 명시(V0는 relative basis를 사용하지 않는다 — snapshot을 만들지 않음)
+evaluation_as_of             §7.11.3
+member별 reproducibility      NOT ESTABLISHED(확립된 basis 없음); basis = member의 conjunction → NOT ESTABLISHED
+revision / version anchor    item별 anchor 또는 ABSENT; revision relation UNKNOWN(E9)
+source serving semantics     OpenDART fnlttSinglAcnt: version을 지정해 요청할 수 없고 provider가 정한 단일
+                             version을 제공(latest-only at retrieval, §7.9 M1 OFFICIAL-DOC) — 제공된 version이
+                             최신 정정본이라고 주장하지 않는다(그 관찰은 sample-bounded)
+policy identity              포함하지 않음(E13)
+```
+
+```text
+logical Evidence Basis Manifest   REQUIRED
+persistent manifest storage       NOT REQUIRED for V0
+capture infrastructure            NOT REQUIRED for V0 (reproducibility를 주장하지 않으므로)
+Reference Snapshot construction   NOT REQUIRED (relative basis NOT USED)
+historical reconstruction / PIT   NOT REQUIRED
+reproducibility                   NOT ESTABLISHED
+```
+
+manifest의 목적은 evidence-basis identity / binding의 명시이며 replay / reconstruction 증명이 아니다.
+identity나 manifest의 존재는 reproducibility를 뜻하지 않는다(E3). `rcept_no`로 복구 가능하다고 주장하지
+않고(§7.9 M2), snapshot store 재조회를 재현이라 부르지 않는다. 재현성 enum 이름은 §7.10 아래 OPEN이며
+V0에서 허용되는 의미는 NOT ESTABLISHED 하나뿐이다.
+
+#### 7.11.6 Output contract
+
+사용자 view에 노출 가능: entity(symbol, 표시용 name — evidence 아님) · `evaluation_as_of` · scope
+declaration(current-runtime only, historical PIT 미지원, unsupported capability와 reason) · report-selection
+evidence(조회 후보 · 분류 · 선택 결과) · 모든 candidate의 support status · SUPPORTED feature의 availability /
+value / unit · evidence identity / provenance(origin, source provider / interface, report / period / basis /
+source term, version anchor 또는 ABSENT, source serving semantics) · `retrieved_at` · derivation lineage
+(formula identity / version / 공식 정의 문장 / input evidence) · Evidence Basis Manifest 요약 ·
+reproducibility = NOT ESTABLISHED. record에는 `contract_version`과 적용된 Feature Support Determination
+식별자가 포함된다.
+
+Feature 항목 규칙:
+
+```text
+support_status          SUPPORTED | NOT_SUPPORTED_IN_V0 (필수)
+NOT_SUPPORTED_IN_V0     value 없음 · availability 필드 없음 · not_supported_reason 필수
+                        (SUPPORT_CONDITIONS_NOT_ESTABLISHED + 미확립 S-condition 목록)
+SUPPORTED               availability ∈ {AVAILABLE, UNAVAILABLE}
+  AVAILABLE             value + unit(0 / 음수 그대로) + evidence identity / provenance 필수
+  UNAVAILABLE           value 없음 · unavailable_reason 필수: NO_MATCHING_SOURCE_ITEM /
+                        SOURCE_VALUE_ABSENT / DERIVED_INPUT_UNAVAILABLE / DERIVED_UNDEFINED_FOR_INPUTS /
+                        NO_ANNUAL_REPORT_EVIDENCE_AMONG_EXAMINED_CANDIDATES / UNKNOWN_REASON
+display label           확립되지 않은 산출 기준 / 기간을 주장하지 않는다(예: "Trailing PER" 금지)
+```
+
+pending / support-eligible 같은 runtime state를 만들지 않는다. Coverage / FOE는 테스트 · 감사 · pipeline
+검증을 위한 내부 산출물로만 남을 수 있다.
+
+**Prohibited V0 output**: `normalized_value` · `directionality` · `requirement_role` · Decision Eligibility ·
+Coverage / FOE architecture enum · score · signal · Core Attractiveness · good / bad · cheap / expensive ·
+attractive / unattractive · ranking · threshold interpretation · recommendation · `InvestmentAction` ·
+target price · probability · scenario · `target_weight` · legacy v1 thesis · legacy v1 risk / confidence
+judgment · LLM-generated summary / judgment · NRD / `RecommendationEvaluationState` 전체 직렬화 · 가격(identity
+없음). raw 값은 평가적 판단이 아니다 — 색상 / 아이콘 / 비교로 평가를 암시하지 않는다(§7.5 / §7.7 유지).
+
+#### 7.11.7 Derived evidence
+
+Operating Margin / Net Margin / Debt Ratio는 support 조건이 확립될 때만 SUPPORTED가 될 수 있다. formula
+identity · formula version · input evidence identity · origin = DERIVED를 요구한다. V0는 derivation 위치
+(module)에 의존하지 않는다 — **Derived Feature Value Ownership은 OPEN이며 고정하지 않는다**. unavailable
+reason을 정확히 확립할 수 없으면 `UNKNOWN_REASON`을 쓰고 더 강한 reason을 만들지 않는다. 정의역 규칙(예:
+자본 ≤ 0)을 값 부재 사실처럼 표시하지 않는다.
+
+#### 7.11.8 Legacy v1 boundary
+
+V0 trust boundary 필수 조건(이것으로 충분): 별도 trustworthy surface / response boundary; V0 출력에 legacy
+judgment 필드(`investment_thesis` / `scenarios` / `risk_level` / `confidence` / `InvestmentAction` /
+`target_weight`) 없음; LLM judgment path 없음; LLM routing 없음; v1 결과와 합성 없음; V0 surface는 legacy
+thesis / scenarios를 RE-05 validated로 표현하지 않는다.
+
+v1 trust label / gating / hiding / retirement는 별도 OPEN product / maintenance decision이며 V0 contract
+freeze나 V0 구현을 막지 않는다. v1의 유지 / 제거는 결정하지 않는다.
+
+Decision Eligibility는 V0 경로에서 호출하지 않으며 사용자에게 보이지 않는다(§7.4 불변). Coverage / FOE
+architecture enum은 사용자에게 보이지 않는다(producer 불변).
+
+#### 7.11.9 Failure semantics
+
+```text
+semantics not established                     → NOT_SUPPORTED_IN_V0 (UNAVAILABLE로 표시하지 않음)
+SUPPORTED, 정당한 source 값 부재              → UNAVAILABLE + reason(불명확하면 UNKNOWN_REASON)
+SUPPORTED + AVAILABLE, required identity 없음  → integrity failure → request failure (partial 금지)
+required provider operational failure         → fail closed (older-report fallback 금지)
+annual candidate positively UNAVAILABLE       → 다음 후보(§7.11.4)
+report 반환, 개별 값 부재                     → 해당 feature UNAVAILABLE (fallback 없음)
+unsupported capability                        → NOT_SUPPORTED (scope declaration)
+version anchor 부재                            → ABSENT 표시 (실패 아님)
+reproducibility not established               → NOT ESTABLISHED (실패 아님)
+critical path 미충족 / FOE UNKNOWN              → 판정으로 노출하지 않음
+Supported Feature Set 비어 있음                 → record 생성 가능, usable 선언 불가
+종목 해석 실패 / historical as_of 요청           → request failure / NOT SUPPORTED
+```
+
+UNKNOWN / UNAVAILABLE / NOT_SUPPORTED는 0 · neutral · estimated value · evaluative label로 조용히 바뀌지
+않는다.
+
+#### 7.11.10 Acceptance / usability boundary
+
+```text
+Contract FROZEN ≠ V0 IMPLEMENTED ≠ V0 USABLE
+```
+
+- contract acceptance: independent review PASS, frozen contract 충돌 없음, contract-level OPEN 없음 —
+  **충족(이 freeze)**.
+- implementation acceptance: 각 V0 invariant의 offline test 증명, V0 경로 LLM import 없음, v1 회귀 없음,
+  금지 필드 부재 projection test, manifest 구성 §7.11.5 일치, 후보 분류 / fallback §7.11.4 일치, Q2b / Q3
+  해소.
+- live integration acceptance(메커니즘 — marker / env / CI — 는 지정하지 않음): evidence path end-to-end,
+  Q2b / Q3 / Q12 확인, CFS / OFS, 정정 공시 filing, (Kiwoom feature 지원 시) Q1.
+- **usable / ready for first real use** = contract acceptance PASS + implementation acceptance PASS + live
+  integration acceptance PASS + **Supported Feature Set ≥ 1**. live integration NOT VERIFIED인 동안 usable
+  선언 불가.
+
+```text
+현재   contract FROZEN / IMPLEMENTATION NOT STARTED / live integration NOT VERIFIED /
+       Supported Feature Set = 0 / USABLE V0 = NO
+```
+
+#### 7.11.11 Invariants (V0-1 – V0-19, FROZEN)
+
+```text
+V0-1  Candidate ≠ Supported: SUPPORTED는 S1–S6이 확립된 feature에만 부여된다. evaluator 존재만으로
+      부여되지 않는다.
+V0-2  NOT_SUPPORTED_IN_V0 항목에는 value · availability 필드가 없고,
+      not_supported_reason(SUPPORT_CONDITIONS_NOT_ESTABLISHED + 미확립 조건 목록)이 있다.
+      UNAVAILABLE로 표시되지 않는다.
+V0-3  미확립 provider semantics는 AVAILABLE evidence로 표시되지 않는다.
+V0-4  display label은 확립되지 않은 산출 기준·기간을 주장하지 않는다.
+      다른 source의 기간 label을 차용하지 않는다.
+V0-5  AVAILABLE feature마다 evidence identity가 있다. 없으면 요청이 실패한다(partial 금지).
+V0-6  V0 Evaluation Record는 §7.10 logical Evidence Basis Manifest를 포함한다(evidence item members ·
+      reference snapshot members = 사용 없음 명시 · evaluation_as_of · member별 재현성 판정).
+V0-7  모든 member와 basis의 재현성은 NOT ESTABLISHED다. identity나 manifest로부터
+      재현성을 주장하지 않는다.
+V0-8  evaluation_as_of는 current-runtime V0 evaluation boundary instant다 — 평가당 1회,
+      필요한 evidence 조회가 모두 끝난 후 기록되는 tz-aware instant이며 canonical UTC로 저장된다.
+      평가에 사용된 모든 source-reported item에 대해 retrieved_at <= evaluation_as_of다.
+      retrieved_at과 evaluation_as_of는 별개 identity로 유지된다.
+V0-9  V0는 retrieved_at을 (a) 조회 시각 보존·표시, (b) retrieved_at <= evaluation_as_of 순서
+      확립에만 사용한다. V0는 retrieved_at이나 evaluation_as_of로부터 published_at · available_at ·
+      historical availability · historical PIT eligibility · filing latestness · originality ·
+      correction ordering · reproducibility를 확립·산출·표시하지 않으며,
+      available_at <= retrieved_at을 V0 runtime / product claim으로 사용하지 않는다.
+V0-10 더 최근 연간 보고서 후보에서 더 오래된 후보로의 진행은
+      REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE 분류에서만 허용된다. 그 외 결과는 fail closed하며,
+      조회한 후보와 결과가 record에 기록된다.
+V0-11 후보 완전성이 검증되지 않았으면 "가장 최근" 주장을 하지 않는다.
+      latest / corrected / original / final 주장을 하지 않는다.
+V0-12 OpenDART evidence는 선택된 연간 보고서의 당기 컬럼만 사용한다.
+      history / YoY / trend와 비교 컬럼은 출력에 없다.
+V0-13 UNKNOWN / UNAVAILABLE / NOT_SUPPORTED는 0 · neutral · 추정값 · 평가 label로 대체되지 않는다.
+V0-14 V0 출력에 recommendation · action · 목표가 · 확률 · score · normalized_value · 평가 label ·
+      directionality · Decision Eligibility · Coverage / FOE enum이 없다.
+V0-15 V0 실행 경로는 LLM(판단·routing)을 호출하지 않으며, V0 출력에 LLM 생성 텍스트가 없다.
+V0-16 V0 출력은 legacy v1 필드를 포함하지 않고 v1 출력과 합성되지 않는다.
+V0-17 DERIVED feature는 formula identity/version과 input evidence를 동반한다.
+      V0는 derivation 위치(module)에 의존하지 않는다.
+V0-18 V0는 historical as_of 요청을 거절한다.
+V0-19 V0 support_status는 정확히 두 contract state — SUPPORTED, NOT_SUPPORTED_IN_V0 — 만
+      가진다. "support-eligible" 같은 readiness 설명은 runtime · serialized · 사용자 표시 상태를
+      추가로 만들지 않는다.
+```
+
+#### 7.11.12 OPEN after freeze (frozen contract를 무효화하지 않음)
+
+```text
+Q1   Kiwoom ROE / PER / PBR semantics(산출 기준 · 기간 · 결측 인코딩 · 적자 동작)
+     — 해당 feature가 SUPPORTED가 되기 전에만 필요
+Q2b  concrete OpenDART status → REQUESTED_ANNUAL_EVIDENCE_UNAVAILABLE mapping — implementation / live blocker
+Q3   annual-report candidate generation / bsns_year semantics(비12월 결산 포함) — implementation / live blocker
+Q4   legacy v1 trust label / API field — separate product / maintenance decision
+Q5   legacy v1 gating / hiding / retirement — separate product decision
+Q8   legacy v1 / V0 사업연도 불일치 — separate product decision
+Q9   stronger derived unavailable reasons — non-blocking
+Q10  registry trailing_per rename — separate maintenance (사용자 표시 측면은 V0-4로 RESOLVED)
+Q12  OpenDART amount currency / absence encoding — 영향받는 derived feature가 SUPPORTED가 되기 전에 필요
+RESOLVED  Q2a provider-neutral fallback semantics · Q6 logical Evidence Basis Manifest · Q7 Coverage / FOE
+          비노출 · Q11 가격 제외
+```
+
+**Non-goals**: V0 implementation / wiring, numeric calibration, K, PolicyConfig, Feature Normalization
+implementation, component score / signal / threshold, Core Attractiveness, Recommendation Policy stages 2–9,
+StockOpportunityAssessment, historical PIT, persistent manifest / capture / storage / Reference Snapshot
+construction, new evaluators, Portfolio Strategy redesign, UI visual design, live-test gating mechanism.
+
+**Frozen-contract compatibility**: RE-04(SOA / action 미생성) · §7.4(불변, V0 미호출) · §7.5(normalized_value
+출력 금지, implicit default 없음) · §7.7(calibration 없음) · §7.8(P5: evaluation_as_of ≠ availability; P4 →
+V0-9, P3 / P11 → V0-12, P2 / P7 → V0-18; current-runtime relation은 유효하게 남고 V0가 product claim으로 쓰지
+않을 뿐) · §7.9(최신 정정본 / 원본 주장 없음, rcept_dt 미사용, general recoverability 미전제) · §7.10(manifest
+semantic requirement와 current-runtime 행 그대로 적용, E1–E13 준수, representation OPEN 부분만 V0 범위에서
+정함) — **충돌 없음, frozen 문구 변경 없음**.
+
+**Blocker status**: H1–H7 newly resolved NONE. **Work-selection state**: 이 contract freeze 시점에 NEXT /
+SECOND / THIRD는 NOT SELECTED다.
 
 ## 8. Dependency Boundaries / Invariants
 
